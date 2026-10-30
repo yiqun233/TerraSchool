@@ -1,0 +1,27 @@
+# 旧系统源码、SQL、手册和客户材料不进入版本库
+/参考资料/
+
+# 凭据与本地配置，仅保留不含秘密的示例
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.key
+*.pem
+
+# 构建、依赖和验证产物
+**/node_modules/
+**/target/
+**/dist/
+**/coverage/
+/.m2repo/
+/.pnpm-store/
+/logs/
+*.log
+
+# 编辑器与操作系统本地产物
+/.idea/
+/.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
