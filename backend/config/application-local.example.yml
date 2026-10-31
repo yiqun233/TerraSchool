@@ -1,0 +1,19 @@
+# 复制到 .local/application-local.yml，填写独立开发库配置；禁止使用旧库账号。
+# 本地 HTTP 调试才关闭 secure；HTTPS 交付保持默认 true。
+server:
+  servlet:
+    session:
+      cookie:
+        secure: false
+teraschool:
+  database:
+    url: jdbc:postgresql://127.0.0.1:5432/teraschool_dev
+    app:
+      username: ts_app
+      password: ${TS_APP_PASSWORD}
+    identity:
+      username: ts_identity
+      password: ${TS_IDENTITY_PASSWORD}
+    session:
+      username: ts_session
+      password: ${TS_SESSION_PASSWORD}
