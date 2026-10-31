@@ -25,3 +25,6 @@
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# 本地独立工具与临时验证数据，不进入版本库
+/.local/

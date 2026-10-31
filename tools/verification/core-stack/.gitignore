@@ -1,0 +1,6 @@
+# 所有类型从实际迁移/接口生成，不提交手改产物。
+backend/target/
+frontend/src/generated/
+frontend/dist/
+frontend/node_modules/
+__pycache__/
