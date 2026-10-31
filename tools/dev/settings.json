@@ -1,0 +1,8 @@
+{
+  "frontend_port": 5173,
+  "backend_port": 8081,
+  "database_provider": "wsl",
+  "wsl_distribution": "Ubuntu",
+  "database_port": 5432,
+  "database_name": "teraschool_dev"
+}

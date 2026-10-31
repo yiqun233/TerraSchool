@@ -4,7 +4,7 @@
 
 当前已建立正式工程，当前实现账号会话、租户事务、学校范围组织查询，以及校区/部门新增与改名。报名、资金、排课与退款主链尚未实现；状态及验证见[工程初始化记录](doc/03-研发规范/工程质量/验证记录/20261031-正式工程初始化验证记录-v1.0.md)。
 
-开发前阅读 [AGENT.md](AGENT.md) 和[文档导航](doc/20261029-文档导航-v1.28.md)。每完成一个功能，同步维护其设计、接口、权限和实际验证文档。
+开发前阅读 [AGENT.md](AGENT.md) 和[文档导航](doc/20261029-文档导航-v1.30.md)。每完成一个功能，同步维护其设计、接口、权限和实际验证文档。
 
 ## 本地检查
 
@@ -18,9 +18,18 @@ python tools/engineering/verify.py
 
 ## 本地运行
 
-完整验证后生成可执行 JAR `backend/applications/server/target/server-0.1.0-SNAPSHOT.jar`。准备独立的开发库及 ts_app/ts_identity/ts_session 角色，以迁移账号应用 Flyway 脚本；不要使用现有 vectordb。当前未提供自动持久库开通或默认管理员，账号配置不能照抄测试口令。
+本地查看使用WSL Ubuntu的PostgreSQL，日常启动不需要Docker Desktop。双击根目录 `start-local.cmd`，或在PowerShell执行：
 
-将 `backend/config/application-local.example.yml` 复制到 `.local/application-local.yml` 并配置本机凭据，使用 `java -jar backend/applications/server/target/server-0.1.0-SNAPSHOT.jar --spring.config.additional-location=file:.local/application-local.yml`。后端127.0.0.1:8081；在 frontend 执行 `pnpm dev`，前端127.0.0.1:5173并代理/api。同源 Cookie 与 CSRF 协议保持启用；HTTPS 默认 Secure Cookie，本地 HTTP 示例显式关闭。
+```powershell
+cd D:\TeraSchool
+.\start-local.cmd
+```
+
+首次自动准备独立持久开发库、受限角色、正式迁移、演示账号和构建。打开 http://127.0.0.1:5173 ，保持启动终端运行。后端127.0.0.1:8081，WSL项目库127.0.0.1:5432/teraschool_dev。原演示数据和账号已保留。
+
+维护账号local-admin、只读账号local-reader；随机演示密码见本机 `.local/dev/accounts.txt`。这不是产品默认管理员，已有演示资料不会因再次启动而重置。
+
+双击 `stop-local.cmd` 只停止前后端；WSL PostgreSQL继续运行，账号与资料保留。`python -X utf8 tools/dev/run.py status` 查看状态，`check` 验证登录/范围/代理。地址在 `tools/dev/settings.json`，本机配置、凭据和日志在 `.local/dev/`。完整说明见[本地启动指南](doc/03-研发规范/开发环境/20261031-本地启动与演示验收-v1.1.md)。运行全套自动化检查前先停止本地服务，避免Windows运行中JAR占用。
 
 backend/mvnw 固定 Maven；frontend/pnpm-lock.yaml 固定前端依赖。构建输出、jOOQ/OpenAPI 派生文件和本地凭据不提交。CI Runner、Linux 交付、完整权限和首个业务切片仍待后续验证。
 
