@@ -33,7 +33,10 @@ final class PermissionRules {
           "TEACHING_READ",
           "TEACHING_MAINTAIN",
           "ATTENDANCE_RECORD",
-          "LESSON_CLOSE");
+          "LESSON_CLOSE",
+          "APPROVAL_READ",
+          "APPROVAL_MANAGE",
+          "APPROVAL_DECIDE");
   static final String EXPANDED =
       """
     SELECT p.account_id,p.tenant_id,p.action,p.school_id,p.effect FROM identity.account_permission p
@@ -122,7 +125,8 @@ final class PermissionRules {
             "PRODUCT",
             "ENROLLMENT",
             "FUNDS",
-            "TEACHING")
+            "TEACHING",
+            "APPROVAL")
         .contains(Objects.toString(kind, ""))) throw new IllegalArgumentException("无效资源类型");
     var read = new Decision();
     var maintain = new Decision();
@@ -168,7 +172,8 @@ final class PermissionRules {
             "PRODUCT",
             "ENROLLMENT",
             "FUNDS",
-            "TEACHING")
+            "TEACHING",
+            "APPROVAL")
         .contains(Objects.toString(kind, ""))) throw new IllegalArgumentException("无效资源类型");
     var read = new Decision();
     var maintain = new Decision();

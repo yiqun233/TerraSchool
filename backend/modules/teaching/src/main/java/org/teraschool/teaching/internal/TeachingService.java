@@ -81,7 +81,7 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
                       Comparator.comparing((UUID key) -> names.get(key)).thenComparing(key -> key))
                   .map(
                       key ->
-                          new TeachingCapabilities.SchoolOption(
+                          new TeachingCapabilities.TeachingSchoolOption(
                               key,
                               names.get(key),
                               scope.maintainableSchoolIds().contains(key),
@@ -90,9 +90,10 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
                   .toList();
           return new TeachingCapabilities(
               true,
-              options.stream().anyMatch(TeachingCapabilities.SchoolOption::maintainable),
-              options.stream().anyMatch(TeachingCapabilities.SchoolOption::canRecordAttendance),
-              options.stream().anyMatch(TeachingCapabilities.SchoolOption::canCloseLesson),
+              options.stream().anyMatch(TeachingCapabilities.TeachingSchoolOption::maintainable),
+              options.stream()
+                  .anyMatch(TeachingCapabilities.TeachingSchoolOption::canRecordAttendance),
+              options.stream().anyMatch(TeachingCapabilities.TeachingSchoolOption::canCloseLesson),
               options);
         });
   }

@@ -223,7 +223,7 @@ class RefundAndAcceptanceTest {
         () ->
             funds.cancelHoursAndReturnToAccount(
                 enrollment.id(),
-                new CancelHoursAndReturnCommand(UUID.randomUUID(), hours, "部分退课")));
+                new CancelHoursAndReturnCommand(UUID.randomUUID(), hours, "部分退课", null)));
   }
 
   CashRefundView prepare(EnrollmentView enrollment, String amount) {
@@ -231,7 +231,7 @@ class RefundAndAcceptanceTest {
         OPS,
         () ->
             funds.prepareCashRefund(
-                new PrepareCashRefund(UUID.randomUUID(), enrollment.id(), amount)));
+                new PrepareCashRefund(UUID.randomUUID(), enrollment.id(), amount, null)));
   }
 
   CashRefundView pay(CashRefundView refund, String reference) {
@@ -394,7 +394,7 @@ class RefundAndAcceptanceTest {
     var student = freshStudent();
     var enrollment = activeEnrollment(student);
     var requestId = UUID.randomUUID();
-    var command = new CancelHoursAndReturnCommand(requestId, "2.00", "重试");
+    var command = new CancelHoursAndReturnCommand(requestId, "2.00", "重试", null);
     var first = asActor(OPS, () -> funds.cancelHoursAndReturnToAccount(enrollment.id(), command));
     var second = asActor(OPS, () -> funds.cancelHoursAndReturnToAccount(enrollment.id(), command));
     assertThat(second.balanceTotal()).isEqualTo(first.balanceTotal());
@@ -408,7 +408,7 @@ class RefundAndAcceptanceTest {
                     () ->
                         funds.cancelHoursAndReturnToAccount(
                             enrollment.id(),
-                            new CancelHoursAndReturnCommand(requestId, "1.00", "重试"))))
+                            new CancelHoursAndReturnCommand(requestId, "1.00", "重试", null))))
         .isInstanceOf(FundsConflict.class)
         .hasMessage("IDEMPOTENCY_MISMATCH");
   }
@@ -479,7 +479,7 @@ class RefundAndAcceptanceTest {
     var token = json.readTree(get(client, "/api/session/csrf").body()).get("token").asText();
     var cancelBody =
         json.writeValueAsString(
-            new CancelHoursAndReturnCommand(UUID.randomUUID(), "2.00", "接口退课时"));
+            new CancelHoursAndReturnCommand(UUID.randomUUID(), "2.00", "接口退课时", null));
     var cancelled =
         post(
             client,
@@ -492,7 +492,7 @@ class RefundAndAcceptanceTest {
     assertThat(refundResult.get("balanceAvailable").asText()).isEqualTo("200.00");
     var prepareBody =
         json.writeValueAsString(
-            new PrepareCashRefund(UUID.randomUUID(), enrollment.id(), "200.00"));
+            new PrepareCashRefund(UUID.randomUUID(), enrollment.id(), "200.00", null));
     var prepared = post(client, "/api/funds/refunds", prepareBody, token);
     assertThat(prepared.statusCode()).isEqualTo(201);
     var refundId = json.readTree(prepared.body()).get("id").asText();

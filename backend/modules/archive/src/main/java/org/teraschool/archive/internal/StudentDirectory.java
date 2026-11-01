@@ -127,7 +127,7 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
                   .filter(names::containsKey)
                   .sorted(
                       Comparator.comparing((UUID key) -> names.get(key)).thenComparing(key -> key))
-                  .map(key -> new StudentCapabilities.SchoolOption(key, names.get(key)))
+                  .map(key -> new StudentCapabilities.StudentSchoolOption(key, names.get(key)))
                   .toList();
           return new StudentCapabilities(
               true, !options.isEmpty(), !scope.sensitiveSchoolIds().isEmpty(), options);

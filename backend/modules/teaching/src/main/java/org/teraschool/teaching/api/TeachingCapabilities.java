@@ -8,12 +8,12 @@ public record TeachingCapabilities(
     boolean canMaintain,
     boolean canRecordAttendance,
     boolean canCloseLesson,
-    List<SchoolOption> schools) {
+    List<TeachingSchoolOption> schools) {
   public TeachingCapabilities {
     schools = List.copyOf(schools);
   }
 
-  public record SchoolOption(
+  public record TeachingSchoolOption(
       UUID id,
       String name,
       boolean maintainable,

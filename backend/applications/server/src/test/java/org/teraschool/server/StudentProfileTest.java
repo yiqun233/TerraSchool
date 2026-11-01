@@ -281,7 +281,7 @@ class StudentProfileTest {
             () -> asActor(READER, () -> commands.create(command("只读越权学员", "2010-01-01", null))))
         .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
     assertThat(asActor(MAINTAINER, () -> queries.capabilities()).maintainableSchools())
-        .extracting(StudentCapabilities.SchoolOption::id)
+        .extracting(StudentCapabilities.StudentSchoolOption::id)
         .containsExactly(SCHOOL);
   }
 

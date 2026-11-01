@@ -27,7 +27,19 @@ class RejectedRequestAudit {
     String path = request.getServletPath();
     UUID resource = null;
     FailureAudit.Action action;
-    if (path.matches("/api/funds/enrollments/[^/]+/cancel-hours")) {
+    if (path.equals("/api/approval/policies")) action = FailureAudit.Action.APPROVAL_POLICY;
+    else if (path.equals("/api/approval/requests")) action = FailureAudit.Action.APPROVAL_REQUEST;
+    else if (path.matches("/api/approval/requests/[^/]+/decide")) {
+      action = FailureAudit.Action.APPROVAL_DECIDE;
+      try {
+        resource =
+            UUID.fromString(
+                path.substring(
+                    "/api/approval/requests/".length(), path.length() - "/decide".length()));
+      } catch (IllegalArgumentException invalid) {
+        /* 不保存原始路径文本。 */
+      }
+    } else if (path.matches("/api/funds/enrollments/[^/]+/cancel-hours")) {
       action = FailureAudit.Action.REFUND_HOURS;
       try {
         resource =

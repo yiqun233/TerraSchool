@@ -199,3 +199,27 @@ BEGIN
  INSERT INTO dev.resource_seed_history(seed_id) VALUES('LOCAL-REFUND-001');
 END;
 $refund_seed$;
+
+-- 审批授权与演示策略：200 元以下免审批，便于演示 SC01 主例仍可单步完成。
+DO $approval_seed$
+DECLARE owner_id uuid; tenant_id_value uuid; action_name text; school_row record;
+BEGIN
+ PERFORM pg_advisory_xact_lock(hashtextextended('teraschool-local-approval-v1',0));
+ IF EXISTS(SELECT 1 FROM dev.resource_seed_history WHERE seed_id='LOCAL-APPROVAL-001') THEN RETURN; END IF;
+ SELECT a.id,a.tenant_id INTO STRICT owner_id,tenant_id_value FROM identity.account a JOIN identity.tenant t ON t.id=a.tenant_id
+ WHERE a.login='local-admin' AND t.name='本地演示机构' AND a.active AND t.active;
+ FOREACH action_name IN ARRAY ARRAY['APPROVAL_READ','APPROVAL_MANAGE','APPROVAL_DECIDE'] LOOP
+  IF NOT EXISTS(SELECT 1 FROM identity.account_permission WHERE account_id=owner_id AND action=action_name) THEN
+   INSERT INTO identity.account_permission(tenant_id,account_id,action,school_id,effect)
+    SELECT tenant_id_value,owner_id,action_name,id,'ALLOW' FROM organization.unit WHERE tenant_id=tenant_id_value AND kind='SCHOOL';
+  END IF;
+ END LOOP;
+ FOR school_row IN SELECT id FROM organization.unit WHERE tenant_id=tenant_id_value AND kind='SCHOOL' LOOP
+  INSERT INTO approval.policy(tenant_id,school_id,action,free_below)
+   VALUES (tenant_id_value,school_row.id,'REFUND_HOURS',200.00),
+          (tenant_id_value,school_row.id,'CASH_REFUND',200.00)
+   ON CONFLICT (tenant_id,school_id,action) DO NOTHING;
+ END LOOP;
+ INSERT INTO dev.resource_seed_history(seed_id) VALUES('LOCAL-APPROVAL-001');
+END;
+$approval_seed$;

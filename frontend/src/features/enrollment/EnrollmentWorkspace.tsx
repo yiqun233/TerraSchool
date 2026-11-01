@@ -569,6 +569,7 @@ export function EnrollmentDetail({
             <RefundPanel
               enrollmentId={id}
               studentId={studentId!}
+              schoolId={detail.data.schoolId!}
               onUnauthorized={onUnauthorized}
               onChanged={() => {
                 void outstanding.refetch();

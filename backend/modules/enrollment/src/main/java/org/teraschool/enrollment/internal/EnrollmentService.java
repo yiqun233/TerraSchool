@@ -76,12 +76,13 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
                       Comparator.comparing((UUID key) -> names.get(key)).thenComparing(key -> key))
                   .map(
                       key ->
-                          new EnrollmentCapabilities.SchoolOption(
+                          new EnrollmentCapabilities.EnrollmentSchoolOption(
                               key, names.get(key), scope.maintainableSchoolIds().contains(key)))
                   .toList();
           return new EnrollmentCapabilities(
               true,
-              options.stream().anyMatch(EnrollmentCapabilities.SchoolOption::maintainable),
+              options.stream()
+                  .anyMatch(EnrollmentCapabilities.EnrollmentSchoolOption::maintainable),
               canApprove,
               options);
         });

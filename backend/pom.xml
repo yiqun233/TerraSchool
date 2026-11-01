@@ -20,6 +20,7 @@
         <module>modules/enrollment</module>
         <module>modules/funds</module>
         <module>modules/teaching</module>
+        <module>modules/approval</module>
         <module>applications/server</module>
     </modules>
     <properties>

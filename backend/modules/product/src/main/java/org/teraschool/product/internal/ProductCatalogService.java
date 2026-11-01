@@ -66,12 +66,12 @@ public class ProductCatalogService implements ProductQueries, ProductCommands {
                       Comparator.comparing((UUID key) -> names.get(key)).thenComparing(key -> key))
                   .map(
                       key ->
-                          new ProductCapabilities.SchoolOption(
+                          new ProductCapabilities.ProductSchoolOption(
                               key, names.get(key), scope.maintainableSchoolIds().contains(key)))
                   .toList();
           return new ProductCapabilities(
               true,
-              options.stream().anyMatch(ProductCapabilities.SchoolOption::maintainable),
+              options.stream().anyMatch(ProductCapabilities.ProductSchoolOption::maintainable),
               canPublish,
               options);
         });

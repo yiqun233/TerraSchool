@@ -12,6 +12,7 @@ import org.jooq.DSLContext;
 import org.jooq.Record;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
+import org.teraschool.approval.api.ApprovalGate;
 import org.teraschool.archive.api.StudentAccess;
 import org.teraschool.enrollment.api.CancelHours;
 import org.teraschool.enrollment.api.EnrollmentAccess;
@@ -45,6 +46,7 @@ public class FundsService implements FundsQueries, FundsCommands {
   private final EnrollmentAccess enrollments;
   private final ConsumptionAccess consumption;
   private final EnrollmentCommands enrollmentCommands;
+  private final ApprovalGate approvals;
 
   public FundsService(
       CurrentActor actors,
@@ -54,7 +56,8 @@ public class FundsService implements FundsQueries, FundsCommands {
       StudentAccess students,
       EnrollmentAccess enrollments,
       ConsumptionAccess consumption,
-      EnrollmentCommands enrollmentCommands) {
+      EnrollmentCommands enrollmentCommands,
+      ApprovalGate approvals) {
     this.actors = actors;
     this.tx = tx;
     this.sql = sql;
@@ -63,6 +66,7 @@ public class FundsService implements FundsQueries, FundsCommands {
     this.enrollments = enrollments;
     this.consumption = consumption;
     this.enrollmentCommands = enrollmentCommands;
+    this.approvals = approvals;
   }
 
   // ---------------------------------------------------------------- 查询
@@ -87,7 +91,7 @@ public class FundsService implements FundsQueries, FundsCommands {
                       Comparator.comparing((UUID key) -> names.get(key)).thenComparing(key -> key))
                   .map(
                       key ->
-                          new FundsCapabilities.SchoolOption(
+                          new FundsCapabilities.FundsSchoolOption(
                               key,
                               names.get(key),
                               receiptSchools.contains(key),
@@ -97,10 +101,10 @@ public class FundsService implements FundsQueries, FundsCommands {
                   .toList();
           return new FundsCapabilities(
               true,
-              options.stream().anyMatch(FundsCapabilities.SchoolOption::canReceipt),
-              options.stream().anyMatch(FundsCapabilities.SchoolOption::canAllocate),
-              options.stream().anyMatch(FundsCapabilities.SchoolOption::canRefund),
-              options.stream().anyMatch(FundsCapabilities.SchoolOption::canPay),
+              options.stream().anyMatch(FundsCapabilities.FundsSchoolOption::canReceipt),
+              options.stream().anyMatch(FundsCapabilities.FundsSchoolOption::canAllocate),
+              options.stream().anyMatch(FundsCapabilities.FundsSchoolOption::canRefund),
+              options.stream().anyMatch(FundsCapabilities.FundsSchoolOption::canPay),
               options);
         });
   }
@@ -469,6 +473,11 @@ public class FundsService implements FundsQueries, FundsCommands {
           var refundable =
               enrollment.hours().subtract(consumed).subtract(enrollment.cancelledHours());
           if (hours.compareTo(refundable) > 0) throw new FundsConflict("HOURS_EXCEED_REFUNDABLE");
+          // 审批闸门：按策略要求校验并消耗审批单；金额由服务端计算，不接受调用方自报。
+          var unit = enrollment.price().divide(enrollment.hours(), 6, RoundingMode.HALF_UP);
+          var refundAmount = unit.multiply(hours).setScale(2, RoundingMode.HALF_UP);
+          approvals.consume(
+              "REFUND_HOURS", schoolId, enrollmentId, refundAmount, command.approvalId());
           var cancellation =
               enrollmentCommands.cancelHours(
                   enrollmentId, new CancelHours(command.hours(), reason));
@@ -586,6 +595,8 @@ public class FundsService implements FundsQueries, FundsCommands {
           if (previous != null) return cashRefundView(requireCashRefund(previous));
           var available = availableBalance(enrollment.studentId());
           if (amount.compareTo(available) > 0) throw new FundsConflict("INSUFFICIENT_AVAILABLE");
+          approvals.consume(
+              "CASH_REFUND", schoolId, command.enrollmentId(), amount, command.approvalId());
           var id = UUID.randomUUID();
           var reservationId = UUID.randomUUID();
           sql.execute(

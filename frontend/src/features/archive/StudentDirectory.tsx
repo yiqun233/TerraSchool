@@ -221,7 +221,7 @@ export function StudentCreator({
   onCancel,
   onCreated,
 }: {
-  schools: components["schemas"]["SchoolOption"][];
+  schools: components["schemas"]["StudentSchoolOption"][];
   onCancel: () => void;
   onCreated: (
     profile: StudentProfile | undefined,

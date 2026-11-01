@@ -12,10 +12,10 @@ public record StudentCapabilities(
     boolean canRead,
     boolean canMaintain,
     boolean canReadSensitive,
-    List<SchoolOption> maintainableSchools) {
+    List<StudentSchoolOption> maintainableSchools) {
   public StudentCapabilities {
     maintainableSchools = List.copyOf(maintainableSchools);
   }
 
-  public record SchoolOption(UUID id, String name) {}
+  public record StudentSchoolOption(UUID id, String name) {}
 }

@@ -9,12 +9,12 @@ public record FundsCapabilities(
     boolean canAllocate,
     boolean canRefund,
     boolean canPay,
-    List<SchoolOption> schools) {
+    List<FundsSchoolOption> schools) {
   public FundsCapabilities {
     schools = List.copyOf(schools);
   }
 
-  public record SchoolOption(
+  public record FundsSchoolOption(
       UUID id,
       String name,
       boolean canReceipt,

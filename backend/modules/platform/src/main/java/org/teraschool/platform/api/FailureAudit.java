@@ -57,7 +57,10 @@ public interface FailureAudit {
     REFUND_HOURS,
     REFUND_PREPARE,
     REFUND_PAID,
-    REFUND_CANCEL
+    REFUND_CANCEL,
+    APPROVAL_POLICY,
+    APPROVAL_REQUEST,
+    APPROVAL_DECIDE
   }
 
   enum Result {

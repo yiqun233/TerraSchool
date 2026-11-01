@@ -8,6 +8,7 @@ import {
   Input,
   InputNumber,
   Modal,
+  Select,
   Space,
   Table,
   Tag,
@@ -33,11 +34,13 @@ const STATUS_LABEL: Record<string, string> = {
 export function RefundPanel({
   enrollmentId,
   studentId,
+  schoolId,
   onUnauthorized,
   onChanged,
 }: {
   enrollmentId: string;
   studentId: string;
+  schoolId: string;
   onUnauthorized: () => void;
   onChanged: () => void;
 }) {
@@ -176,6 +179,7 @@ export function RefundPanel({
       {cancelling ? (
         <CancelHoursModal
           enrollmentId={enrollmentId}
+          schoolId={schoolId}
           onCancel={() => setCancelling(false)}
           onDone={() => {
             setCancelling(false);
@@ -189,6 +193,7 @@ export function RefundPanel({
       {preparing ? (
         <PrepareRefundModal
           enrollmentId={enrollmentId}
+          schoolId={schoolId}
           available={balance.data?.available ?? "0.00"}
           onCancel={() => setPreparing(false)}
           onDone={() => {
@@ -219,17 +224,34 @@ export function RefundPanel({
 
 export function CancelHoursModal({
   enrollmentId,
+  schoolId,
   onCancel,
   onDone,
   onError,
 }: {
   enrollmentId: string;
+  schoolId?: string;
   onCancel: () => void;
   onDone: () => void;
   onError: (message: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [approvalId, setApprovalId] = useState<string>();
   const [form] = Form.useForm();
+  const approvals = useQuery({
+    queryKey: ["cancel-approvals", schoolId, enrollmentId],
+    enabled: !!schoolId,
+    queryFn: async ({ signal }) => {
+      const { data, response } = await api.GET("/api/approval/requests", {
+        params: { query: { schoolId: schoolId!, status: "APPROVED" } },
+        signal,
+      });
+      if (!response.ok || !data) return [];
+      return data.filter(
+        (item) => item.enrollmentId === enrollmentId && !item.usedAt,
+      );
+    },
+  });
 
   async function save() {
     let values;
@@ -293,6 +315,20 @@ export function CancelHoursModal({
         <Form.Item label="原因" name="reason">
           <Input maxLength={200} disabled={busy} />
         </Form.Item>
+        <Form.Item label="已批准的审批单（策略要求时必填）">
+          <Select
+            allowClear
+            value={approvalId}
+            onChange={(value) => setApprovalId(value)}
+            options={(approvals.data ?? []).map((item) => ({
+              value: item.id,
+              label: `${item.amount} 元 / ${item.reason ?? "无原因"}`,
+            }))}
+            placeholder="无需审批时可留空"
+            disabled={busy}
+            notFoundContent="没有可用的已批准审批单"
+          />
+        </Form.Item>
         <Button
           type="primary"
           onClick={() => void save()}
@@ -308,19 +344,39 @@ export function CancelHoursModal({
 
 export function PrepareRefundModal({
   enrollmentId,
+  schoolId,
   available,
   onCancel,
   onDone,
   onError,
 }: {
   enrollmentId: string;
+  schoolId?: string;
   available: string;
   onCancel: () => void;
   onDone: () => void;
   onError: (message: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [approvalId, setApprovalId] = useState<string>();
   const [form] = Form.useForm();
+  const approvals = useQuery({
+    queryKey: ["cash-approvals", schoolId, enrollmentId],
+    enabled: !!schoolId,
+    queryFn: async ({ signal }) => {
+      const { data, response } = await api.GET("/api/approval/requests", {
+        params: { query: { schoolId: schoolId!, status: "APPROVED" } },
+        signal,
+      });
+      if (!response.ok || !data) return [];
+      return data.filter(
+        (item) =>
+          item.enrollmentId === enrollmentId &&
+          item.action === "CASH_REFUND" &&
+          !item.usedAt,
+      );
+    },
+  });
 
   async function save() {
     let values;
@@ -338,10 +394,18 @@ export function PrepareRefundModal({
           requestId: crypto.randomUUID(),
           enrollmentId,
           amount: String(values.amount),
+          approvalId: approvalId ?? undefined,
         },
       });
       if (response.status === 409) {
-        onError("可用余额不足或请求重复，请核对后重试。");
+        const problem = (await response.json().catch(() => null)) as {
+          code?: string;
+        } | null;
+        onError(
+          problem?.code === "APPROVAL_REQUIRED"
+            ? "该金额超过免批额度：请先申请并取得审批，再引用审批单准备退款。"
+            : "可用余额不足或请求重复，请核对后重试。",
+        );
         return;
       }
       if (!response.ok) {
@@ -378,6 +442,20 @@ export function PrepareRefundModal({
             precision={2}
             style={{ width: "100%" }}
             disabled={busy}
+          />
+        </Form.Item>
+        <Form.Item label="已批准的审批单（策略要求时必填）">
+          <Select
+            allowClear
+            value={approvalId}
+            onChange={(value) => setApprovalId(value)}
+            options={(approvals.data ?? []).map((item) => ({
+              value: item.id,
+              label: `${item.amount} 元 / ${item.reason ?? "无原因"}`,
+            }))}
+            placeholder="无需审批时可留空"
+            disabled={busy}
+            notFoundContent="没有可用的已批准审批单"
           />
         </Form.Item>
         <Button

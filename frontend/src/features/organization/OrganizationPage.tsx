@@ -15,6 +15,7 @@ import { StudentDirectory } from "../archive/StudentDirectory";
 import { ProductCatalogWorkspace } from "../product/ProductCatalog";
 import { EnrollmentWorkspace } from "../enrollment/EnrollmentWorkspace";
 import { TeachingWorkspace } from "../teaching/TeachingWorkspace";
+import { ApprovalInbox } from "../approval/ApprovalInbox";
 import type { components } from "../../shared/generated/api";
 const labels: Record<string, string> = {
   SCHOOL: "学校",
@@ -60,6 +61,7 @@ function Workspace({ reset }: { reset: () => void }) {
     | "PRODUCTS"
     | "ENROLLMENT"
     | "TEACHING"
+    | "APPROVAL"
   >("ORGANIZATION");
   const [page, setPage] = useState(0);
   const [error, setError] = useState("");
@@ -173,6 +175,12 @@ function Workspace({ reset }: { reset: () => void }) {
             >
               教务与考勤
             </Button>
+            <Button
+              type={section === "APPROVAL" ? "primary" : "text"}
+              onClick={() => setSection("APPROVAL")}
+            >
+              审批
+            </Button>
           </Space>
         </nav>
       </aside>
@@ -191,6 +199,7 @@ function Workspace({ reset }: { reset: () => void }) {
                   PRODUCTS: "课程与产品",
                   ENROLLMENT: "报名与收款",
                   TEACHING: "教务与考勤",
+                  APPROVAL: "审批",
                 }[section]
               }
             </Typography.Title>
@@ -250,6 +259,8 @@ function Workspace({ reset }: { reset: () => void }) {
           <EnrollmentWorkspace onUnauthorized={() => void signOut()} />
         ) : section === "TEACHING" ? (
           <TeachingWorkspace onUnauthorized={() => void signOut()} />
+        ) : section === "APPROVAL" ? (
+          <ApprovalInbox onUnauthorized={() => void signOut()} />
         ) : section !== "ORGANIZATION" ? (
           <ResourceWorkspace key={section} kind={section} />
         ) : !me.data.canReadOrganizations ? (

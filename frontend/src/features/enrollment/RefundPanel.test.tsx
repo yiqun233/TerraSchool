@@ -62,6 +62,7 @@ it("账户展示总额、冻结与可用，冻结占满时不能准备退款", a
     <RefundPanel
       enrollmentId="enrollment-1"
       studentId="student-1"
+      schoolId="school-1"
       onUnauthorized={vi.fn()}
       onChanged={vi.fn()}
     />,

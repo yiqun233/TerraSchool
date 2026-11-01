@@ -4,10 +4,13 @@ import java.util.List;
 import java.util.UUID;
 
 public record EnrollmentCapabilities(
-    boolean canRead, boolean canMaintain, boolean canApprove, List<SchoolOption> schools) {
+    boolean canRead,
+    boolean canMaintain,
+    boolean canApprove,
+    List<EnrollmentSchoolOption> schools) {
   public EnrollmentCapabilities {
     schools = List.copyOf(schools);
   }
 
-  public record SchoolOption(UUID id, String name, boolean maintainable) {}
+  public record EnrollmentSchoolOption(UUID id, String name, boolean maintainable) {}
 }
