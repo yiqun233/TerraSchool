@@ -15,6 +15,7 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.teraschool.archive.api.StudentAccess;
 import org.teraschool.enrollment.api.EnrollmentAccess;
+import org.teraschool.finance.api.PeriodGate;
 import org.teraschool.identity.api.Actor;
 import org.teraschool.identity.api.CurrentActor;
 import org.teraschool.identity.api.ResourceScope;
@@ -43,6 +44,7 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
   private final EnrollmentAccess enrollments;
   private final CurriculumAccess curricula;
   private final StudentAccess students;
+  private final PeriodGate periods;
 
   public TeachingService(
       CurrentActor actors,
@@ -51,7 +53,8 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
       SchoolAccess schools,
       EnrollmentAccess enrollments,
       CurriculumAccess curricula,
-      StudentAccess students) {
+      StudentAccess students,
+      PeriodGate periods) {
     this.actors = actors;
     this.tx = tx;
     this.sql = sql;
@@ -59,6 +62,7 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
     this.enrollments = enrollments;
     this.curricula = curricula;
     this.students = students;
+    this.periods = periods;
   }
 
   // ---------------------------------------------------------------- 查询
@@ -497,6 +501,8 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
             throw new AccessDeniedException("无该学校的课次关闭权限");
           if (!"CONFIRMED".equals(row.get("status", String.class)))
             throw new TeachingConflict("LESSON_NOT_CONFIRMED");
+          // 课次消费按上课日期归属期间；该月已锁定则拒绝关闭。
+          periods.requireOpen(schoolId, row.get("lesson_date", LocalDate.class));
           if (!row.get("version", Long.class).equals(command.expectedVersion()))
             throw new TeachingConflict("VERSION_CONFLICT");
           var lessonHours = row.get("hours", BigDecimal.class);

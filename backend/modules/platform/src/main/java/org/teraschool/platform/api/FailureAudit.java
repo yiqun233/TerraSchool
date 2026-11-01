@@ -60,7 +60,9 @@ public interface FailureAudit {
     REFUND_CANCEL,
     APPROVAL_POLICY,
     APPROVAL_REQUEST,
-    APPROVAL_DECIDE
+    APPROVAL_DECIDE,
+    PERIOD_LOCK,
+    PERIOD_UNLOCK
   }
 
   enum Result {

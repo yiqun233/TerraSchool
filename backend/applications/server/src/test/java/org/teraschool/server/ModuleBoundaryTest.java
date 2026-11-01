@@ -32,7 +32,8 @@ class ModuleBoundaryTest {
             "org.teraschool.enrollment..",
             "org.teraschool.funds..",
             "org.teraschool.teaching..",
-            "org.teraschool.approval..")
+            "org.teraschool.approval..",
+            "org.teraschool.finance..")
         .should()
         .dependOnClassesThat()
         .resideInAPackage("org.teraschool.server..")

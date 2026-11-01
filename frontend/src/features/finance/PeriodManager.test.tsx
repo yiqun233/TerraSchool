@@ -1,0 +1,102 @@
+import { expect, it, vi } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { PeriodActionModal, PeriodManager } from "./PeriodManager";
+
+const { get, post, csrf } = vi.hoisted(() => ({
+  get: vi.fn(),
+  post: vi.fn(),
+  csrf: vi.fn(),
+}));
+vi.mock("../../shared/http", () => ({ api: { GET: get, POST: post }, csrf }));
+
+const capabilities = {
+  canRead: true,
+  canLock: true,
+  schools: [{ id: "school-1", name: "期间学校", canLock: true }],
+};
+
+function renderWithClient(ui: React.ReactElement) {
+  return render(
+    <QueryClientProvider
+      client={
+        new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      }
+    >
+      {ui}
+    </QueryClientProvider>,
+  );
+}
+
+it("列出十二个月并按状态标注，锁定月份显示解锁按钮", async () => {
+  get.mockImplementation(async (path: string) => {
+    if (path === "/api/finance/capabilities")
+      return { response: { ok: true, status: 200 }, data: capabilities };
+    if (path === "/api/finance/periods")
+      return {
+        response: { ok: true, status: 200 },
+        data: [
+          {
+            schoolId: "school-1",
+            period: "2026-01",
+            status: "LOCKED",
+            reason: "月末结账",
+            version: 1,
+          },
+          {
+            schoolId: "school-1",
+            period: "2026-02",
+            status: "OPEN",
+            version: 0,
+          },
+        ],
+      };
+    throw new Error("unexpected path " + path);
+  });
+  renderWithClient(<PeriodManager onUnauthorized={vi.fn()} />);
+  expect(await screen.findByText("2026-01")).toBeTruthy();
+  expect(screen.getByText("已锁定")).toBeTruthy();
+  expect(screen.getByText("开放")).toBeTruthy();
+  expect(screen.getByRole("button", { name: /解\s*锁/ })).toBeTruthy();
+  expect(screen.getByRole("button", { name: /锁\s*定/ })).toBeTruthy();
+  expect(screen.getByText(/已锁定 1 个月/)).toBeTruthy();
+});
+
+it("解锁必须填写原因并携带版本", async () => {
+  csrf.mockResolvedValue({ headerName: "X-CSRF-TOKEN", token: "test" });
+  post.mockResolvedValue({ response: { ok: true, status: 200 }, data: {} });
+  const done = vi.fn();
+  const user = userEvent.setup({ pointerEventsCheck: 0 });
+  renderWithClient(
+    <PeriodActionModal
+      schoolId="school-1"
+      period={
+        {
+          schoolId: "school-1",
+          period: "2026-01",
+          status: "LOCKED",
+          version: 7,
+        } as never
+      }
+      lock={false}
+      onCancel={vi.fn()}
+      onDone={done}
+      onError={vi.fn()}
+    />,
+  );
+  await user.click(screen.getByRole("button", { name: /确认解锁/ }));
+  expect(post).not.toHaveBeenCalled();
+  await user.type(screen.getByLabelText("原因"), "更正上月末的对账");
+  await user.click(screen.getByRole("button", { name: /确认解锁/ }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+  expect(post.mock.calls[0][0]).toBe("/api/finance/periods/{period}/unlock");
+  expect(post.mock.calls[0][1].params.path.period).toBe("2026-01");
+  expect(post.mock.calls[0][1].body).toMatchObject({
+    schoolId: "school-1",
+    period: "2026-01",
+    reason: "更正上月末的对账",
+    expectedVersion: 7,
+  });
+  expect(done).toHaveBeenCalled();
+});

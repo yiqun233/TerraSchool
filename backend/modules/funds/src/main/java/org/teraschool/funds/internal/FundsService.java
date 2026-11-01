@@ -17,6 +17,7 @@ import org.teraschool.archive.api.StudentAccess;
 import org.teraschool.enrollment.api.CancelHours;
 import org.teraschool.enrollment.api.EnrollmentAccess;
 import org.teraschool.enrollment.api.EnrollmentCommands;
+import org.teraschool.finance.api.PeriodGate;
 import org.teraschool.funds.api.*;
 import org.teraschool.identity.api.Actor;
 import org.teraschool.identity.api.CurrentActor;
@@ -47,6 +48,7 @@ public class FundsService implements FundsQueries, FundsCommands {
   private final ConsumptionAccess consumption;
   private final EnrollmentCommands enrollmentCommands;
   private final ApprovalGate approvals;
+  private final PeriodGate periods;
 
   public FundsService(
       CurrentActor actors,
@@ -57,7 +59,8 @@ public class FundsService implements FundsQueries, FundsCommands {
       EnrollmentAccess enrollments,
       ConsumptionAccess consumption,
       EnrollmentCommands enrollmentCommands,
-      ApprovalGate approvals) {
+      ApprovalGate approvals,
+      PeriodGate periods) {
     this.actors = actors;
     this.tx = tx;
     this.sql = sql;
@@ -67,6 +70,7 @@ public class FundsService implements FundsQueries, FundsCommands {
     this.consumption = consumption;
     this.enrollmentCommands = enrollmentCommands;
     this.approvals = approvals;
+    this.periods = periods;
   }
 
   // ---------------------------------------------------------------- 查询
@@ -234,6 +238,7 @@ public class FundsService implements FundsQueries, FundsCommands {
           var schoolId = student.schoolId();
           if (!verified.schools().contains(schoolId)) throw new AccessDeniedException("无该学校的收款权限");
           if (!schools.require(schoolId).active()) throw new AccessDeniedException("学校已停用，不能确认收款");
+          periods.requireOpen(schoolId, occurredOn);
           lockStudent(student.id());
           var fingerprint =
               fingerprint(
@@ -284,6 +289,7 @@ public class FundsService implements FundsQueries, FundsCommands {
           var schoolId = row.get("school_id", UUID.class);
           if (!verified.schools().contains(schoolId)) throw new AccessDeniedException("无该学校的收款权限");
           var student = students.require(row.get("student_id", UUID.class));
+          periods.requireOpen(schoolId, row.get("occurred_on", LocalDate.class));
           lockStudent(student.id());
           if (!"CONFIRMED".equals(row.get("status", String.class)))
             throw new FundsConflict("RECEIPT_NOT_CONFIRMED");
@@ -333,6 +339,7 @@ public class FundsService implements FundsQueries, FundsCommands {
           var schoolId = receipt.get("school_id", UUID.class);
           if (!verified.schools().contains(schoolId)) throw new AccessDeniedException("无该学校的分配权限");
           var studentId = receipt.get("student_id", UUID.class);
+          periods.requireOpen(schoolId, receipt.get("occurred_on", LocalDate.class));
           lockStudent(studentId);
           if (!"CONFIRMED".equals(receipt.get("status", String.class)))
             throw new FundsConflict("RECEIPT_NOT_CONFIRMED");
@@ -390,6 +397,7 @@ public class FundsService implements FundsQueries, FundsCommands {
           var schoolId = receipt.get("school_id", UUID.class);
           if (!verified.schools().contains(schoolId)) throw new AccessDeniedException("无该学校的分配权限");
           var studentId = receipt.get("student_id", UUID.class);
+          periods.requireOpen(schoolId, receipt.get("occurred_on", LocalDate.class));
           lockStudent(studentId);
           if (!"ACTIVE".equals(row.get("status", String.class)))
             throw new FundsConflict("ALLOCATION_NOT_ACTIVE");
@@ -463,6 +471,7 @@ public class FundsService implements FundsQueries, FundsCommands {
           if (!schools.require(schoolId).active()) throw new AccessDeniedException("学校已停用，不能退课时");
           if (!"ACTIVE".equals(enrollment.status()))
             throw new FundsConflict("ENROLLMENT_NOT_ACTIVE");
+          periods.requireOpen(schoolId, LocalDate.now());
           lockStudent(enrollment.studentId());
           var fingerprint =
               fingerprint(
@@ -651,6 +660,7 @@ public class FundsService implements FundsQueries, FundsCommands {
             throw new FundsConflict("VERSION_CONFLICT");
           var amount = row.get("amount", BigDecimal.class);
           var studentId = row.get("student_id", UUID.class);
+          periods.requireOpen(schoolId, LocalDate.now());
           lockStudent(studentId);
           int updated =
               sql.execute(

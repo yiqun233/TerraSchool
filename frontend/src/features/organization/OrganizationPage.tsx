@@ -16,6 +16,7 @@ import { ProductCatalogWorkspace } from "../product/ProductCatalog";
 import { EnrollmentWorkspace } from "../enrollment/EnrollmentWorkspace";
 import { TeachingWorkspace } from "../teaching/TeachingWorkspace";
 import { ApprovalInbox } from "../approval/ApprovalInbox";
+import { PeriodManager } from "../finance/PeriodManager";
 import type { components } from "../../shared/generated/api";
 const labels: Record<string, string> = {
   SCHOOL: "学校",
@@ -62,6 +63,7 @@ function Workspace({ reset }: { reset: () => void }) {
     | "ENROLLMENT"
     | "TEACHING"
     | "APPROVAL"
+    | "FINANCE"
   >("ORGANIZATION");
   const [page, setPage] = useState(0);
   const [error, setError] = useState("");
@@ -181,6 +183,12 @@ function Workspace({ reset }: { reset: () => void }) {
             >
               审批
             </Button>
+            <Button
+              type={section === "FINANCE" ? "primary" : "text"}
+              onClick={() => setSection("FINANCE")}
+            >
+              财务期间
+            </Button>
           </Space>
         </nav>
       </aside>
@@ -200,6 +208,7 @@ function Workspace({ reset }: { reset: () => void }) {
                   ENROLLMENT: "报名与收款",
                   TEACHING: "教务与考勤",
                   APPROVAL: "审批",
+                  FINANCE: "财务期间",
                 }[section]
               }
             </Typography.Title>
@@ -261,6 +270,8 @@ function Workspace({ reset }: { reset: () => void }) {
           <TeachingWorkspace onUnauthorized={() => void signOut()} />
         ) : section === "APPROVAL" ? (
           <ApprovalInbox onUnauthorized={() => void signOut()} />
+        ) : section === "FINANCE" ? (
+          <PeriodManager onUnauthorized={() => void signOut()} />
         ) : section !== "ORGANIZATION" ? (
           <ResourceWorkspace key={section} kind={section} />
         ) : !me.data.canReadOrganizations ? (

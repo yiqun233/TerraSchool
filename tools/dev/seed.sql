@@ -223,3 +223,21 @@ BEGIN
  INSERT INTO dev.resource_seed_history(seed_id) VALUES('LOCAL-APPROVAL-001');
 END;
 $approval_seed$;
+
+-- 财务期间授权：演示账号可锁定/解锁月份，便于验证锁月拦截。
+DO $period_seed$
+DECLARE owner_id uuid; tenant_id_value uuid; action_name text;
+BEGIN
+ PERFORM pg_advisory_xact_lock(hashtextextended('teraschool-local-period-v1',0));
+ IF EXISTS(SELECT 1 FROM dev.resource_seed_history WHERE seed_id='LOCAL-PERIOD-001') THEN RETURN; END IF;
+ SELECT a.id,a.tenant_id INTO STRICT owner_id,tenant_id_value FROM identity.account a JOIN identity.tenant t ON t.id=a.tenant_id
+ WHERE a.login='local-admin' AND t.name='本地演示机构' AND a.active AND t.active;
+ FOREACH action_name IN ARRAY ARRAY['PERIOD_READ','PERIOD_LOCK'] LOOP
+  IF NOT EXISTS(SELECT 1 FROM identity.account_permission WHERE account_id=owner_id AND action=action_name) THEN
+   INSERT INTO identity.account_permission(tenant_id,account_id,action,school_id,effect)
+    SELECT tenant_id_value,owner_id,action_name,id,'ALLOW' FROM organization.unit WHERE tenant_id=tenant_id_value AND kind='SCHOOL';
+  END IF;
+ END LOOP;
+ INSERT INTO dev.resource_seed_history(seed_id) VALUES('LOCAL-PERIOD-001');
+END;
+$period_seed$;

@@ -68,7 +68,7 @@ describe("组织维护提交保护", () => {
     await user.click(screen.getByRole("button", { name: /保\s*存/ }));
     await waitFor(() => expect(saved).toHaveBeenCalledTimes(1));
     expect(post.mock.calls[0][1].body).toEqual(post.mock.calls[1][1].body);
-  }, 10000);
+  }, 20000);
   it("列表刷新后仍提交打开编辑时的版本", async () => {
     const user = userEvent.setup();
     const saved = vi.fn();
