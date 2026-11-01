@@ -15,13 +15,6 @@ CREATE TABLE identity.field_grant (
   FOREIGN KEY(account_id) REFERENCES identity.account(id)
 );
 
-ALTER TABLE identity.field_grant ENABLE ROW LEVEL SECURITY;
-ALTER TABLE identity.field_grant FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_scope ON identity.field_grant
- USING (tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid)
- WITH CHECK (tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid);
-
-GRANT SELECT,INSERT,UPDATE,DELETE ON identity.field_grant TO ts_app;
 
 -- 兼容：已有 STUDENT_SENSITIVE_READ 的账号，按学校补齐五个学员字段的显式授予。
 INSERT INTO identity.field_grant(tenant_id,account_id,school_id,field_key,effect)
@@ -30,3 +23,11 @@ FROM identity.account_permission p
 CROSS JOIN (VALUES ('STUDENT_PHONE'),('STUDENT_CERT'),('STUDENT_BIRTHDAY'),('STUDENT_EMAIL'),('CONTACT_PHONE')) AS f(field_key)
 WHERE p.action='STUDENT_SENSITIVE_READ' AND p.effect='ALLOW'
 ON CONFLICT (tenant_id,account_id,school_id,field_key) DO NOTHING;
+
+ALTER TABLE identity.field_grant ENABLE ROW LEVEL SECURITY;
+ALTER TABLE identity.field_grant FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_scope ON identity.field_grant
+ USING (tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid)
+ WITH CHECK (tenant_id=nullif(current_setting('app.tenant_id',true),'')::uuid);
+
+GRANT SELECT,INSERT,UPDATE,DELETE ON identity.field_grant TO ts_app;
