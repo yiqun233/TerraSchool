@@ -98,4 +98,30 @@ class TeachingHttp {
   ScheduleResult scheduleConfirm(@PathVariable UUID id, @RequestBody ScheduleRule rule) {
     return scheduling.confirm(id, rule);
   }
+
+  /** 资源不可用时间（教师活动/休假、教室预订）。 */
+  @PostMapping(value = "/api/teaching/resource-blocks", consumes = "application/json")
+  @ResponseStatus(org.springframework.http.HttpStatus.CREATED)
+  ResourceBlockView createBlock(@RequestBody ResourceBlock command) {
+    return scheduling.createBlock(command);
+  }
+
+  @GetMapping("/api/teaching/resource-blocks")
+  java.util.List<ResourceBlockView> blocks(
+      @RequestParam UUID schoolId,
+      @RequestParam(defaultValue = "") String from,
+      @RequestParam(defaultValue = "") String to) {
+    return scheduling.blocks(schoolId, from, to);
+  }
+
+  /** 学校级排课策略：最小课间间隔与是否把资源不可用降为警告。 */
+  @GetMapping("/api/teaching/schedule-policy")
+  SchedulePolicyView policy(@RequestParam UUID schoolId) {
+    return scheduling.policyOf(schoolId);
+  }
+
+  @PostMapping(value = "/api/teaching/schedule-policy", consumes = "application/json")
+  SchedulePolicyView savePolicy(@RequestParam UUID schoolId, @RequestBody SchedulePolicy command) {
+    return scheduling.savePolicy(schoolId, command);
+  }
 }

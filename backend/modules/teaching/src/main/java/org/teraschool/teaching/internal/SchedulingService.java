@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.sql.Time;
 import java.time.*;
+import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
@@ -92,6 +93,158 @@ public class SchedulingService {
     }
   }
 
+  // ---------------------------------------------------------------- 资源不可用时间与策略
+
+  public ResourceBlockView createBlock(ResourceBlock command) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      var scope = actors.requireAction("TEACHING_MAINTAIN");
+      return tx.execute(
+          scope.tenantId(),
+          () -> {
+            if (command == null || command.schoolId() == null)
+              throw new IllegalArgumentException("需要学校");
+            if ((command.teacherId() == null) == (command.roomId() == null))
+              throw new ScheduleConflict("RESOURCE_REQUIRED");
+            if (!scope.schools().contains(command.schoolId()))
+              throw new AccessDeniedException("无该学校的排课权限");
+            if (!schools.require(command.schoolId()).active())
+              throw new AccessDeniedException("学校已停用，不能维护不可用时间");
+            var date = date(command.blockDate(), "日期");
+            var startsAt = time(command.startsAt(), "开始时间");
+            var endsAt = time(command.endsAt(), "结束时间");
+            if (!endsAt.isAfter(startsAt)) throw new ScheduleConflict("SCHEDULE_TIME_INVALID");
+            var id = UUID.randomUUID();
+            sql.execute(
+                "insert into teaching.resource_block(id,tenant_id,school_id,teacher_id,room_id,"
+                    + "block_date,starts_at,ends_at,reason) values (?,?,?,?,?,?,?,?,?)",
+                id,
+                scope.tenantId(),
+                command.schoolId(),
+                command.teacherId(),
+                command.roomId(),
+                date,
+                Time.valueOf(startsAt),
+                Time.valueOf(endsAt),
+                trim(command.reason(), 100));
+            return blockView(id);
+          });
+    }
+  }
+
+  public List<ResourceBlockView> blocks(UUID schoolId, String from, String to) {
+    var scope = actors.requireResourceScope("TEACHING");
+    if (schoolId == null || !scope.readableSchoolIds().contains(schoolId))
+      throw new AccessDeniedException("无该学校的读取权限");
+    var start = from == null || from.isBlank() ? LocalDate.now() : date(from, "开始日期");
+    var end = to == null || to.isBlank() ? start.plusDays(60) : date(to, "结束日期");
+    return tx.execute(
+        scope.tenantId(),
+        () ->
+            sql.fetch(
+                    "select b.id,b.teacher_id,b.room_id,b.block_date,b.starts_at,b.ends_at,b.reason,"
+                        + "t.name as teacher_name,r.name as room_name from teaching.resource_block b"
+                        + " left join organization.teacher t on t.id=b.teacher_id"
+                        + " left join organization.room r on r.id=b.room_id"
+                        + " where b.school_id=? and b.block_date between ? and ?"
+                        + " order by b.block_date, b.starts_at limit 500",
+                    schoolId,
+                    start,
+                    end)
+                .map(this::blockViewOf));
+  }
+
+  public SchedulePolicyView policyOf(UUID schoolId) {
+    var scope = actors.requireResourceScope("TEACHING");
+    if (schoolId == null || !scope.readableSchoolIds().contains(schoolId))
+      throw new AccessDeniedException("无该学校的读取权限");
+    return tx.execute(scope.tenantId(), () -> policyView(schoolId));
+  }
+
+  public SchedulePolicyView savePolicy(UUID schoolId, SchedulePolicy command) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      var scope = actors.requireAction("TEACHING_MAINTAIN");
+      return tx.execute(
+          scope.tenantId(),
+          () -> {
+            schools.lockTenant(scope.tenantId());
+            var verified = actors.requireActionInTransaction("TEACHING_MAINTAIN");
+            if (schoolId == null || !verified.schools().contains(schoolId))
+              throw new AccessDeniedException("无该学校的排课权限");
+            if (command == null || command.minGapMinutes() < 0 || command.minGapMinutes() > 240)
+              throw new ScheduleConflict("SCHEDULE_GAP_INVALID");
+            var existing =
+                sql.fetchOne(
+                    "select id,version from teaching.schedule_policy where school_id=? for update",
+                    schoolId);
+            if (existing == null) {
+              if (command.expectedVersion() != null && command.expectedVersion() != 0)
+                throw new ScheduleConflict("VERSION_CONFLICT");
+              sql.execute(
+                  "insert into teaching.schedule_policy(tenant_id,school_id,block_teacher_unavailable,"
+                      + "block_room_unavailable,min_gap_minutes) values (?,?,?,?,?)",
+                  scope.tenantId(),
+                  schoolId,
+                  command.blockTeacherUnavailable(),
+                  command.blockRoomUnavailable(),
+                  command.minGapMinutes());
+            } else {
+              if (command.expectedVersion() != null
+                  && !existing.get("version", Long.class).equals(command.expectedVersion()))
+                throw new ScheduleConflict("VERSION_CONFLICT");
+              sql.execute(
+                  "update teaching.schedule_policy set block_teacher_unavailable=?,"
+                      + "block_room_unavailable=?,min_gap_minutes=?,version=version+1,"
+                      + "updated_at=CURRENT_TIMESTAMP where id=?",
+                  command.blockTeacherUnavailable(),
+                  command.blockRoomUnavailable(),
+                  command.minGapMinutes(),
+                  existing.get("id", UUID.class));
+            }
+            return policyView(schoolId);
+          });
+    }
+  }
+
+  private SchedulePolicyView policyView(UUID schoolId) {
+    var row =
+        sql.fetchOne(
+            "select block_teacher_unavailable,block_room_unavailable,min_gap_minutes,version"
+                + " from teaching.schedule_policy where school_id=?",
+            schoolId);
+    if (row == null) return new SchedulePolicyView(schoolId, true, true, 0, 0);
+    return new SchedulePolicyView(
+        schoolId,
+        row.get("block_teacher_unavailable", Boolean.class),
+        row.get("block_room_unavailable", Boolean.class),
+        row.get("min_gap_minutes", Integer.class),
+        row.get("version", Long.class));
+  }
+
+  private ResourceBlockView blockViewOf(org.jooq.Record row) {
+    return new ResourceBlockView(
+        row.get("id", UUID.class),
+        row.get("teacher_id", UUID.class),
+        row.get("teacher_name", String.class),
+        row.get("room_id", UUID.class),
+        row.get("room_name", String.class),
+        date(row.get("block_date", LocalDate.class)),
+        time(row.get("starts_at", LocalTime.class)),
+        time(row.get("ends_at", LocalTime.class)),
+        row.get("reason", String.class));
+  }
+
+  private ResourceBlockView blockView(UUID id) {
+    var row =
+        sql.fetchOne(
+            "select b.id,b.teacher_id,b.room_id,b.block_date,b.starts_at,b.ends_at,b.reason,"
+                + "t.name as teacher_name,r.name as room_name from teaching.resource_block b"
+                + " left join organization.teacher t on t.id=b.teacher_id"
+                + " left join organization.room r on r.id=b.room_id where b.id=?",
+            id);
+    if (row == null) throw new IllegalStateException("不可用时间写入后不可见");
+    return blockViewOf(row);
+  }
+
   // ---------------------------------------------------------------- 内部
 
   private record Plan(
@@ -148,9 +301,10 @@ public class SchedulingService {
     if (dates.isEmpty()) throw new ScheduleConflict("SCHEDULE_NO_DATE");
     if (dates.size() > MAX_SLOTS) throw new ScheduleConflict("SCHEDULE_TOO_MANY_SLOTS");
 
+    var policy = policy(schoolId);
     var slots = new ArrayList<ScheduleSlot>();
     for (var date : dates) {
-      var reason =
+      var clash =
           conflict(
               classId,
               date,
@@ -159,17 +313,29 @@ public class SchedulingService {
               teacher.id(),
               teacher.name(),
               room.id(),
-              room.name());
+              room.name(),
+              policy);
+      var hard = clash != null && "HARD".equals(clash.severity());
       slots.add(
           new ScheduleSlot(
-              date.toString(), startsAt.toString(), endsAt.toString(), reason == null, reason));
+              date.toString(),
+              startsAt.toString(),
+              endsAt.toString(),
+              !hard,
+              clash == null ? null : clash.code(),
+              clash == null ? null : clash.severity()));
     }
+
     return new Plan(
         schoolId, teacher.id(), teacher.name(), room.id(), room.name(), topic, hours, slots);
   }
 
-  /** 冲突判定：同班/同教师/同教室任一重叠即跳过；完全相同的时段视为重复。 */
-  private String conflict(
+  /**
+   * 冲突判定（参考旧系统 ClashTypeDictionary 的分类）。
+   *
+   * <p>HARD = 阻断：重复、本班重叠、教师/教室课程冲突、资源在不可用时间。 只有学校策略显式放宽时，资源不可用才降为 WARN（对应旧系统的 ignore 配置）。
+   */
+  private Clash conflict(
       UUID classId,
       LocalDate date,
       LocalTime startsAt,
@@ -177,7 +343,8 @@ public class SchedulingService {
       UUID teacherId,
       String teacherName,
       UUID roomId,
-      String roomName) {
+      String roomName,
+      Policy policy) {
     var starts = Time.valueOf(startsAt);
     var ends = Time.valueOf(endsAt);
     var duplicate =
@@ -188,7 +355,7 @@ public class SchedulingService {
             date,
             starts,
             ends);
-    if (duplicate != null) return "DUPLICATE";
+    if (duplicate != null) return new Clash("DUPLICATE", "HARD");
     var classClash =
         sql.fetchOne(
             "select id from teaching.lesson where class_id=? and lesson_date=? and starts_at<?"
@@ -197,8 +364,7 @@ public class SchedulingService {
             date,
             ends,
             starts);
-    if (classClash != null) return "LESSON_OVERLAP";
-    // 有实体时按实体比较，同时兼容历史自由文本（同名也算冲突）。
+    if (classClash != null) return new Clash("LESSON_OVERLAP", "HARD");
     if (teacherId != null || teacherName != null) {
       var teacherClash =
           sql.fetchOne(
@@ -209,7 +375,33 @@ public class SchedulingService {
               starts,
               teacherId,
               teacherName);
-      if (teacherClash != null) return "TEACHER_CLASH";
+      if (teacherClash != null) return new Clash("TEACHER_CLASH", "HARD");
+      // 最小间隔：旧系统的 MinSpaceMinute，默认 0 表示关闭。
+      if (policy.minGapMinutes() > 0) {
+        // 在 Java 里算好间隔边界，避免把分钟数绑成 interval 参数。
+        var gapStarts = Time.valueOf(startsAt.minusMinutes(policy.minGapMinutes()));
+        var gapEnds = Time.valueOf(endsAt.plusMinutes(policy.minGapMinutes()));
+        var gapClash =
+            sql.fetchOne(
+                "select id from teaching.lesson where lesson_date=?"
+                    + " and (teacher_id=? or teacher_name=?) and ends_at>? and starts_at<? limit 1",
+                date,
+                teacherId,
+                teacherName,
+                gapStarts,
+                gapEnds);
+        if (gapClash != null) return new Clash("TEACHER_MIN_GAP", "HARD");
+      }
+      var blocked =
+          sql.fetchOne(
+              "select id from teaching.resource_block where teacher_id=? and block_date=?"
+                  + " and starts_at<? and ends_at>? limit 1",
+              teacherId,
+              date,
+              ends,
+              starts);
+      if (blocked != null)
+        return new Clash("TEACHER_UNAVAILABLE", policy.blockTeacherUnavailable() ? "HARD" : "WARN");
     }
     if (roomId != null || roomName != null) {
       var roomClash =
@@ -221,9 +413,37 @@ public class SchedulingService {
               starts,
               roomId,
               roomName);
-      if (roomClash != null) return "ROOM_CLASH";
+      if (roomClash != null) return new Clash("ROOM_CLASH", "HARD");
+      var blocked =
+          sql.fetchOne(
+              "select id from teaching.resource_block where room_id=? and block_date=?"
+                  + " and starts_at<? and ends_at>? limit 1",
+              roomId,
+              date,
+              ends,
+              starts);
+      if (blocked != null)
+        return new Clash("ROOM_UNAVAILABLE", policy.blockRoomUnavailable() ? "HARD" : "WARN");
     }
     return null;
+  }
+
+  private record Clash(String code, String severity) {}
+
+  private record Policy(
+      boolean blockTeacherUnavailable, boolean blockRoomUnavailable, int minGapMinutes) {}
+
+  private Policy policy(UUID schoolId) {
+    var row =
+        sql.fetchOne(
+            "select block_teacher_unavailable,block_room_unavailable,min_gap_minutes"
+                + " from teaching.schedule_policy where school_id=?",
+            schoolId);
+    if (row == null) return new Policy(true, true, 0);
+    return new Policy(
+        row.get("block_teacher_unavailable", Boolean.class),
+        row.get("block_room_unavailable", Boolean.class),
+        row.get("min_gap_minutes", Integer.class));
   }
 
   private BigDecimal hours(String value) {
@@ -252,6 +472,14 @@ public class SchedulingService {
   }
 
   private record ResourceRef(UUID id, String name) {}
+
+  private String date(LocalDate value) {
+    return value == null ? null : value.toString();
+  }
+
+  private String time(LocalTime value) {
+    return value == null ? null : value.format(DateTimeFormatter.ofPattern("HH:mm"));
+  }
 
   private LocalDate date(String value, String label) {
     if (value == null || !DAY.matcher(value.strip()).matches())

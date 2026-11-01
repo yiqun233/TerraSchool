@@ -32,6 +32,9 @@ const WEEKDAYS = [
 
 const REASON_LABEL: Record<string, string> = {
   DUPLICATE: "该时段已存在课次",
+  TEACHER_UNAVAILABLE: "教师该时段不可用（活动/休假）",
+  ROOM_UNAVAILABLE: "教室该时段被预订",
+  TEACHER_MIN_GAP: "与教师上一节课间隔不足",
   LESSON_OVERLAP: "同班时间重叠",
   TEACHER_CLASH: "教师已有课",
   ROOM_CLASH: "教室已占用",
