@@ -501,6 +501,8 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
             throw new AccessDeniedException("无该学校的课次关闭权限");
           if (!"CONFIRMED".equals(row.get("status", String.class)))
             throw new TeachingConflict("LESSON_NOT_CONFIRMED");
+          // 结算模式防护：历史数据若是未实现的模式，宁可拒绝消费也不按模式 1 静默计算。
+          // 出勤名单在下面读取，这里先做一次同源校验。
           // 课次消费按上课日期归属期间；该月已锁定则拒绝关闭。
           periods.requireOpen(schoolId, row.get("lesson_date", LocalDate.class));
           if (!row.get("version", Long.class).equals(command.expectedVersion()))
@@ -514,6 +516,8 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
           for (var item : present) {
             var enrollmentId = item.get("enrollment_id", UUID.class);
             var enrollment = enrollments.require(enrollmentId);
+            if (enrollment.settlementMode() != 1)
+              throw new TeachingConflict("SETTLEMENT_MODE_UNSUPPORTED");
             // 模式 1 平均价格：单价 = 报名价格 ÷ 购买课时；本次消费 = 单价 × 本次授课课时。
             var unit = enrollment.price().divide(enrollment.hours(), 6, RoundingMode.HALF_UP);
             var amount = unit.multiply(lessonHours).setScale(2, RoundingMode.HALF_UP);

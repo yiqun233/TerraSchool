@@ -559,12 +559,15 @@ export function PriceDrafter({
         <Form.Item label="服务费（元）" name="serviceFee">
           <Input placeholder="0.00" maxLength={16} disabled={busy} />
         </Form.Item>
-        <Form.Item label="结算模式" name="settlementMode">
+        <Form.Item
+          label="结算模式"
+          name="settlementMode"
+          extra="当前只实现了模式 1（平均价格）；发布其他模式会被拒绝，避免按错误公式计算消费与退费。"
+        >
           <Select
-            options={Object.entries(MODE_LABEL).map(([value, label]) => ({
-              value: Number(value),
-              label,
-            }))}
+            options={Object.entries(MODE_LABEL)
+              .filter(([value]) => Number(value) === 1)
+              .map(([value, label]) => ({ value: Number(value), label }))}
             disabled={busy}
           />
         </Form.Item>

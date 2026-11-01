@@ -571,6 +571,9 @@ public class ProductCatalogService implements ProductQueries, ProductCommands {
             throw new ProductConflict("PRICE_VERSION_NOT_DRAFT");
           if (!current.get("version", Long.class).equals(command.expectedVersion()))
             throw new ProductConflict("VERSION_CONFLICT");
+          // 结算模式防护：只允许发布已实现公式的模式，避免发布后按错误规则静默算钱。
+          var mode = current.get("settlement_mode", Integer.class);
+          if (mode == null || mode != 1) throw new ProductConflict("SETTLEMENT_MODE_UNSUPPORTED");
           // 同一产品只保留一个已发布版本：先作废旧版本，旧版本仍保留为历史。
           var existing =
               sql.fetchOne(

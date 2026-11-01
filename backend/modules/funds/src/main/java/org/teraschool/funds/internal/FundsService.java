@@ -471,6 +471,8 @@ public class FundsService implements FundsQueries, FundsCommands {
           if (!schools.require(schoolId).active()) throw new AccessDeniedException("学校已停用，不能退课时");
           if (!"ACTIVE".equals(enrollment.status()))
             throw new FundsConflict("ENROLLMENT_NOT_ACTIVE");
+          if (enrollment.settlementMode() != 1)
+            throw new FundsConflict("SETTLEMENT_MODE_UNSUPPORTED");
           periods.requireOpen(schoolId, LocalDate.now());
           lockStudent(enrollment.studentId());
           var fingerprint =
