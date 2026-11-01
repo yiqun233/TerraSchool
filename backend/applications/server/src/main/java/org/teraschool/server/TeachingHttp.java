@@ -114,6 +114,12 @@ class TeachingHttp {
     return scheduling.blocks(schoolId, from, to);
   }
 
+  @DeleteMapping("/api/teaching/resource-blocks/{id}")
+  @ResponseStatus(org.springframework.http.HttpStatus.NO_CONTENT)
+  void deleteBlock(@PathVariable UUID id) {
+    scheduling.deleteBlock(id);
+  }
+
   /** 学校级排课策略：最小课间间隔与是否把资源不可用降为警告。 */
   @GetMapping("/api/teaching/schedule-policy")
   SchedulePolicyView policy(@RequestParam UUID schoolId) {

@@ -205,6 +205,24 @@ public class SchedulingService {
     }
   }
 
+  /** 撤销一条不可用时间；已不存在时按成功处理，便于重复点击。 */
+  public boolean deleteBlock(UUID id) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      var scope = actors.requireAction("TEACHING_MAINTAIN");
+      return tx.execute(
+          scope.tenantId(),
+          () -> {
+            var row =
+                sql.fetchOne("select id,school_id from teaching.resource_block where id=?", id);
+            if (row == null) return true;
+            var schoolId = row.get("school_id", UUID.class);
+            if (!scope.schools().contains(schoolId)) throw new AccessDeniedException("无该学校的排课权限");
+            sql.execute("delete from teaching.resource_block where id=?", id);
+            return true;
+          });
+    }
+  }
+
   private SchedulePolicyView policyView(UUID schoolId) {
     var row =
         sql.fetchOne(

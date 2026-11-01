@@ -228,4 +228,24 @@ class SchedulingConstraintTest {
     assertThat(updated.minGapMinutes()).isEqualTo(20);
     assertThat(updated.version()).isEqualTo(saved.version() + 1);
   }
+
+  @Test
+  void blockCanBeDeletedAndDeleteIsIdempotent() {
+    var block =
+        asActor(
+            OPS,
+            () ->
+                scheduling.createBlock(
+                    new ResourceBlock(
+                        SCHOOL, TEACHER, null, "2026-12-05", "09:00", "12:00", "临时安排")));
+    assertThat(asActor(OPS, () -> scheduling.deleteBlock(block.id()))).isTrue();
+    assertThat(asActor(OPS, () -> scheduling.blocks(SCHOOL, "2026-12-05", "2026-12-05"))).isEmpty();
+    // 再删一次仍按成功处理，便于重复点击。
+    assertThat(asActor(OPS, () -> scheduling.deleteBlock(block.id()))).isTrue();
+  }
+
+  @Test
+  void deletingUnknownBlockIsTreatedAsDone() {
+    assertThat(asActor(OPS, () -> scheduling.deleteBlock(UUID.randomUUID()))).isTrue();
+  }
 }

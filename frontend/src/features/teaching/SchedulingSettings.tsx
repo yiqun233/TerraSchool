@@ -7,6 +7,7 @@ import {
   Input,
   InputNumber,
   Modal,
+  Popconfirm,
   Select,
   Space,
   Switch,
@@ -181,6 +182,30 @@ export function BlocksTab({
     }
   }
 
+  async function remove(block: ResourceBlockView) {
+    setBusy(true);
+    try {
+      const token = await csrf();
+      const { response } = await api.DELETE(
+        "/api/teaching/resource-blocks/{id}",
+        {
+          params: { path: { id: block.id! } },
+          headers: { [token.headerName!]: token.token! },
+        },
+      );
+      if (!response.ok) {
+        onError("撤销失败，请核对课次维护权限。");
+        return;
+      }
+      onMessage("已撤销该不可用时间");
+      await blocks.refetch();
+    } catch {
+      onError("无法获取安全令牌或网络中断，请重试。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <>
       {canMaintain ? (
@@ -284,6 +309,24 @@ export function BlocksTab({
             title: "原因",
             dataIndex: "reason",
             render: (value?: string) => value ?? "—",
+          },
+          {
+            title: "操作",
+            key: "actions",
+            render: (_: unknown, block: ResourceBlockView) =>
+              canMaintain ? (
+                <Popconfirm
+                  title="撤销这条不可用时间？"
+                  description={`${block.blockDate} ${block.startsAt}-${block.endsAt}`}
+                  okText="撤销"
+                  cancelText="取消"
+                  onConfirm={() => void remove(block)}
+                >
+                  <Button size="small" danger loading={busy}>
+                    撤销
+                  </Button>
+                </Popconfirm>
+              ) : null,
           },
         ]}
         locale={{ emptyText: "没有不可用时间：排课只按课程与资源占用判断" }}
