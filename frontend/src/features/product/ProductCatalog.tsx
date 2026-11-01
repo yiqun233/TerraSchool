@@ -562,11 +562,11 @@ export function PriceDrafter({
         <Form.Item
           label="结算模式"
           name="settlementMode"
-          extra="当前只实现了模式 1（平均价格）；发布其他模式会被拒绝，避免按错误公式计算消费与退费。"
+          extra="已实现模式 1（平均价格）、2（课程匹配）、3（完全匹配）；模式 0 与 4/5 尚未实现，发布会失败。"
         >
           <Select
             options={Object.entries(MODE_LABEL)
-              .filter(([value]) => Number(value) === 1)
+              .filter(([value]) => [1, 2, 3].includes(Number(value)))
               .map(([value, label]) => ({ value: Number(value), label }))}
             disabled={busy}
           />

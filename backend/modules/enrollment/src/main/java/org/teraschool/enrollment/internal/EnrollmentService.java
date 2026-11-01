@@ -162,7 +162,23 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
         row.get("price", java.math.BigDecimal.class),
         row.get("hours", java.math.BigDecimal.class),
         row.get("settlement_mode", Integer.class),
-        cancelledHours(enrollmentId));
+        cancelledHours(enrollmentId),
+        courseRefs(enrollmentId));
+  }
+
+  private List<EnrollmentAccess.CourseRef> courseRefs(UUID enrollmentId) {
+    return sql.fetch(
+            "select curriculum_id,hours,amount,cancelled_hours,cancelled_amount"
+                + " from enrollment.enrollment_course where enrollment_id=? order by created_at,id",
+            enrollmentId)
+        .map(
+            row ->
+                new EnrollmentAccess.CourseRef(
+                    row.get("curriculum_id", UUID.class),
+                    row.get("hours", BigDecimal.class),
+                    row.get("amount", BigDecimal.class),
+                    row.get("cancelled_hours", BigDecimal.class),
+                    row.get("cancelled_amount", BigDecimal.class)));
   }
 
   // ---------------------------------------------------------------- 写入
@@ -224,6 +240,7 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
               scope.tenantId(),
               id,
               new BigDecimal(snapshot.price()));
+          insertCourses(scope.tenantId(), id, schoolId, snapshot, command.courses());
           rememberRequest(scope, command.requestId(), id, fingerprint);
           audit(scope, "ENROLLMENT_CREATED", id, schoolId, "");
           return view(requireEnrollment(verified, id), student.name());
@@ -301,11 +318,40 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
             throw new EnrollmentConflict("ENROLLMENT_NOT_ACTIVE");
           var price = row.get("price", BigDecimal.class);
           var purchased = row.get("hours", BigDecimal.class);
+          var mode = row.get("settlement_mode", Integer.class);
           var cancelled = cancelledHours(id);
           if (hours.compareTo(purchased.subtract(cancelled)) > 0)
             throw new EnrollmentConflict("HOURS_EXCEED_REMAINING");
-          var unit = price.divide(purchased, 6, RoundingMode.HALF_UP);
-          var amount = unit.multiply(hours).setScale(2, RoundingMode.HALF_UP);
+          BigDecimal amount;
+          if (mode != null && mode != 1) {
+            // 模式 2/3/4/5：按课程退，金额取该课程单价；同时累计课程级已退，供模式 4/5 重算单价。
+            var curriculumId = command.curriculumId();
+            if (curriculumId == null) throw new EnrollmentConflict("CURRICULUM_REQUIRED");
+            var line =
+                sql.fetchOne(
+                    "select id,hours,amount,cancelled_hours,cancelled_amount"
+                        + " from enrollment.enrollment_course where enrollment_id=? and curriculum_id=?"
+                        + " for update",
+                    id,
+                    curriculumId);
+            if (line == null) throw new EnrollmentConflict("CURRICULUM_NOT_IN_ENROLLMENT");
+            var lineHours = line.get("hours", BigDecimal.class);
+            var lineCancelled = line.get("cancelled_hours", BigDecimal.class);
+            if (hours.compareTo(lineHours.subtract(lineCancelled)) > 0)
+              throw new EnrollmentConflict("HOURS_EXCEED_COURSE_REMAINING");
+            var lineAmount = line.get("amount", BigDecimal.class);
+            var unit = lineAmount.divide(lineHours, 6, RoundingMode.HALF_UP);
+            amount = unit.multiply(hours).setScale(2, RoundingMode.HALF_UP);
+            sql.execute(
+                "update enrollment.enrollment_course set cancelled_hours=cancelled_hours+?,"
+                    + "cancelled_amount=cancelled_amount+?,version=version+1 where id=?",
+                hours,
+                amount,
+                line.get("id", UUID.class));
+          } else {
+            var unit = price.divide(purchased, 6, RoundingMode.HALF_UP);
+            amount = unit.multiply(hours).setScale(2, RoundingMode.HALF_UP);
+          }
           var cancellationId = UUID.randomUUID();
           sql.execute(
               "insert into enrollment.hours_cancellation(id,tenant_id,enrollment_id,hours,amount,reason)"
@@ -356,6 +402,62 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
                 enrollmentId)
             .get("total", BigDecimal.class);
     return value == null ? BigDecimal.ZERO : value;
+  }
+
+  /**
+   * 写入课程明细。
+   *
+   * <p>未提供明细时按价格版本所属课程生成一条，其课时与费用等于快照；提供明细时要求课程属于同一学校、互不重复， 且课时与费用合计必须等于快照，避免明细与总价脱钩。
+   */
+  private void insertCourses(
+      UUID tenantId,
+      UUID enrollmentId,
+      UUID schoolId,
+      org.teraschool.product.api.PriceSnapshot snapshot,
+      List<CourseLine> lines) {
+    var totalHours = new BigDecimal(snapshot.hours());
+    var totalAmount = new BigDecimal(snapshot.price());
+    var normalized = new ArrayList<CourseLine>();
+    if (lines == null || lines.isEmpty()) {
+      normalized.add(new CourseLine(snapshot.curriculumId(), snapshot.hours(), snapshot.price()));
+    } else {
+      var seen = new HashSet<UUID>();
+      for (var line : lines) {
+        if (line == null || line.curriculumId() == null)
+          throw new IllegalArgumentException("课程明细必须指定课程");
+        if (!seen.add(line.curriculumId())) throw new IllegalArgumentException("课程明细重复");
+        var lineHours = positiveHours(line.hours());
+        var lineAmount = positiveHours(line.amount());
+        var exists =
+            sql.fetchOne(
+                "select 1 from product.curriculum where id=? and school_id=?",
+                line.curriculumId(),
+                schoolId);
+        if (exists == null) throw new IllegalArgumentException("课程不属于该学校");
+        normalized.add(
+            new CourseLine(
+                line.curriculumId(), lineHours.toPlainString(), lineAmount.toPlainString()));
+      }
+      var sumHours =
+          normalized.stream()
+              .map(item -> new BigDecimal(item.hours()))
+              .reduce(BigDecimal.ZERO, BigDecimal::add);
+      var sumAmount =
+          normalized.stream()
+              .map(item -> new BigDecimal(item.amount()))
+              .reduce(BigDecimal.ZERO, BigDecimal::add);
+      if (sumHours.compareTo(totalHours) != 0 || sumAmount.compareTo(totalAmount) != 0)
+        throw new IllegalArgumentException("课程明细合计必须等于价格版本的课时与价格");
+    }
+    for (var line : normalized)
+      sql.execute(
+          "insert into enrollment.enrollment_course(tenant_id,enrollment_id,curriculum_id,hours,amount)"
+              + " values (?,?,?,?,?)",
+          tenantId,
+          enrollmentId,
+          line.curriculumId(),
+          new BigDecimal(line.hours()),
+          new BigDecimal(line.amount()));
   }
 
   private BigDecimal positiveHours(String value) {
@@ -452,7 +554,26 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
         row.get("version", Long.class),
         row.get("created_at", java.time.OffsetDateTime.class) == null
             ? null
-            : row.get("created_at", java.time.OffsetDateTime.class).toInstant().toString());
+            : row.get("created_at", java.time.OffsetDateTime.class).toInstant().toString(),
+        courseViews(row.get("id", UUID.class)));
+  }
+
+  private List<CourseView> courseViews(UUID enrollmentId) {
+    return sql.fetch(
+            "select c.curriculum_id,cur.name,c.hours,c.amount,c.cancelled_hours,c.cancelled_amount"
+                + " from enrollment.enrollment_course c"
+                + " join product.curriculum cur on cur.id=c.curriculum_id"
+                + " where c.enrollment_id=? order by c.created_at,c.id",
+            enrollmentId)
+        .map(
+            row ->
+                new CourseView(
+                    row.get("curriculum_id", UUID.class),
+                    row.get("name", String.class),
+                    money(row.get("hours", BigDecimal.class)),
+                    money(row.get("amount", BigDecimal.class)),
+                    money(row.get("cancelled_hours", BigDecimal.class)),
+                    money(row.get("cancelled_amount", BigDecimal.class))));
   }
 
   private String money(BigDecimal value) {

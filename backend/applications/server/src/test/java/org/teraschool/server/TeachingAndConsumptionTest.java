@@ -276,7 +276,7 @@ class TeachingAndConsumptionTest {
   }
 
   @Test
-  void memberIsExclusivePerEnrollment() throws Exception {
+  void memberIsIdempotentPerClassAndAllowedAcrossClasses() throws Exception {
     var classView = newClass("成员班");
     var other = newClass("另一个班");
     var enrollment = activeEnrollment();
@@ -290,12 +290,11 @@ class TeachingAndConsumptionTest {
                     () -> commands.addMember(classView.id(), new AddClassMember(enrollment)))
                 .memberCount())
         .isEqualTo(1);
-    assertThatThrownBy(
-            () ->
-                asActor(
-                    TEACHER, () -> commands.addMember(other.id(), new AddClassMember(enrollment))))
-        .isInstanceOf(TeachingConflict.class)
-        .hasMessage("ENROLLMENT_ALREADY_IN_CLASS");
+    // 一条报名可以同时上多门课程（结算模式 2/3 的前提），因此允许加入不同班级。
+    assertThat(
+            asActor(TEACHER, () -> commands.addMember(other.id(), new AddClassMember(enrollment)))
+                .memberCount())
+        .isEqualTo(1);
   }
 
   @Test

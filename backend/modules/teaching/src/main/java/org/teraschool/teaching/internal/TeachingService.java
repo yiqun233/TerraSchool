@@ -329,14 +329,16 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
           if (!enrollment.schoolId().equals(schoolId)) throw new AccessDeniedException("报名不属于该学校");
           if (!"ACTIVE".equals(enrollment.status()))
             throw new TeachingConflict("ENROLLMENT_NOT_ACTIVE");
+          // 一条报名可以同时上多门课程（结算模式 2/3 的课程匹配前提），因此只禁止同一班级重复加入；
+          // 同一班级内重复加入仍返回既有冲突码，便于幂等重试。
           var current =
               sql.fetchOne(
-                  "select class_id from teaching.enrollment_class where enrollment_id=? and active",
-                  command.enrollmentId());
+                  "select class_id from teaching.enrollment_class"
+                      + " where enrollment_id=? and class_id=? and active",
+                  command.enrollmentId(),
+                  classId);
           if (current != null) {
-            if (current.get("class_id", UUID.class).equals(classId))
-              return classView(requireClass(verified, classId), schools.require(schoolId).name());
-            throw new TeachingConflict("ENROLLMENT_ALREADY_IN_CLASS");
+            return classView(requireClass(verified, classId), schools.require(schoolId).name());
           }
           sql.execute(
               "insert into teaching.enrollment_class(tenant_id,enrollment_id,class_id,joined_on)"
@@ -513,26 +515,61 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
               sql.fetch(
                   "select a.enrollment_id from teaching.attendance a where a.lesson_id=? and a.status='PRESENT'",
                   id);
+          var lessonCurriculum =
+              sql.fetchOne(
+                      "select curriculum_id from teaching.class where id=?",
+                      row.get("class_id", UUID.class))
+                  .get("curriculum_id", UUID.class);
           for (var item : present) {
             var enrollmentId = item.get("enrollment_id", UUID.class);
             var enrollment = enrollments.require(enrollmentId);
-            if (enrollment.settlementMode() != 1)
+            var mode = enrollment.settlementMode();
+            if (mode != 1 && mode != 2 && mode != 3)
               throw new TeachingConflict("SETTLEMENT_MODE_UNSUPPORTED");
-            // 模式 1 平均价格：单价 = 报名价格 ÷ 购买课时；本次消费 = 单价 × 本次授课课时。
-            var unit = enrollment.price().divide(enrollment.hours(), 6, RoundingMode.HALF_UP);
+            // 模式 2/3 只对「报名的课程」计价：课次课程不在明细内则本期不产生消耗。
+            UUID consumedCurriculum = null;
+            BigDecimal fee = enrollment.price();
+            BigDecimal feeHours = enrollment.hours();
+            if (mode != 1) {
+              var line =
+                  enrollment.courses().stream()
+                      .filter(course -> course.curriculumId().equals(lessonCurriculum))
+                      .findFirst()
+                      .orElse(null);
+              if (line == null) continue;
+              consumedCurriculum = line.curriculumId();
+              fee = line.amount();
+              feeHours = line.hours();
+            }
+            if (feeHours.signum() <= 0) continue;
+            var totalConsumed = consumedHours(enrollmentId);
+            var courseConsumed = consumedHours(enrollmentId, consumedCurriculum);
+            // 封顶：模式 3 按课程课时，模式 1/2 按报名总课时。
+            var consumed = mode == 3 ? courseConsumed : totalConsumed;
+            var ceiling = mode == 3 ? feeHours : enrollment.hours();
+            if (consumed.compareTo(ceiling) >= 0) continue;
+            var unit = fee.divide(feeHours, 6, RoundingMode.HALF_UP);
             var amount = unit.multiply(lessonHours).setScale(2, RoundingMode.HALF_UP);
+            // 尾差修正：最后一段课时消耗时补齐到该范围内应收总额。
+            if (mode == 3 && courseConsumed.add(lessonHours).compareTo(feeHours) == 0)
+              amount = fee.subtract(consumedAmount(enrollmentId, consumedCurriculum));
+            else if (mode == 1 && totalConsumed.add(lessonHours).compareTo(enrollment.hours()) == 0)
+              amount = enrollment.price().subtract(consumedAmount(enrollmentId, null));
+            if (amount.signum() < 0) amount = BigDecimal.ZERO;
             sql.execute(
                 "insert into teaching.consumption(tenant_id,enrollment_id,lesson_id,hours,amount,"
-                    + "settlement_mode,price_snapshot,hours_snapshot) values (?,?,?,?,?,?,?,?)"
+                    + "settlement_mode,price_snapshot,hours_snapshot,curriculum_id)"
+                    + " values (?,?,?,?,?,?,?,?,?)"
                     + " on conflict (enrollment_id,lesson_id) do nothing",
                 close.tenantId(),
                 enrollmentId,
                 id,
                 lessonHours,
                 amount,
-                enrollment.settlementMode(),
-                enrollment.price(),
-                enrollment.hours());
+                mode,
+                fee,
+                feeHours,
+                consumedCurriculum);
           }
           int updated =
               sql.execute(
@@ -718,6 +755,40 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
 
   private String time(LocalTime value) {
     return value == null ? null : value.toString();
+  }
+
+  private BigDecimal consumedHours(UUID enrollmentId) {
+    return consumedHours(enrollmentId, null);
+  }
+
+  private BigDecimal consumedHours(UUID enrollmentId, UUID curriculumId) {
+    var filter = curriculumId == null ? "" : " and curriculum_id=?";
+    var args =
+        curriculumId == null
+            ? new Object[] {enrollmentId}
+            : new Object[] {enrollmentId, curriculumId};
+    var value =
+        sql.fetchOne(
+                "select coalesce(sum(hours),0) as total from teaching.consumption where enrollment_id=?"
+                    + filter,
+                args)
+            .get("total", BigDecimal.class);
+    return value == null ? BigDecimal.ZERO : value;
+  }
+
+  private BigDecimal consumedAmount(UUID enrollmentId, UUID curriculumId) {
+    var filter = curriculumId == null ? "" : " and curriculum_id=?";
+    var args =
+        curriculumId == null
+            ? new Object[] {enrollmentId}
+            : new Object[] {enrollmentId, curriculumId};
+    var value =
+        sql.fetchOne(
+                "select coalesce(sum(amount),0) as total from teaching.consumption where enrollment_id=?"
+                    + filter,
+                args)
+            .get("total", BigDecimal.class);
+    return value == null ? BigDecimal.ZERO : value;
   }
 
   private String hours(BigDecimal value) {

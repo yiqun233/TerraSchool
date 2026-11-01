@@ -1,15 +1,23 @@
 package org.teraschool.enrollment.api;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.UUID;
 
 /**
  * 他域读取报名事实的最小契约（资金分配、教务消费与退款需要）。
  *
  * <p>不做功能授权；调用方必须在自己的用例里完成权限与范围检查，租户隔离由 RLS 承担。价格、课时与结算模式 是报名成立时冻结的快照；{@code cancelledHours}
- * 是已退课时累计。
+ * 是已退课时累计；{@code courses} 是课程明细，供结算模式 2–5 计价与封顶。
  */
 public interface EnrollmentAccess {
+  record CourseRef(
+      UUID curriculumId,
+      BigDecimal hours,
+      BigDecimal amount,
+      BigDecimal cancelledHours,
+      BigDecimal cancelledAmount) {}
+
   record EnrollmentRef(
       UUID id,
       UUID schoolId,
@@ -19,7 +27,12 @@ public interface EnrollmentAccess {
       BigDecimal price,
       BigDecimal hours,
       int settlementMode,
-      BigDecimal cancelledHours) {}
+      BigDecimal cancelledHours,
+      List<CourseRef> courses) {
+    public EnrollmentRef {
+      courses = courses == null ? List.of() : List.copyOf(courses);
+    }
+  }
 
   EnrollmentRef require(UUID enrollmentId);
 }

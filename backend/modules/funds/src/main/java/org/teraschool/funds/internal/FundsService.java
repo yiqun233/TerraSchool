@@ -471,8 +471,11 @@ public class FundsService implements FundsQueries, FundsCommands {
           if (!schools.require(schoolId).active()) throw new AccessDeniedException("学校已停用，不能退课时");
           if (!"ACTIVE".equals(enrollment.status()))
             throw new FundsConflict("ENROLLMENT_NOT_ACTIVE");
-          if (enrollment.settlementMode() != 1)
+          var mode = enrollment.settlementMode();
+          if (mode != 1 && mode != 2 && mode != 3)
             throw new FundsConflict("SETTLEMENT_MODE_UNSUPPORTED");
+          if (mode != 1 && command.curriculumId() == null)
+            throw new FundsConflict("CURRICULUM_REQUIRED");
           periods.requireOpen(schoolId, LocalDate.now());
           lockStudent(enrollment.studentId());
           var fingerprint =
@@ -485,13 +488,12 @@ public class FundsService implements FundsQueries, FundsCommands {
               enrollment.hours().subtract(consumed).subtract(enrollment.cancelledHours());
           if (hours.compareTo(refundable) > 0) throw new FundsConflict("HOURS_EXCEED_REFUNDABLE");
           // 审批闸门：按策略要求校验并消耗审批单；金额由服务端计算，不接受调用方自报。
-          var unit = enrollment.price().divide(enrollment.hours(), 6, RoundingMode.HALF_UP);
-          var refundAmount = unit.multiply(hours).setScale(2, RoundingMode.HALF_UP);
+          var refundAmount = cancellationAmount(enrollment, hours, command.curriculumId());
           approvals.consume(
               "REFUND_HOURS", schoolId, enrollmentId, refundAmount, command.approvalId());
           var cancellation =
               enrollmentCommands.cancelHours(
-                  enrollmentId, new CancelHours(command.hours(), reason));
+                  enrollmentId, new CancelHours(command.hours(), reason, command.curriculumId()));
           rebalance(
               refund,
               enrollmentId,
@@ -791,6 +793,28 @@ public class FundsService implements FundsQueries, FundsCommands {
 
   private String instant(java.time.OffsetDateTime value) {
     return value == null ? null : value.toInstant().toString();
+  }
+
+  /**
+   * 本次退课时的费用减项。
+   *
+   * <p>模式 1 用报名总单价；模式 2/3 按指定课程的单价（该课程费用 ÷ 该课程课时）。审批闸门与退课时记录使用同一金额。
+   */
+  private BigDecimal cancellationAmount(
+      org.teraschool.enrollment.api.EnrollmentAccess.EnrollmentRef enrollment,
+      BigDecimal hours,
+      UUID curriculumId) {
+    if (enrollment.settlementMode() == 1) {
+      var unit = enrollment.price().divide(enrollment.hours(), 6, RoundingMode.HALF_UP);
+      return unit.multiply(hours).setScale(2, RoundingMode.HALF_UP);
+    }
+    var line =
+        enrollment.courses().stream()
+            .filter(course -> course.curriculumId().equals(curriculumId))
+            .findFirst()
+            .orElseThrow(() -> new FundsConflict("CURRICULUM_NOT_IN_ENROLLMENT"));
+    var unit = line.amount().divide(line.hours(), 6, RoundingMode.HALF_UP);
+    return unit.multiply(hours).setScale(2, RoundingMode.HALF_UP);
   }
 
   private String hours(BigDecimal value) {
