@@ -22,6 +22,7 @@
         <module>modules/teaching</module>
         <module>modules/approval</module>
         <module>modules/finance</module>
+        <module>modules/migration</module>
         <module>applications/server</module>
     </modules>
     <properties>

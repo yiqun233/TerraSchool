@@ -17,6 +17,7 @@ import { EnrollmentWorkspace } from "../enrollment/EnrollmentWorkspace";
 import { TeachingWorkspace } from "../teaching/TeachingWorkspace";
 import { ApprovalInbox } from "../approval/ApprovalInbox";
 import { PeriodManager } from "../finance/PeriodManager";
+import { MigrationConsole } from "../migration/MigrationConsole";
 import type { components } from "../../shared/generated/api";
 const labels: Record<string, string> = {
   SCHOOL: "学校",
@@ -64,6 +65,7 @@ function Workspace({ reset }: { reset: () => void }) {
     | "TEACHING"
     | "APPROVAL"
     | "FINANCE"
+    | "MIGRATION"
   >("ORGANIZATION");
   const [page, setPage] = useState(0);
   const [error, setError] = useState("");
@@ -189,6 +191,12 @@ function Workspace({ reset }: { reset: () => void }) {
             >
               财务期间
             </Button>
+            <Button
+              type={section === "MIGRATION" ? "primary" : "text"}
+              onClick={() => setSection("MIGRATION")}
+            >
+              数据迁移
+            </Button>
           </Space>
         </nav>
       </aside>
@@ -209,6 +217,7 @@ function Workspace({ reset }: { reset: () => void }) {
                   TEACHING: "教务与考勤",
                   APPROVAL: "审批",
                   FINANCE: "财务期间",
+                  MIGRATION: "数据迁移",
                 }[section]
               }
             </Typography.Title>
@@ -272,6 +281,8 @@ function Workspace({ reset }: { reset: () => void }) {
           <ApprovalInbox onUnauthorized={() => void signOut()} />
         ) : section === "FINANCE" ? (
           <PeriodManager onUnauthorized={() => void signOut()} />
+        ) : section === "MIGRATION" ? (
+          <MigrationConsole onUnauthorized={() => void signOut()} />
         ) : section !== "ORGANIZATION" ? (
           <ResourceWorkspace key={section} kind={section} />
         ) : !me.data.canReadOrganizations ? (

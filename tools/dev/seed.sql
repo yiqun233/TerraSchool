@@ -241,3 +241,19 @@ BEGIN
  INSERT INTO dev.resource_seed_history(seed_id) VALUES('LOCAL-PERIOD-001');
 END;
 $period_seed$;
+
+-- 迁移授权：演示账号可装载暂存与确认导入。
+DO $migration_seed$
+DECLARE owner_id uuid; tenant_id_value uuid;
+BEGIN
+ PERFORM pg_advisory_xact_lock(hashtextextended('teraschool-local-migration-v1',0));
+ IF EXISTS(SELECT 1 FROM dev.resource_seed_history WHERE seed_id='LOCAL-MIGRATION-001') THEN RETURN; END IF;
+ SELECT a.id,a.tenant_id INTO STRICT owner_id,tenant_id_value FROM identity.account a JOIN identity.tenant t ON t.id=a.tenant_id
+ WHERE a.login='local-admin' AND t.name='本地演示机构' AND a.active AND t.active;
+ IF NOT EXISTS(SELECT 1 FROM identity.account_permission WHERE account_id=owner_id AND action='MIGRATION_MANAGE') THEN
+  INSERT INTO identity.account_permission(tenant_id,account_id,action,school_id,effect)
+   SELECT tenant_id_value,owner_id,'MIGRATION_MANAGE',id,'ALLOW' FROM organization.unit WHERE tenant_id=tenant_id_value AND kind='SCHOOL';
+ END IF;
+ INSERT INTO dev.resource_seed_history(seed_id) VALUES('LOCAL-MIGRATION-001');
+END;
+$migration_seed$;

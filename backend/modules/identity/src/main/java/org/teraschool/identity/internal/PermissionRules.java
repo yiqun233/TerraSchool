@@ -38,7 +38,8 @@ final class PermissionRules {
           "APPROVAL_MANAGE",
           "APPROVAL_DECIDE",
           "PERIOD_READ",
-          "PERIOD_LOCK");
+          "PERIOD_LOCK",
+          "MIGRATION_MANAGE");
   static final String EXPANDED =
       """
     SELECT p.account_id,p.tenant_id,p.action,p.school_id,p.effect FROM identity.account_permission p
@@ -129,7 +130,8 @@ final class PermissionRules {
             "FUNDS",
             "TEACHING",
             "APPROVAL",
-            "PERIOD")
+            "PERIOD",
+            "MIGRATION")
         .contains(Objects.toString(kind, ""))) throw new IllegalArgumentException("无效资源类型");
     var read = new Decision();
     var maintain = new Decision();
@@ -177,7 +179,8 @@ final class PermissionRules {
             "FUNDS",
             "TEACHING",
             "APPROVAL",
-            "PERIOD")
+            "PERIOD",
+            "MIGRATION")
         .contains(Objects.toString(kind, ""))) throw new IllegalArgumentException("无效资源类型");
     var read = new Decision();
     var maintain = new Decision();
