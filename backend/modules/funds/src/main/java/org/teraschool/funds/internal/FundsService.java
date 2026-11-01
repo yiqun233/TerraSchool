@@ -472,9 +472,9 @@ public class FundsService implements FundsQueries, FundsCommands {
           if (!"ACTIVE".equals(enrollment.status()))
             throw new FundsConflict("ENROLLMENT_NOT_ACTIVE");
           var mode = enrollment.settlementMode();
-          if (mode != 1 && mode != 2 && mode != 3)
-            throw new FundsConflict("SETTLEMENT_MODE_UNSUPPORTED");
-          if (mode != 1 && command.curriculumId() == null)
+          if (mode < 1 || mode > 5) throw new FundsConflict("SETTLEMENT_MODE_UNSUPPORTED");
+          // 课程维度模式 2/3/5 必须指定课程；模式 1/4 按报名总额退。
+          if (mode != 1 && mode != 4 && command.curriculumId() == null)
             throw new FundsConflict("CURRICULUM_REQUIRED");
           periods.requireOpen(schoolId, LocalDate.now());
           lockStudent(enrollment.studentId());
@@ -488,12 +488,17 @@ public class FundsService implements FundsQueries, FundsCommands {
               enrollment.hours().subtract(consumed).subtract(enrollment.cancelledHours());
           if (hours.compareTo(refundable) > 0) throw new FundsConflict("HOURS_EXCEED_REFUNDABLE");
           // 审批闸门：按策略要求校验并消耗审批单；金额由服务端计算，不接受调用方自报。
-          var refundAmount = cancellationAmount(enrollment, hours, command.curriculumId());
+          var refundAmount =
+              command.amount() == null || command.amount().isBlank()
+                  ? cancellationAmount(enrollment, hours, command.curriculumId())
+                  : moneyAmount(command.amount(), "退费额");
           approvals.consume(
               "REFUND_HOURS", schoolId, enrollmentId, refundAmount, command.approvalId());
           var cancellation =
               enrollmentCommands.cancelHours(
-                  enrollmentId, new CancelHours(command.hours(), reason, command.curriculumId()));
+                  enrollmentId,
+                  new CancelHours(
+                      command.hours(), reason, command.curriculumId(), command.amount()));
           rebalance(
               refund,
               enrollmentId,
@@ -804,8 +809,17 @@ public class FundsService implements FundsQueries, FundsCommands {
       org.teraschool.enrollment.api.EnrollmentAccess.EnrollmentRef enrollment,
       BigDecimal hours,
       UUID curriculumId) {
-    if (enrollment.settlementMode() == 1) {
-      var unit = enrollment.price().divide(enrollment.hours(), 6, RoundingMode.HALF_UP);
+    var mode = enrollment.settlementMode();
+    if (mode == 1 || mode == 4) {
+      var fee = enrollment.price();
+      var feeHours = enrollment.hours();
+      if (mode == 4) {
+        // 模式 4：按"退课后实际费用"的单价退，先扣掉已退费用与已退课时。
+        fee = fee.subtract(refundedAmount(enrollment.id()));
+        feeHours = feeHours.subtract(enrollment.cancelledHours());
+      }
+      if (feeHours.signum() <= 0) throw new FundsConflict("HOURS_EXCEED_REFUNDABLE");
+      var unit = fee.divide(feeHours, 6, RoundingMode.HALF_UP);
       return unit.multiply(hours).setScale(2, RoundingMode.HALF_UP);
     }
     var line =
@@ -813,8 +827,25 @@ public class FundsService implements FundsQueries, FundsCommands {
             .filter(course -> course.curriculumId().equals(curriculumId))
             .findFirst()
             .orElseThrow(() -> new FundsConflict("CURRICULUM_NOT_IN_ENROLLMENT"));
-    var unit = line.amount().divide(line.hours(), 6, RoundingMode.HALF_UP);
+    var fee = line.amount();
+    var feeHours = line.hours();
+    if (mode == 5) {
+      fee = fee.subtract(line.cancelledAmount());
+      feeHours = feeHours.subtract(line.cancelledHours());
+    }
+    if (feeHours.signum() <= 0) throw new FundsConflict("HOURS_EXCEED_REFUNDABLE");
+    var unit = fee.divide(feeHours, 6, RoundingMode.HALF_UP);
     return unit.multiply(hours).setScale(2, RoundingMode.HALF_UP);
+  }
+
+  private BigDecimal refundedAmount(UUID enrollmentId) {
+    var value =
+        sql.fetchOne(
+                "select coalesce(sum(amount),0) as total from enrollment.hours_cancellation"
+                    + " where enrollment_id=?",
+                enrollmentId)
+            .get("total", BigDecimal.class);
+    return value == null ? BigDecimal.ZERO : value;
   }
 
   private String hours(BigDecimal value) {

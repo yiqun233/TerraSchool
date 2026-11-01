@@ -524,13 +524,13 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
             var enrollmentId = item.get("enrollment_id", UUID.class);
             var enrollment = enrollments.require(enrollmentId);
             var mode = enrollment.settlementMode();
-            if (mode != 1 && mode != 2 && mode != 3)
-              throw new TeachingConflict("SETTLEMENT_MODE_UNSUPPORTED");
-            // 模式 2/3 只对「报名的课程」计价：课次课程不在明细内则本期不产生消耗。
+            if (mode < 1 || mode > 5) throw new TeachingConflict("SETTLEMENT_MODE_UNSUPPORTED");
+            // 课程维度模式：2/3/5 只对「报名的课程」计价，课次课程不在明细内则本期不产生消耗。
+            var perCourse = mode == 2 || mode == 3 || mode == 5;
             UUID consumedCurriculum = null;
             BigDecimal fee = enrollment.price();
             BigDecimal feeHours = enrollment.hours();
-            if (mode != 1) {
+            if (perCourse) {
               var line =
                   enrollment.courses().stream()
                       .filter(course -> course.curriculumId().equals(lessonCurriculum))
@@ -541,20 +541,32 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
               fee = line.amount();
               feeHours = line.hours();
             }
+            // 模式 4/5 是"退课后实际费用"变体：先扣掉已退费用与已退课时，再算单价。
+            if (mode == 4) {
+              fee = fee.subtract(cancelledAmount(enrollmentId));
+              feeHours = feeHours.subtract(enrollment.cancelledHours());
+            } else if (mode == 5 && consumedCurriculum != null) {
+              for (var course : enrollment.courses())
+                if (course.curriculumId().equals(consumedCurriculum)) {
+                  fee = fee.subtract(course.cancelledAmount());
+                  feeHours = feeHours.subtract(course.cancelledHours());
+                  break;
+                }
+            }
             if (feeHours.signum() <= 0) continue;
             var totalConsumed = consumedHours(enrollmentId);
             var courseConsumed = consumedHours(enrollmentId, consumedCurriculum);
-            // 封顶：模式 3 按课程课时，模式 1/2 按报名总课时。
-            var consumed = mode == 3 ? courseConsumed : totalConsumed;
-            var ceiling = mode == 3 ? feeHours : enrollment.hours();
-            if (consumed.compareTo(ceiling) >= 0) continue;
+            // 封顶：模式 3/5 按（净）课程课时，模式 1/2/4 按（净）总课时。
+            var byCourse = mode == 3 || mode == 5;
+            var consumed = byCourse ? courseConsumed : totalConsumed;
+            if (consumed.compareTo(feeHours) >= 0) continue;
             var unit = fee.divide(feeHours, 6, RoundingMode.HALF_UP);
             var amount = unit.multiply(lessonHours).setScale(2, RoundingMode.HALF_UP);
-            // 尾差修正：最后一段课时消耗时补齐到该范围内应收总额。
-            if (mode == 3 && courseConsumed.add(lessonHours).compareTo(feeHours) == 0)
+            // 尾差修正：最后一段课时消耗时补齐到该范围内的应收总额。
+            if (byCourse && courseConsumed.add(lessonHours).compareTo(feeHours) == 0)
               amount = fee.subtract(consumedAmount(enrollmentId, consumedCurriculum));
-            else if (mode == 1 && totalConsumed.add(lessonHours).compareTo(enrollment.hours()) == 0)
-              amount = enrollment.price().subtract(consumedAmount(enrollmentId, null));
+            else if (!byCourse && totalConsumed.add(lessonHours).compareTo(feeHours) == 0)
+              amount = fee.subtract(consumedAmount(enrollmentId, null));
             if (amount.signum() < 0) amount = BigDecimal.ZERO;
             sql.execute(
                 "insert into teaching.consumption(tenant_id,enrollment_id,lesson_id,hours,amount,"
@@ -755,6 +767,17 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
 
   private String time(LocalTime value) {
     return value == null ? null : value.toString();
+  }
+
+  /** 报名级已退费用（模式 4 用它把应收降到"退课后实际费用"）。 */
+  private BigDecimal cancelledAmount(UUID enrollmentId) {
+    var value =
+        sql.fetchOne(
+                "select coalesce(sum(amount),0) as total from enrollment.hours_cancellation"
+                    + " where enrollment_id=?",
+                enrollmentId)
+            .get("total", BigDecimal.class);
+    return value == null ? BigDecimal.ZERO : value;
   }
 
   private BigDecimal consumedHours(UUID enrollmentId) {

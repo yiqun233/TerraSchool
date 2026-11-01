@@ -63,6 +63,20 @@ it("账户展示总额、冻结与可用，冻结占满时不能准备退款", a
       enrollmentId="enrollment-1"
       studentId="student-1"
       schoolId="school-1"
+      courses={[
+        {
+          curriculumId: "c-1",
+          curriculumName: "语文",
+          hours: "1.00",
+          amount: "200.00",
+        },
+        {
+          curriculumId: "c-2",
+          curriculumName: "数学",
+          hours: "3.00",
+          amount: "1800.00",
+        },
+      ]}
       onUnauthorized={vi.fn()}
       onChanged={vi.fn()}
     />,

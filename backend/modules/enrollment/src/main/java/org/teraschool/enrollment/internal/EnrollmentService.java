@@ -323,7 +323,8 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
           if (hours.compareTo(purchased.subtract(cancelled)) > 0)
             throw new EnrollmentConflict("HOURS_EXCEED_REMAINING");
           BigDecimal amount;
-          if (mode != null && mode != 1) {
+          // 课程维度模式 2/3/5 按课程退；模式 1/4 按报名总额退。
+          if (mode != null && mode != 1 && mode != 4) {
             // 模式 2/3/4/5：按课程退，金额取该课程单价；同时累计课程级已退，供模式 4/5 重算单价。
             var curriculumId = command.curriculumId();
             if (curriculumId == null) throw new EnrollmentConflict("CURRICULUM_REQUIRED");
@@ -340,8 +341,17 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
             if (hours.compareTo(lineHours.subtract(lineCancelled)) > 0)
               throw new EnrollmentConflict("HOURS_EXCEED_COURSE_REMAINING");
             var lineAmount = line.get("amount", BigDecimal.class);
+            if (mode == 5) {
+              // 模式 5：按"退课后实际费用"的课程单价退。
+              lineAmount = lineAmount.subtract(line.get("cancelled_amount", BigDecimal.class));
+              lineHours = lineHours.subtract(lineCancelled);
+              if (lineHours.signum() <= 0)
+                throw new EnrollmentConflict("HOURS_EXCEED_COURSE_REMAINING");
+            }
             var unit = lineAmount.divide(lineHours, 6, RoundingMode.HALF_UP);
             amount = unit.multiply(hours).setScale(2, RoundingMode.HALF_UP);
+            // 自定义退费额优先，课程级累计用最终金额，否则模式 4/5 的净额会算错。
+            amount = customAmount(command, price, id, amount);
             sql.execute(
                 "update enrollment.enrollment_course set cancelled_hours=cancelled_hours+?,"
                     + "cancelled_amount=cancelled_amount+?,version=version+1 where id=?",
@@ -351,6 +361,7 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
           } else {
             var unit = price.divide(purchased, 6, RoundingMode.HALF_UP);
             amount = unit.multiply(hours).setScale(2, RoundingMode.HALF_UP);
+            amount = customAmount(command, price, id, amount);
           }
           var cancellationId = UUID.randomUUID();
           sql.execute(
@@ -458,6 +469,30 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
           line.curriculumId(),
           new BigDecimal(line.hours()),
           new BigDecimal(line.amount()));
+  }
+
+  /**
+   * 自定义退费额（旧系统的 FeeQuit）：提供时以它为准，但不得超过剩余应收。
+   *
+   * <p>模式 4/5 的"退课后实际费用"正依赖这个金额，因此课程级累计必须用它。
+   */
+  private BigDecimal customAmount(
+      CancelHours command, BigDecimal price, UUID enrollmentId, BigDecimal computed) {
+    if (command.amount() == null || command.amount().isBlank()) return computed;
+    var amount = positiveHours(command.amount());
+    var remaining = price.subtract(cancelledAmount(enrollmentId));
+    if (amount.compareTo(remaining) > 0) throw new EnrollmentConflict("AMOUNT_EXCEED_REMAINING");
+    return amount;
+  }
+
+  private BigDecimal cancelledAmount(UUID enrollmentId) {
+    var value =
+        sql.fetchOne(
+                "select coalesce(sum(amount),0) as total from enrollment.hours_cancellation"
+                    + " where enrollment_id=?",
+                enrollmentId)
+            .get("total", BigDecimal.class);
+    return value == null ? BigDecimal.ZERO : value;
   }
 
   private BigDecimal positiveHours(String value) {

@@ -157,8 +157,8 @@ class SettlementModeGuardTest {
   @Test
   void publishingUnimplementedModeIsRejected() throws Exception {
     var product = product();
-    // 模式 4/5 需要退课后重算，尚未实现：必须拒绝发布。
-    var modeFour = draft(product.id(), 4);
+    // 模式 0（自动）需要班型判断，尚未实现：必须拒绝发布。
+    var modeFour = draft(product.id(), 0);
     assertThatThrownBy(
             () ->
                 asActor(
@@ -168,8 +168,8 @@ class SettlementModeGuardTest {
                             modeFour.id(), new ExpectedVersion(modeFour.version()))))
         .isInstanceOf(ProductConflict.class)
         .hasMessage("SETTLEMENT_MODE_UNSUPPORTED");
-    // 模式 2/3 已实现，可以发布。
-    var modeTwo = draft(product.id(), 2);
+    // 模式 2/3/4/5 已实现，可以发布。
+    var modeTwo = draft(product.id(), 4);
     assertThat(
             asActor(
                     OPS,
@@ -191,7 +191,7 @@ class SettlementModeGuardTest {
 
   @Test
   void closingLessonOnLegacyModeIsRejected() throws Exception {
-    var enrollmentId = legacyEnrollment(4);
+    var enrollmentId = legacyEnrollment(0);
     var classView =
         asActor(
             OPS,
@@ -240,7 +240,7 @@ class SettlementModeGuardTest {
 
   @Test
   void refundingLegacyModeIsRejected() throws Exception {
-    var enrollmentId = legacyEnrollment(5);
+    var enrollmentId = legacyEnrollment(0);
     var student = UUID.randomUUID();
     update(
         "insert into archive.student(id,tenant_id,student_no,name,sex,school_id) values (?,?,?,?,?,?)",

@@ -565,11 +565,28 @@ export function EnrollmentDetail({
               locale={{ emptyText: "该学员还没有收款记录" }}
             />
           </Card>
+          <Card size="small" title="课程明细" style={{ marginTop: 16 }}>
+            <Table
+              rowKey="curriculumId"
+              size="small"
+              pagination={false}
+              dataSource={detail.data.courses ?? []}
+              columns={[
+                { title: "课程", dataIndex: "curriculumName" },
+                { title: "课时", dataIndex: "hours" },
+                { title: "费用", dataIndex: "amount" },
+                { title: "已退课时", dataIndex: "cancelledHours" },
+                { title: "已退费用", dataIndex: "cancelledAmount" },
+              ]}
+              locale={{ emptyText: "按价格版本所属课程自动生成一条明细" }}
+            />
+          </Card>
           <Card size="small" title="退款与现金退出" style={{ marginTop: 16 }}>
             <RefundPanel
               enrollmentId={id}
               studentId={studentId!}
               schoolId={detail.data.schoolId!}
+              courses={detail.data.courses ?? []}
               onUnauthorized={onUnauthorized}
               onChanged={() => {
                 void outstanding.refetch();

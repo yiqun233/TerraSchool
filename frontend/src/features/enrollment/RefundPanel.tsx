@@ -35,12 +35,14 @@ export function RefundPanel({
   enrollmentId,
   studentId,
   schoolId,
+  courses,
   onUnauthorized,
   onChanged,
 }: {
   enrollmentId: string;
   studentId: string;
   schoolId: string;
+  courses: components["schemas"]["CourseView"][];
   onUnauthorized: () => void;
   onChanged: () => void;
 }) {
@@ -180,6 +182,7 @@ export function RefundPanel({
         <CancelHoursModal
           enrollmentId={enrollmentId}
           schoolId={schoolId}
+          courses={courses}
           onCancel={() => setCancelling(false)}
           onDone={() => {
             setCancelling(false);
@@ -225,12 +228,14 @@ export function RefundPanel({
 export function CancelHoursModal({
   enrollmentId,
   schoolId,
+  courses = [],
   onCancel,
   onDone,
   onError,
 }: {
   enrollmentId: string;
   schoolId?: string;
+  courses?: components["schemas"]["CourseView"][];
   onCancel: () => void;
   onDone: () => void;
   onError: (message: string) => void;
@@ -314,6 +319,31 @@ export function CancelHoursModal({
         </Form.Item>
         <Form.Item label="原因" name="reason">
           <Input maxLength={200} disabled={busy} />
+        </Form.Item>
+        {courses.length > 1 ? (
+          <Form.Item label="退哪门课程（模式 2/3/5 必填）" name="curriculumId">
+            <Select
+              allowClear
+              options={courses.map((course) => ({
+                value: course.curriculumId,
+                label: `${course.curriculumName}（剩 ${course.hours} 课时 / ${course.amount} 元）`,
+              }))}
+              disabled={busy}
+              placeholder="按总额退课时可留空"
+            />
+          </Form.Item>
+        ) : null}
+        <Form.Item
+          label="自定义退费额（元，可空）"
+          name="amount"
+          extra="模式 4/5 用它重算退课后单价"
+        >
+          <InputNumber
+            min={0.01}
+            precision={2}
+            style={{ width: "100%" }}
+            disabled={busy}
+          />
         </Form.Item>
         <Form.Item label="已批准的审批单（策略要求时必填）">
           <Select
