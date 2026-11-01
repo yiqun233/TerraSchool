@@ -62,7 +62,9 @@ public interface FailureAudit {
     APPROVAL_REQUEST,
     APPROVAL_DECIDE,
     PERIOD_LOCK,
-    PERIOD_UNLOCK
+    PERIOD_UNLOCK,
+    SCHEDULE_PREVIEW,
+    SCHEDULE_CONFIRM
   }
 
   enum Result {

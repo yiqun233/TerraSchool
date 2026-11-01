@@ -9,12 +9,17 @@ import org.teraschool.teaching.api.*;
 @RestController
 @RequestMapping(produces = "application/json")
 class TeachingHttp {
+  private final org.teraschool.teaching.internal.SchedulingService scheduling;
   private final TeachingQueries queries;
   private final TeachingCommands commands;
 
-  TeachingHttp(TeachingQueries queries, TeachingCommands commands) {
+  TeachingHttp(
+      TeachingQueries queries,
+      TeachingCommands commands,
+      org.teraschool.teaching.internal.SchedulingService scheduling) {
     this.queries = queries;
     this.commands = commands;
+    this.scheduling = scheduling;
   }
 
   @GetMapping("/api/teaching/capabilities")
@@ -80,5 +85,17 @@ class TeachingHttp {
   @PostMapping(value = "/api/teaching/lessons/{id}/close", consumes = "application/json")
   LessonView close(@PathVariable UUID id, @RequestBody LessonVersion command) {
     return commands.closeLesson(id, command);
+  }
+
+  /** 自动排课预览：只计算可用与冲突，不写库。 */
+  @PostMapping(value = "/api/teaching/classes/{id}/schedule/preview", consumes = "application/json")
+  SchedulePreview schedulePreview(@PathVariable UUID id, @RequestBody ScheduleRule rule) {
+    return scheduling.preview(id, rule);
+  }
+
+  /** 确认排课：只把可用时段写成草稿课次，发布仍走既有状态机。 */
+  @PostMapping(value = "/api/teaching/classes/{id}/schedule/confirm", consumes = "application/json")
+  ScheduleResult scheduleConfirm(@PathVariable UUID id, @RequestBody ScheduleRule rule) {
+    return scheduling.confirm(id, rule);
   }
 }

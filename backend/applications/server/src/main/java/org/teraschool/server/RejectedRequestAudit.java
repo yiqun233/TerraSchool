@@ -27,7 +27,24 @@ class RejectedRequestAudit {
     String path = request.getServletPath();
     UUID resource = null;
     FailureAudit.Action action;
-    if (path.equals("/api/approval/policies")) action = FailureAudit.Action.APPROVAL_POLICY;
+    if (path.matches("/api/teaching/classes/[^/]+/schedule/(preview|confirm)")) {
+      action =
+          path.endsWith("/confirm")
+              ? FailureAudit.Action.SCHEDULE_CONFIRM
+              : FailureAudit.Action.SCHEDULE_PREVIEW;
+      try {
+        resource =
+            UUID.fromString(
+                path.substring(
+                    "/api/teaching/classes/".length(),
+                    path.length()
+                        - (path.endsWith("/confirm")
+                            ? "/schedule/confirm".length()
+                            : "/schedule/preview".length())));
+      } catch (IllegalArgumentException invalid) {
+        /* 不保存原始路径文本。 */
+      }
+    } else if (path.equals("/api/approval/policies")) action = FailureAudit.Action.APPROVAL_POLICY;
     else if (path.equals("/api/approval/requests")) action = FailureAudit.Action.APPROVAL_REQUEST;
     else if (path.matches("/api/approval/requests/[^/]+/decide")) {
       action = FailureAudit.Action.APPROVAL_DECIDE;
