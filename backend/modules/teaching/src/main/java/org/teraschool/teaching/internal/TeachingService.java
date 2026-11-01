@@ -160,7 +160,7 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
           requireClass(scope, classId);
           return sql.fetch(
                   "select l.id,l.class_id,l.lesson_date,l.starts_at,l.ends_at,l.teacher_name,"
-                      + "l.room_name,l.topic,l.hours,l.status,l.version,"
+                      + "l.room_name,l.topic,l.hours,l.status,l.version,l.teacher_id,l.room_id,"
                       + "(select count(*) from teaching.attendance a where a.lesson_id=l.id)"
                       + " as attendance_count from teaching.lesson l where l.class_id=?"
                       + " order by l.lesson_date, l.starts_at, l.id limit 200",
@@ -391,20 +391,25 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
             throw new TeachingConflict("CLASS_NOT_ACTIVE");
           var previous = previousRequest(scope, command.requestId(), "LESSON", fingerprint);
           if (previous != null) return lessonView(requireLesson(verified, previous));
+          var teacher = resource(command.teacherId(), "TEACHER", schoolId, command.teacherName());
+          var room = resource(command.roomId(), "ROOM", schoolId, command.roomName());
           var id = UUID.randomUUID();
           sql.execute(
               "insert into teaching.lesson(id,tenant_id,class_id,lesson_date,starts_at,ends_at,"
-                  + "teacher_name,room_name,topic,hours) values (?,?,?,?,?,?,?,?,?,?)",
+                  + "teacher_name,room_name,topic,hours,teacher_id,room_id)"
+                  + " values (?,?,?,?,?,?,?,?,?,?,?,?)",
               id,
               scope.tenantId(),
               command.classId(),
               date,
               startsAt,
               endsAt,
-              text(command.teacherName(), 50, "教师"),
-              text(command.roomName(), 50, "教室"),
+              teacher.name(),
+              room.name(),
               text(command.topic(), 100, "课题"),
-              lessonHours);
+              lessonHours,
+              teacher.id(),
+              room.id());
           rememberRequest(scope, command.requestId(), "LESSON", id, fingerprint);
           audit(scope, "LESSON_CREATED", id, schoolId, "");
           return lessonView(requireLesson(verified, id));
@@ -669,7 +674,7 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
     var row =
         sql.fetchOne(
             "select l.id,l.class_id,l.lesson_date,l.starts_at,l.ends_at,l.teacher_name,l.room_name,"
-                + "l.topic,l.hours,l.status,l.version,"
+                + "l.topic,l.hours,l.status,l.version,l.teacher_id,l.room_id,"
                 + "(select count(*) from teaching.attendance a where a.lesson_id=l.id) as attendance_count"
                 + " from teaching.lesson l where l.id=?",
             id);
@@ -683,7 +688,7 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
     var row =
         sql.fetchOne(
             "select l.id,l.class_id,l.lesson_date,l.starts_at,l.ends_at,l.teacher_name,l.room_name,"
-                + "l.topic,l.hours,l.status,l.version,"
+                + "l.topic,l.hours,l.status,l.version,l.teacher_id,l.room_id,"
                 + "(select count(*) from teaching.attendance a where a.lesson_id=l.id) as attendance_count"
                 + " from teaching.lesson l where l.id=? for update",
             id);
@@ -710,6 +715,20 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
         row.get("version", Long.class));
   }
 
+  /** 课次的教师/教室：给了实体就校验并取名称快照，否则退回自由文本。 */
+  private ResourceRef resource(UUID id, String kind, UUID schoolId, String fallbackName) {
+    if (id == null) return new ResourceRef(null, text(fallbackName, 50, "教师"));
+    var table = "TEACHER".equals(kind) ? "organization.teacher" : "organization.room";
+    var row =
+        sql.fetchOne(
+            "select id,name,active from " + table + " where id=? and school_id=?", id, schoolId);
+    if (row == null) throw new TeachingConflict("RESOURCE_NOT_IN_SCHOOL");
+    if (!row.get("active", Boolean.class)) throw new TeachingConflict("RESOURCE_INACTIVE");
+    return new ResourceRef(row.get("id", UUID.class), row.get("name", String.class));
+  }
+
+  private record ResourceRef(UUID id, String name) {}
+
   private LessonView lessonView(Record row) {
     return new LessonView(
         row.get("id", UUID.class),
@@ -723,7 +742,9 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
         hours(row.get("hours", BigDecimal.class)),
         row.get("status", String.class),
         row.get("version", Long.class),
-        row.get("attendance_count", Integer.class));
+        row.get("attendance_count", Integer.class),
+        row.get("teacher_id", UUID.class),
+        row.get("room_id", UUID.class));
   }
 
   private String text(String value, int max, String label) {

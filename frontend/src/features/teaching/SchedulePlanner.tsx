@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   Alert,
   Button,
@@ -58,6 +59,35 @@ export function SchedulePlanner({
   const [message, setMessage] = useState("");
   const [form] = Form.useForm();
 
+  const teachers = useQuery({
+    queryKey: ["schedule-teachers"],
+    queryFn: async ({ signal }) => {
+      const { data, response } = await api.GET(
+        "/api/organization/resources/{kind}/options",
+        {
+          params: { path: { kind: "TEACHER" }, query: { type: "SCHOOL" } },
+          signal,
+        },
+      );
+      if (!response.ok || !data) return [];
+      return data;
+    },
+  });
+  const rooms = useQuery({
+    queryKey: ["schedule-rooms"],
+    queryFn: async ({ signal }) => {
+      const { data, response } = await api.GET(
+        "/api/organization/resources/{kind}/options",
+        {
+          params: { path: { kind: "ROOM" }, query: { type: "SCHOOL" } },
+          signal,
+        },
+      );
+      if (!response.ok || !data) return [];
+      return data;
+    },
+  });
+
   async function buildRule(): Promise<
     components["schemas"]["ScheduleRule"] | null
   > {
@@ -74,8 +104,10 @@ export function SchedulePlanner({
       startsAt: values.startsAt,
       endsAt: values.endsAt,
       hours: String(values.hours),
-      teacherName: values.teacherName || undefined,
-      roomName: values.roomName || undefined,
+      teacherId: values.teacherId || undefined,
+      roomId: values.roomId || undefined,
+      teacherName: undefined,
+      roomName: undefined,
       topic: values.topic || undefined,
     };
   }
@@ -236,11 +268,33 @@ export function SchedulePlanner({
               disabled={busy}
             />
           </Form.Item>
-          <Form.Item label="教师" name="teacherName">
-            <Input maxLength={50} style={{ width: 120 }} disabled={busy} />
+          <Form.Item label="教师" name="teacherId">
+            <Select
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              style={{ width: 150 }}
+              options={(teachers.data ?? []).map((item) => ({
+                value: item.id,
+                label: item.name,
+              }))}
+              placeholder="可不选"
+              disabled={busy}
+            />
           </Form.Item>
-          <Form.Item label="教室" name="roomName">
-            <Input maxLength={50} style={{ width: 120 }} disabled={busy} />
+          <Form.Item label="教室" name="roomId">
+            <Select
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              style={{ width: 150 }}
+              options={(rooms.data ?? []).map((item) => ({
+                value: item.id,
+                label: item.name,
+              }))}
+              placeholder="可不选"
+              disabled={busy}
+            />
           </Form.Item>
         </Space>
         <Form.Item label="主题" name="topic">

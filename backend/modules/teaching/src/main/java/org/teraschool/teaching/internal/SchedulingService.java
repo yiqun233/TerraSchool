@@ -71,16 +71,19 @@ public class SchedulingService {
               }
               sql.execute(
                   "insert into teaching.lesson(tenant_id,class_id,lesson_date,starts_at,ends_at,"
-                      + "teacher_name,room_name,topic,hours) values (?,?,?,?,?,?,?,?,?)",
+                      + "teacher_name,room_name,topic,hours,teacher_id,room_id)"
+                      + " values (?,?,?,?,?,?,?,?,?,?,?)",
                   verified.tenantId(),
                   classId,
                   LocalDate.parse(slot.lessonDate()),
                   Time.valueOf(LocalTime.parse(slot.startsAt())),
                   Time.valueOf(LocalTime.parse(slot.endsAt())),
-                  plan.teacher(),
-                  plan.room(),
+                  plan.teacherName(),
+                  plan.roomName(),
                   plan.topic(),
-                  plan.hours());
+                  plan.hours(),
+                  plan.teacherId(),
+                  plan.roomId());
               created++;
             }
             audit(verified, classId, plan.schoolId(), created, skipped.size());
@@ -93,8 +96,10 @@ public class SchedulingService {
 
   private record Plan(
       UUID schoolId,
-      String teacher,
-      String room,
+      UUID teacherId,
+      String teacherName,
+      UUID roomId,
+      String roomName,
       String topic,
       BigDecimal hours,
       List<ScheduleSlot> slots) {}
@@ -125,8 +130,6 @@ public class SchedulingService {
     var endsAt = time(rule.endsAt(), "结束时间");
     if (!endsAt.isAfter(startsAt)) throw new ScheduleConflict("SCHEDULE_TIME_INVALID");
     var hours = hours(rule.hours());
-    var teacher = trim(rule.teacherName(), 50);
-    var room = trim(rule.roomName(), 50);
     var topic = trim(rule.topic(), 100);
 
     var row = sql.fetchOne("select id,school_id,status from teaching.class where id=?", classId);
@@ -136,6 +139,8 @@ public class SchedulingService {
     if (!"ACTIVE".equals(row.get("status", String.class)))
       throw new ScheduleConflict("CLASS_NOT_ACTIVE");
     if (!schools.require(schoolId).active()) throw new AccessDeniedException("学校已停用，不能排课");
+    var teacher = resource(rule.teacherId(), "TEACHER", schoolId, rule.teacherName());
+    var room = resource(rule.roomId(), "ROOM", schoolId, rule.roomName());
 
     var dates = new ArrayList<LocalDate>();
     for (var date = start; !date.isAfter(end); date = date.plusDays(1))
@@ -145,12 +150,22 @@ public class SchedulingService {
 
     var slots = new ArrayList<ScheduleSlot>();
     for (var date : dates) {
-      var reason = conflict(classId, date, startsAt, endsAt, teacher, room);
+      var reason =
+          conflict(
+              classId,
+              date,
+              startsAt,
+              endsAt,
+              teacher.id(),
+              teacher.name(),
+              room.id(),
+              room.name());
       slots.add(
           new ScheduleSlot(
               date.toString(), startsAt.toString(), endsAt.toString(), reason == null, reason));
     }
-    return new Plan(schoolId, teacher, room, topic, hours, slots);
+    return new Plan(
+        schoolId, teacher.id(), teacher.name(), room.id(), room.name(), topic, hours, slots);
   }
 
   /** 冲突判定：同班/同教师/同教室任一重叠即跳过；完全相同的时段视为重复。 */
@@ -159,8 +174,10 @@ public class SchedulingService {
       LocalDate date,
       LocalTime startsAt,
       LocalTime endsAt,
-      String teacher,
-      String room) {
+      UUID teacherId,
+      String teacherName,
+      UUID roomId,
+      String roomName) {
     var starts = Time.valueOf(startsAt);
     var ends = Time.valueOf(endsAt);
     var duplicate =
@@ -181,26 +198,29 @@ public class SchedulingService {
             ends,
             starts);
     if (classClash != null) return "LESSON_OVERLAP";
-    if (teacher != null) {
+    // 有实体时按实体比较，同时兼容历史自由文本（同名也算冲突）。
+    if (teacherId != null || teacherName != null) {
       var teacherClash =
           sql.fetchOne(
-              "select id from teaching.lesson where teacher_name=? and lesson_date=? and"
-                  + " starts_at<? and ends_at>? limit 1",
-              teacher,
+              "select id from teaching.lesson where lesson_date=? and starts_at<? and ends_at>?"
+                  + " and (teacher_id=? or teacher_name=?) limit 1",
               date,
               ends,
-              starts);
+              starts,
+              teacherId,
+              teacherName);
       if (teacherClash != null) return "TEACHER_CLASH";
     }
-    if (room != null) {
+    if (roomId != null || roomName != null) {
       var roomClash =
           sql.fetchOne(
-              "select id from teaching.lesson where room_name=? and lesson_date=? and starts_at<?"
-                  + " and ends_at>? limit 1",
-              room,
+              "select id from teaching.lesson where lesson_date=? and starts_at<? and ends_at>?"
+                  + " and (room_id=? or room_name=?) limit 1",
               date,
               ends,
-              starts);
+              starts,
+              roomId,
+              roomName);
       if (roomClash != null) return "ROOM_CLASH";
     }
     return null;
@@ -218,6 +238,20 @@ public class SchedulingService {
       throw new ScheduleConflict("SCHEDULE_HOURS_INVALID");
     return hours.setScale(2, RoundingMode.UNNECESSARY);
   }
+
+  /** 教师/教室：给了实体就校验并取名称快照，否则退回自由文本。 */
+  private ResourceRef resource(UUID id, String kind, UUID schoolId, String fallbackName) {
+    if (id == null) return new ResourceRef(null, trim(fallbackName, 50));
+    var table = "TEACHER".equals(kind) ? "organization.teacher" : "organization.room";
+    var row =
+        sql.fetchOne(
+            "select id,name,active from " + table + " where id=? and school_id=?", id, schoolId);
+    if (row == null) throw new ScheduleConflict("RESOURCE_NOT_IN_SCHOOL");
+    if (!row.get("active", Boolean.class)) throw new ScheduleConflict("RESOURCE_INACTIVE");
+    return new ResourceRef(row.get("id", UUID.class), row.get("name", String.class));
+  }
+
+  private record ResourceRef(UUID id, String name) {}
 
   private LocalDate date(String value, String label) {
     if (value == null || !DAY.matcher(value.strip()).matches())
