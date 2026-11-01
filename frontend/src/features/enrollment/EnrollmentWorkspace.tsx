@@ -243,6 +243,30 @@ export function ApproveButton({
   );
 }
 
+/** 课程明细合计校验：课时 0.001 与金额 0.005 的容差对应两位小数的显示精度。 */
+export function validateCourseLines(
+  lines: { curriculumId?: string; hours?: string; amount?: string }[],
+  selected: { hours?: string; price?: string } | undefined,
+): string | null {
+  if (!selected || lines.length === 0) return null;
+  const hours = lines.reduce(
+    (total, line) => total + Number(line.hours ?? 0),
+    0,
+  );
+  const amount = lines.reduce(
+    (total, line) => total + Number(line.amount ?? 0),
+    0,
+  );
+  if (Math.abs(hours - Number(selected.hours ?? 0)) > 0.001)
+    return `课程课时合计 ${hours} 与价格版本 ${selected.hours} 不一致`;
+  if (Math.abs(amount - Number(selected.price ?? 0)) > 0.005)
+    return `课程费用合计 ${amount} 与价格版本 ${selected.price} 不一致`;
+  if (lines.some((line) => !line.curriculumId)) return "每行明细都要选择课程";
+  const ids = lines.map((line) => line.curriculumId);
+  if (new Set(ids).size !== ids.length) return "同一课程不能重复出现";
+  return null;
+}
+
 /** 登记报名：学员来自档案检索，商品来自可售快照。 */
 export function EnrollmentCreator({
   schoolId,
@@ -258,6 +282,10 @@ export function EnrollmentCreator({
   const [keyword, setKeyword] = useState("");
   const [students, setStudents] = useState<StudentSummary[]>([]);
   const [studentId, setStudentId] = useState<string>();
+  const [priceVersionId, setPriceVersionId] = useState<string>();
+  const [lines, setLines] = useState<
+    { curriculumId?: string; hours?: string; amount?: string }[]
+  >([]);
   const [form] = Form.useForm();
 
   const sellable = useQuery({
@@ -272,6 +300,43 @@ export function EnrollmentCreator({
       return data;
     },
   });
+
+  const catalog = useQuery({
+    queryKey: ["enrollment-curricula", schoolId],
+    queryFn: async ({ signal }) => {
+      const { data, response } = await api.GET("/api/product/catalog", {
+        params: { query: { schoolId } },
+        signal,
+      });
+      if (!response.ok || !data) return [];
+      return data.curricula ?? [];
+    },
+  });
+
+  const selected = (sellable.data ?? []).find(
+    (item) => item.priceVersionId === priceVersionId,
+  );
+
+  /** 选中价格版本后给出默认的一条课程明细（课程/课时/费用取快照），再按需要拆分。 */
+  function pickPrice(value: string) {
+    setPriceVersionId(value);
+    const item = (sellable.data ?? []).find(
+      (entry) => entry.priceVersionId === value,
+    );
+    setLines(
+      item
+        ? [
+            {
+              curriculumId: item.curriculumId,
+              hours: item.hours,
+              amount: item.price,
+            },
+          ]
+        : [],
+    );
+  }
+
+  /** 客户端先校验合计，避免把不符合快照的明细发到服务端。 */
 
   async function search(value: string) {
     setKeyword(value);
@@ -295,10 +360,16 @@ export function EnrollmentCreator({
       setError("请先选择学员");
       return;
     }
+    const problem = validateCourseLines(lines, selected);
+    if (problem) {
+      setError(problem);
+      return;
+    }
     setBusy(true);
     setError("");
     try {
       const token = await csrf();
+      const split = lines.length > 1;
       const { response } = await api.POST("/api/enrollment/enrollments", {
         headers: { [token.headerName!]: token.token! },
         body: {
@@ -306,6 +377,13 @@ export function EnrollmentCreator({
           studentId,
           priceVersionId: values.priceVersionId,
           enrolledOn: values.enrolledOn,
+          courses: split
+            ? lines.map((line) => ({
+                curriculumId: line.curriculumId!,
+                hours: Number(line.hours).toFixed(2),
+                amount: Number(line.amount).toFixed(2),
+              }))
+            : undefined,
         },
       });
       if (!response.ok) {
@@ -360,6 +438,8 @@ export function EnrollmentCreator({
           rules={[{ required: true, message: "请选择产品价格" }]}
         >
           <Select
+            value={priceVersionId}
+            onChange={pickPrice}
             options={(sellable.data ?? []).map((item) => ({
               value: item.priceVersionId,
               label: `${item.productName}：${item.price} 元 / ${item.hours} 课时`,
@@ -368,6 +448,92 @@ export function EnrollmentCreator({
             notFoundContent="该学校当前没有可售价格"
           />
         </Form.Item>
+        {selected ? (
+          <Card size="small" title="课程明细" style={{ marginBottom: 12 }}>
+            {lines.map((line, index) => (
+              <Space
+                key={index}
+                align="baseline"
+                wrap
+                style={{ marginBottom: 8 }}
+              >
+                <Select
+                  aria-label={`第 ${index + 1} 行课程`}
+                  style={{ width: 180 }}
+                  value={line.curriculumId}
+                  options={(catalog.data ?? []).map((item) => ({
+                    value: item.id,
+                    label: item.name,
+                  }))}
+                  onChange={(value) =>
+                    setLines((current) =>
+                      current.map((entry, position) =>
+                        position === index
+                          ? { ...entry, curriculumId: value }
+                          : entry,
+                      ),
+                    )
+                  }
+                  disabled={busy}
+                />
+                <InputNumber
+                  aria-label={`第 ${index + 1} 行课时`}
+                  min={0.01}
+                  precision={2}
+                  value={line.hours ? Number(line.hours) : undefined}
+                  onChange={(value) =>
+                    setLines((current) =>
+                      current.map((entry, position) =>
+                        position === index
+                          ? { ...entry, hours: String(value ?? "") }
+                          : entry,
+                      ),
+                    )
+                  }
+                  disabled={busy}
+                />
+                <InputNumber
+                  aria-label={`第 ${index + 1} 行费用`}
+                  min={0}
+                  precision={2}
+                  value={line.amount ? Number(line.amount) : undefined}
+                  onChange={(value) =>
+                    setLines((current) =>
+                      current.map((entry, position) =>
+                        position === index
+                          ? { ...entry, amount: String(value ?? "") }
+                          : entry,
+                      ),
+                    )
+                  }
+                  disabled={busy}
+                />
+                <Button
+                  size="small"
+                  danger
+                  disabled={busy || lines.length === 1}
+                  onClick={() =>
+                    setLines((current) => current.filter((_, i) => i !== index))
+                  }
+                >
+                  删除
+                </Button>
+              </Space>
+            ))}
+            <Space>
+              <Button
+                size="small"
+                disabled={busy}
+                onClick={() => setLines((current) => [...current, {}])}
+              >
+                添加课程
+              </Button>
+              <Typography.Text type="secondary">
+                合计需等于 {selected.hours} 课时 / {selected.price} 元
+              </Typography.Text>
+            </Space>
+          </Card>
+        ) : null}
         <Form.Item
           label="报名日期"
           name="enrolledOn"

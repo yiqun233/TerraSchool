@@ -163,7 +163,7 @@ public class ProductCatalogService implements ProductQueries, ProductCommands {
         scope.tenantId(),
         () ->
             sql.fetch(
-                    "select p.id as product_id,p.name as product_name,c.id as curriculum_id,"
+                    "select p.id as product_id,p.name as product_name,p.school_id,c.id as curriculum_id,"
                         + "c.name as curriculum_name,pv.id as price_version_id,pv.price,pv.hours,"
                         + "pv.service_fee,pv.settlement_mode,pv.study_days,pv.effective_from,"
                         + "pv.effective_to from product.price_version pv"
@@ -181,6 +181,7 @@ public class ProductCatalogService implements ProductQueries, ProductCommands {
                         new SellablePrice(
                             row.get("product_id", UUID.class),
                             row.get("product_name", String.class),
+                            row.get("school_id", UUID.class),
                             row.get("curriculum_id", UUID.class),
                             row.get("curriculum_name", String.class),
                             row.get("price_version_id", UUID.class),

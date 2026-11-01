@@ -7,6 +7,7 @@ import {
   ApproveButton,
   EnrollmentWorkspace,
   VoidReceiptButton,
+  validateCourseLines,
 } from "./EnrollmentWorkspace";
 
 const { get, post, csrf } = vi.hoisted(() => ({
@@ -161,3 +162,35 @@ it(
     expect(voidCall![1].body).toEqual({ expectedVersion: 3 });
   },
 );
+
+it("课程明细合计校验：课时与费用必须等于价格版本", () => {
+  const price = { hours: "4.00", price: "2000.00" };
+  // 语文 1 课时 200 + 数学 3 课时 1800 = 4 课时 2000 元。
+  expect(
+    validateCourseLines(
+      [
+        { curriculumId: "c-1", hours: "1", amount: "200" },
+        { curriculumId: "c-2", hours: "3", amount: "1800" },
+      ],
+      price,
+    ),
+  ).toBeNull();
+  expect(
+    validateCourseLines(
+      [{ curriculumId: "c-1", hours: "1", amount: "200" }],
+      price,
+    ),
+  ).toContain("课时合计");
+  expect(
+    validateCourseLines(
+      [
+        { curriculumId: "c-1", hours: "1", amount: "200" },
+        { curriculumId: "c-1", hours: "3", amount: "1800" },
+      ],
+      price,
+    ),
+  ).toBe("同一课程不能重复出现");
+  expect(validateCourseLines([{ hours: "4", amount: "2000" }], price)).toBe(
+    "每行明细都要选择课程",
+  );
+});

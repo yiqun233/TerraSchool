@@ -6,6 +6,7 @@ import java.util.UUID;
 public record SellablePrice(
     UUID productId,
     String productName,
+    UUID schoolId,
     UUID curriculumId,
     String curriculumName,
     UUID priceVersionId,
