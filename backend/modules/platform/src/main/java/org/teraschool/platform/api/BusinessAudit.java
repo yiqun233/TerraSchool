@@ -25,13 +25,14 @@ public class BusinessAudit {
     if (!TransactionSynchronizationManager.isActualTransactionActive())
       throw new IllegalStateException("审计必须在业务事务内");
     sql.execute(
-        "insert into audit.business_event(tenant_id,actor_id,action,resource_id,school_id,old_name,new_name) values (?,?,?,?,?,?,?)",
+        "insert into audit.business_event(tenant_id,actor_id,action,resource_id,school_id,old_name,new_name,trace_id) values (?,?,?,?,?,?,?,?)",
         tenant,
         actor,
         action,
         resource,
         school,
         before,
-        after);
+        after,
+        RequestTrace.id());
   }
 }

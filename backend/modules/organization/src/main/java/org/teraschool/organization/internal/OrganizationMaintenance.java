@@ -15,24 +15,26 @@ import org.teraschool.platform.api.TenantTransactions;
 
 /** 完整用例拥有事务和审计边界，HTTP 或第二入口均不能跳过授权。 */
 @Service
-public class OrganizationMaintenance implements OrganizationCommands {
+public class OrganizationMaintenance {
   private final CurrentActor actors;
   private final TenantTransactions tx;
   private final DSLContext sql;
   private final org.teraschool.platform.api.BusinessAudit audit;
+  private final SchoolWriteGuard schoolGuard;
 
   public OrganizationMaintenance(
       CurrentActor actors,
       TenantTransactions tx,
       DSLContext sql,
-      org.teraschool.platform.api.BusinessAudit audit) {
+      org.teraschool.platform.api.BusinessAudit audit,
+      SchoolWriteGuard schoolGuard) {
     this.actors = actors;
     this.tx = tx;
     this.sql = sql;
     this.audit = audit;
+    this.schoolGuard = schoolGuard;
   }
 
-  @Override
   public OrganizationUnit createChild(CreateOrganizationUnit command) {
     var actor = actors.requireOrganizationMaintainer();
     if (command == null
@@ -45,6 +47,9 @@ public class OrganizationMaintenance implements OrganizationCommands {
     return tx.execute(
         actor.tenantId(),
         () -> {
+          schoolGuard.lock(actor.tenantId());
+          requireSchool(actors.requireOrganizationMaintainerInTransaction(), command.schoolId());
+          schoolGuard.requireActive(command.schoolId());
           // 数据库事务锁串行化同主体同请求；跨进程重试也只产生一次事实。
           var key = actor.tenantId() + ":" + actor.accountId() + ":" + command.requestId();
           sql.fetch("select pg_advisory_xact_lock(hashtextextended(?,0))", key);
@@ -91,7 +96,6 @@ public class OrganizationMaintenance implements OrganizationCommands {
         });
   }
 
-  @Override
   public OrganizationUnit rename(UUID id, RenameOrganizationUnit command) {
     var actor = actors.requireOrganizationMaintainer();
     if (id == null
@@ -102,12 +106,16 @@ public class OrganizationMaintenance implements OrganizationCommands {
     return tx.execute(
         actor.tenantId(),
         () -> {
+          schoolGuard.lock(actor.tenantId());
+          var verified = actors.requireOrganizationMaintainerInTransaction();
           var current =
               sql.selectFrom(UNIT)
                   .where(UNIT.ID.eq(id).and(UNIT.SCHOOL_ID.in(actor.schools())))
                   .forUpdate()
                   .fetchOne();
           if (current == null) throw new AccessDeniedException("组织不可访问");
+          requireSchool(verified, current.getSchoolId());
+          schoolGuard.requireActive(current.getSchoolId());
           if (!Set.of("CAMPUS", "DEPARTMENT").contains(current.getKind()))
             throw new OrganizationConflict("UNIT_KIND_NOT_EDITABLE");
           if (!current.getVersion().equals(command.expectedVersion()))

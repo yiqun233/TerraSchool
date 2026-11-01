@@ -1,4 +1,6 @@
 spring:
+  flyway:
+    enabled: false
   application:
     name: teraschool
   session:
@@ -9,6 +11,10 @@ spring:
   jackson:
     deserialization:
       fail-on-unknown-properties: true
+  servlet:
+    multipart:
+      max-file-size: 5MB
+      max-request-size: 6MB
 server:
   address: 127.0.0.1
   port: 8081

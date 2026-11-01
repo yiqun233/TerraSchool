@@ -9,7 +9,7 @@ env=dict(os.environ)
 java=env.get('JAVA_HOME','')
 if not (Path(java)/'bin/java.exe' if os.name=='nt' else Path(java)/'bin/java').exists():raise SystemExit('请先配置 JDK 25 的 JAVA_HOME')
 env['MAVEN_USER_HOME']=str(ROOT/'.local/maven')
-for name in ['ADMIN','APP','IDENTITY','SESSION']:env['TS_'+name+'_PASSWORD']=secrets.token_urlsafe(30)
+for name in ['ADMIN','APP','IDENTITY','SESSION','AUDIT']:env['TS_'+name+'_PASSWORD']=secrets.token_urlsafe(30)
 private=[v for k,v in env.items() if k.startswith('TS_') and k.endswith('_PASSWORD')]
 def safe(s):
  for v in private:s=s.replace(v,'[REDACTED]')
@@ -47,7 +47,7 @@ try:
   except RuntimeError:time.sleep(1)
  else:raise RuntimeError('PG 未就绪')
  # SQL 通过 stdin 传递，不在命令行或日志中输出随机口令。
- roles='\n'.join("CREATE ROLE ts_"+kind+" LOGIN PASSWORD '"+env['TS_'+kind.upper()+'_PASSWORD']+"' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;" for kind in ['app','identity','session'])
+ roles='\n'.join("CREATE ROLE ts_"+kind+" LOGIN PASSWORD '"+env['TS_'+kind.upper()+'_PASSWORD']+"' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;" for kind in ['app','identity','session','audit'])
  p=subprocess.run([docker,'exec','-i',container,'psql','-v','ON_ERROR_STOP=1','-U','postgres','-d','teraschool_test'],input=roles,text=True,capture_output=True,env=env)
  if p.returncode:raise RuntimeError(safe(p.stderr))
  step('clean',mvn+['clean']);step('migration',mvn+['-N','flyway:migrate']);step('codegen',mvn+['-N','jooq-codegen:generate']);step('format',mvn+['spotless:apply'] if '--format' in sys.argv else mvn+['spotless:check']);step('verify',mvn+['verify'])

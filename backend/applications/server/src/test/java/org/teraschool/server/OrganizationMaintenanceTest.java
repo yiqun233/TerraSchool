@@ -50,18 +50,18 @@ class OrganizationMaintenanceTest {
           TENANT,
           id);
     update(
-        "insert into identity.account(id,tenant_id,login,password_hash,organization_read) values (?,?,'maintainer-fixture',?,true)",
+        "insert into identity.account(id,tenant_id,login,password_hash) values (?,?,'maintainer-fixture',?)",
         USER,
         TENANT,
         PasswordEncoderFactories.createDelegatingPasswordEncoder().encode(PASSWORD));
     for (var id : List.of(SCHOOL, OTHER))
       update(
-          "insert into identity.school_scope(account_id,tenant_id,school_id) values (?,?,?)",
+          "insert into identity.account_permission(account_id,tenant_id,school_id,action,effect) values (?,?,?,'ORGANIZATION_READ','ALLOW')",
           USER,
           TENANT,
           id);
     update(
-        "insert into identity.organization_maintenance_permission(tenant_id,account_id,school_id,effect) values (?,?,?,'ALLOW')",
+        "insert into identity.account_permission(tenant_id,account_id,school_id,action,effect) values (?,?,?,'ORGANIZATION_MAINTAIN','ALLOW')",
         TENANT,
         USER,
         SCHOOL);
@@ -121,14 +121,14 @@ class OrganizationMaintenanceTest {
         .hasMessage("IDEMPOTENCY_MISMATCH");
     assertThat(count("audit.business_event", result.id())).isEqualTo(2);
     update(
-        "delete from identity.organization_maintenance_permission where account_id=? and effect='ALLOW'",
+        "delete from identity.account_permission where action='ORGANIZATION_MAINTAIN' and account_id=? and effect='ALLOW'",
         USER);
     try {
       assertThatThrownBy(() -> asActor(() -> commands.createChild(input)))
           .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
     } finally {
       update(
-          "insert into identity.organization_maintenance_permission(tenant_id,account_id,school_id,effect) values (?,?,?,'ALLOW')",
+          "insert into identity.account_permission(tenant_id,account_id,school_id,action,effect) values (?,?,?,'ORGANIZATION_MAINTAIN','ALLOW')",
           TENANT,
           USER,
           SCHOOL);
@@ -149,7 +149,7 @@ class OrganizationMaintenanceTest {
                                 UUID.randomUUID(), OTHER, "DEPARTMENT", "部门"))))
         .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
     update(
-        "insert into identity.organization_maintenance_permission(tenant_id,account_id,school_id,effect) values (?,?,?,'DENY')",
+        "insert into identity.account_permission(tenant_id,account_id,school_id,action,effect) values (?,?,?,'ORGANIZATION_MAINTAIN','DENY')",
         TENANT,
         USER,
         SCHOOL);
@@ -159,7 +159,7 @@ class OrganizationMaintenanceTest {
           .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
     } finally {
       update(
-          "delete from identity.organization_maintenance_permission where account_id=? and effect='DENY'",
+          "delete from identity.account_permission where action='ORGANIZATION_MAINTAIN' and account_id=? and effect='DENY'",
           USER);
     }
   }

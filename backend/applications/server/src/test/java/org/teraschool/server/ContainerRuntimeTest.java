@@ -7,6 +7,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
+import org.testcontainers.containers.wait.strategy.WaitAllStrategy;
 import org.testcontainers.utility.DockerImageName;
 
 /** 真正由 Java Testcontainers 创建第二个临时 PostgreSQL，验证 Windows 到引擎/映射端口的链路。 */
@@ -19,7 +20,12 @@ class ContainerRuntimeTest {
             .withEnv("POSTGRES_PASSWORD", password)
             .withEnv("POSTGRES_DB", "container_probe")
             .withExposedPorts(5432)
-            .waitingFor(Wait.forListeningPort())) {
+            .waitingFor(
+                new WaitAllStrategy()
+                    .withStrategy(
+                        Wait.forLogMessage(
+                            ".*database system is ready to accept connections.*\\s", 2))
+                    .withStrategy(Wait.forListeningPort()))) {
       database.start();
       String url =
           "jdbc:postgresql://"

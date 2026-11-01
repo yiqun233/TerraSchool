@@ -74,6 +74,36 @@ class LocalDevTests(unittest.TestCase):
             self.assertNotIn('postgres', config['passwords'])
             docker.assert_not_called()
 
+    def test_mail_key_is_stable_and_wrong_or_missing_key_is_rejected(self):
+        with patch.object(dev, 'sql', side_effect=['0', '0', '']):
+            first = dev.mail_credential_key({})
+        expected = dev.hmac.new(dev.base64.b64decode(first), b'teraschool:employee-email-master-key:v1', dev.hashlib.sha256).hexdigest()
+        with patch.object(dev, 'sql', return_value=expected):
+            self.assertEqual(dev.mail_credential_key({}), first)
+        with patch.object(dev, 'sql', return_value='a' * 64):
+            with self.assertRaisesRegex(RuntimeError, '不匹配'):
+                dev.mail_credential_key({})
+        (self.local / 'mail-credential-key.json').unlink()
+        with patch.object(dev, 'sql', side_effect=['0', '1']):
+            with self.assertRaisesRegex(RuntimeError, '缺失'):
+                dev.mail_credential_key({})
+
+    def test_cached_start_checks_key_before_launch(self):
+        fake_jar = self.local / 'server.jar'
+        fake_jar.write_text('fixture')
+        (self.local / 'application-local.yml').write_text('fixture')
+        modules = self.local / 'frontend/node_modules/.modules.yaml'
+        modules.parent.mkdir(parents=True)
+        modules.write_text('fixture')
+        dev.write_json(self.local / 'build.json', {'fingerprint': 'fixture'})
+        with patch.object(dev, 'ROOT', self.local), patch.object(dev, 'JAR', fake_jar), \
+                patch.object(dev, 'tools', return_value=('java', 'pnpm')), patch.object(dev, 'available'), \
+                patch.object(dev, 'fingerprint', return_value='fixture'), patch.object(dev, 'ensure_database'), \
+                patch.object(dev, 'mail_credential_key', side_effect=RuntimeError('密钥不匹配')), \
+                patch.object(dev.subprocess, 'Popen') as popen:
+            with self.assertRaisesRegex(RuntimeError, '密钥不匹配'):
+                dev.start({'passwords': {'app': '', 'identity': '', 'session': '', 'audit': ''}})
+            popen.assert_not_called()
     def test_foreign_wsl_role_is_rejected_without_writes(self):
         with patch.object(dev, 'wsl_admin', side_effect=['18.6', '{"ts_app":"foreign"}']) as admin:
             with self.assertRaisesRegex(RuntimeError, '已有角色不属于'):
@@ -84,7 +114,7 @@ class LocalDevTests(unittest.TestCase):
     def test_migration_resumes_prepare_after_state_has_switched(self):
         backups = self.local / 'backups'
         backups.mkdir()
-        current = {'workspace': dev.WORKSPACE, 'environment_id': 'ours', 'settings': dev.SETTINGS}
+        current = {'workspace': dev.WORKSPACE, 'environment_id': 'ours', 'settings': dev.SETTINGS, 'passwords': {'audit': 'fixture'}}
         source = dict(current, settings={'container_name': 'fixture-old'})
         state = self.local / 'environment.json'
         dev.write_json(state, current)
@@ -106,6 +136,18 @@ class LocalDevTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'backup failed'):
                 migration.delete_unused_vectordb({})
             self.assertFalse(any('DROP' in call.args[1] for call in admin.call_args_list))
+
+    def test_audit_credential_upgrade_preserves_existing_passwords(self):
+        state = self.local / 'environment.json'
+        dev.write_json(state, {'workspace': dev.WORKSPACE, 'environment_id': 'ours',
+            'settings': dev.SETTINGS, 'passwords': {'login': 'existing-fixture', 'app': 'existing-app'}})
+        with patch.object(dev, 'STATE', state):
+            first = dev.configuration()
+            second = dev.configuration()
+        self.assertEqual(first, second)
+        self.assertEqual(first['passwords']['login'], 'existing-fixture')
+        self.assertEqual(first['passwords']['app'], 'existing-app')
+        self.assertTrue(first['passwords']['audit'])
 
 
 if __name__ == '__main__':

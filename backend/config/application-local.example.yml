@@ -17,3 +17,16 @@ teraschool:
     session:
       username: ts_session
       password: ${TS_SESSION_PASSWORD}
+    audit:
+      username: ts_audit
+      password: ${TS_AUDIT_PASSWORD}
+  # 私有对象存储，按环境通过受限文件或环境变量注入；禁止写入仓库。
+  storage:
+    endpoint: ${TS_STORAGE_ENDPOINT}
+    region: ${TS_STORAGE_REGION}
+    bucket: ${TS_STORAGE_BUCKET}
+    access-key: ${TS_STORAGE_ACCESS_KEY}
+    secret-key: ${TS_STORAGE_SECRET_KEY}
+  # 32字节随机主密钥的Base64，必须独立保护和备份；禁止提交Git。
+  mail-credentials:
+    master-key: ${TS_MAIL_CREDENTIAL_MASTER_KEY}

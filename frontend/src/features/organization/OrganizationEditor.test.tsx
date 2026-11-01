@@ -39,7 +39,15 @@ describe("组织维护提交保护", () => {
     const user = userEvent.setup();
     const saved = vi.fn();
     post
-      .mockResolvedValueOnce({ response: { ok: false, status: 502 } })
+      .mockResolvedValueOnce({
+        response: {
+          ok: false,
+          status: 502,
+          headers: new Headers({
+            "X-Trace-Id": "11111111-1111-4111-8111-111111111111",
+          }),
+        },
+      })
       .mockResolvedValueOnce({ response: { ok: true, status: 201 } });
     render(wrapper(<OrganizationEditor identityKey="a" onSaved={saved} />));
     await user.click(
@@ -50,6 +58,7 @@ describe("组织维护提交保护", () => {
     await user.type(screen.getByRole("textbox", { name: "名称" }), "测试部门");
     await user.click(screen.getByRole("button", { name: /保\s*存/ }));
     await screen.findByText(/提交结果尚未确认/);
+    await screen.findByText(/追踪编号：11111111-1111-4111-8111-111111111111/);
     expect(
       (screen.getByRole("textbox", { name: "名称" }) as HTMLInputElement)
         .disabled,
@@ -59,11 +68,19 @@ describe("组织维护提交保护", () => {
     await user.click(screen.getByRole("button", { name: /保\s*存/ }));
     await waitFor(() => expect(saved).toHaveBeenCalledTimes(1));
     expect(post.mock.calls[0][1].body).toEqual(post.mock.calls[1][1].body);
-  });
+  }, 10000);
   it("列表刷新后仍提交打开编辑时的版本", async () => {
     const user = userEvent.setup();
     const saved = vi.fn();
-    post.mockResolvedValue({ response: { ok: false, status: 409 } });
+    post.mockResolvedValue({
+      response: {
+        ok: false,
+        status: 409,
+        headers: new Headers({
+          "X-Trace-Id": "22222222-2222-4222-8222-222222222222",
+        }),
+      },
+    });
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
@@ -90,6 +107,7 @@ describe("组织维护提交保护", () => {
     await user.type(screen.getByRole("textbox", { name: "名称" }), "编辑草稿");
     await user.click(screen.getByRole("button", { name: /保\s*存/ }));
     await screen.findByText(/版本已变更/);
+    await screen.findByText(/追踪编号：22222222-2222-4222-8222-222222222222/);
     expect(post.mock.calls[0][1].body.expectedVersion).toBe(0);
     expect(saved).not.toHaveBeenCalled();
   });

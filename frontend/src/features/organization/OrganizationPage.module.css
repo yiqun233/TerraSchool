@@ -11,6 +11,8 @@
   border-right: 1px solid #e3e6eb;
 }
 .sidebar nav {
+  display: grid;
+  gap: 4px;
   margin-top: 48px;
   padding: 12px;
   background: #edf3fa;

@@ -31,6 +31,11 @@ class OrganizationHttp {
     return actors.requireOrganizationReader();
   }
 
+  @GetMapping("/api/session/permissions")
+  CurrentPermissions permissions() {
+    return actors.permissions();
+  }
+
   public record OrganizationCapabilities(java.util.Set<java.util.UUID> editableSchoolIds) {}
 
   @GetMapping("/api/organization/capabilities")

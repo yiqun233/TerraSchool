@@ -1,0 +1,52 @@
+package org.teraschool.platform.api;
+
+import java.util.UUID;
+
+/** 独立追加失败事实；不接受请求正文、姓名、凭据或异常消息。 */
+public interface FailureAudit {
+  enum Action {
+    ORGANIZATION_CREATE,
+    ORGANIZATION_RENAME,
+    AUTHORIZATION_REPLACE,
+    ROLE_TEMPLATE_CREATE,
+    ROLE_TEMPLATE_REPLACE,
+    ACCOUNT_CREATE,
+    ACCOUNT_STATUS,
+    ACCOUNT_PASSWORD_RESET,
+    ACCOUNT_SESSIONS_REVOKE,
+    ORGANIZATION_SCHOOL_CREATE,
+    ORGANIZATION_SCHOOL_UPDATE,
+    EMPLOYEE_CREATE,
+    EMPLOYEE_UPDATE,
+    EMPLOYEE_ACCOUNT_BIND,
+    PERSONNEL_UPDATE,
+    PERSONNEL_ATTACHMENT_CREATE,
+    PERSONNEL_ATTACHMENT_READ,
+    PERSONNEL_ATTACHMENT_REMOVE,
+    EMPLOYEE_EMAIL_UPDATE,
+    PERSONNEL_EXTERNAL_UPDATE,
+    TEACHER_CREATE,
+    TEACHER_UPDATE,
+    TEACHER_QUALIFICATION_UPDATE,
+    ROOM_CREATE,
+    ROOM_UPDATE
+  }
+
+  enum Result {
+    REJECTED,
+    FAILED
+  }
+
+  record Entry(
+      UUID attemptId,
+      UUID traceId,
+      UUID tenantId,
+      UUID actorId,
+      Action action,
+      RequestTrace.Source source,
+      Result result,
+      String code,
+      UUID resourceId) {}
+
+  void append(Entry entry);
+}

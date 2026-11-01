@@ -8,6 +8,16 @@ type Unit = components["schemas"]["OrganizationUnit"];
 type Create = components["schemas"]["CreateOrganizationUnit"];
 type Draft = { schoolId: string; kind: string; name: string };
 
+function traceReference(response: Response) {
+  const trace = response.headers?.get("X-Trace-Id");
+  return trace &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      trace,
+    )
+    ? `（追踪编号：${trace}）`
+    : "";
+}
+
 /** 修改通过完整业务动作提交，不使用查询重试或乐观名称覆盖。 */
 export function OrganizationEditor({
   selected,
@@ -77,6 +87,7 @@ export function OrganizationEditor({
     inFlight.current = true;
     setBusy(true);
     setError("");
+    let reference = "";
     try {
       const token = await csrf();
       const headers = { [token.headerName!]: token.token! };
@@ -87,6 +98,7 @@ export function OrganizationEditor({
           headers,
           body: { expectedVersion: snapshot.version, name: values.name },
         });
+        reference = traceReference(result.response);
         if (!result.response.ok)
           throw new Error(
             result.response.status === 409
@@ -105,6 +117,7 @@ export function OrganizationEditor({
           headers,
           body: pending.current,
         });
+        reference = traceReference(result.response);
         if (!result.response.ok) {
           // 网关错误或服务器响应失败不能证明事务未提交，必须保留同一请求身份。
           if (result.response.status >= 500 || result.response.status === 408)
@@ -124,9 +137,9 @@ export function OrganizationEditor({
       onSaved();
     } catch (e) {
       setError(
-        pending.current
+        (pending.current
           ? "提交结果尚未确认，输入已保留，请点击保存重试同一请求。"
-          : (e as Error).message,
+          : (e as Error).message) + reference,
       );
     } finally {
       inFlight.current = false;

@@ -47,7 +47,8 @@ public class OrganizationService implements OrganizationQueries {
                               r.get("school_id", java.util.UUID.class),
                               r.get("kind", String.class),
                               r.get("name", String.class),
-                              r.get("version", Long.class)));
+                              r.get("version", Long.class),
+                              r.get("active", Boolean.class)));
           return new OrganizationPage(rows, page, size, total);
         });
   }
@@ -64,6 +65,7 @@ public class OrganizationService implements OrganizationQueries {
                     UNIT.ID
                         .in(actor.schools())
                         .and(UNIT.KIND.eq("SCHOOL"))
+                        .and(UNIT.ACTIVE.eq(true))
                         .and(UNIT.NAME.containsIgnoreCase(search.strip())))
                 .orderBy(UNIT.NAME, UNIT.ID)
                 .limit(20)

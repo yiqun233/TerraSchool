@@ -1,6 +1,5 @@
 package org.teraschool.identity.internal;
 
-import java.util.HashSet;
 import java.util.UUID;
 import javax.sql.DataSource;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -15,18 +14,21 @@ import org.teraschool.identity.api.*;
 @Service
 public class DatabaseIdentity implements UserDetailsService, CurrentActor {
   private final JdbcTemplate jdbc;
+  private final org.jooq.DSLContext sql;
 
-  public DatabaseIdentity(@Qualifier("identityDataSource") DataSource source) {
+  public DatabaseIdentity(
+      @Qualifier("identityDataSource") DataSource source, org.jooq.DSLContext sql) {
     jdbc = new JdbcTemplate(source);
+    this.sql = sql;
   }
 
   @Override
   public UserDetails loadUserByUsername(String login) {
     var users =
         jdbc.query(
-            "select a.id,a.password_hash from identity.account a join identity.tenant t on t.id=a.tenant_id where a.login=? and a.active and t.active",
+            "select a.id,a.password_hash,a.credential_version from identity.account a join identity.tenant t on t.id=a.tenant_id where a.login=? and a.active and t.active",
             (r, n) ->
-                User.withUsername(r.getString(1))
+                User.withUsername(r.getString(1) + "~" + r.getLong(3))
                     .password(r.getString(2))
                     .authorities("AUTHENTICATED")
                     .build(),
@@ -35,45 +37,121 @@ public class DatabaseIdentity implements UserDetailsService, CurrentActor {
     return users.getFirst();
   }
 
+  private record Snapshot(UUID account, UUID tenant, java.util.List<PermissionRules.Entry> rules) {}
+
+  private Snapshot snapshot() {
+    var principal = SessionPrincipal.current();
+    UUID account = principal.account();
+    // 一条语句在同一快照加载可用状态与全部规则，不拼接不同读取时点的allow/deny。
+    var rows =
+        jdbc.query(
+            PermissionRules.CURRENT,
+            (r, n) ->
+                new Object[] {
+                  r.getObject(2, UUID.class),
+                  r.getLong(6),
+                  new PermissionRules.Entry(
+                      r.getString(3), r.getObject(4, UUID.class), r.getString(5))
+                },
+            account);
+    if (rows.isEmpty()) throw new AccessDeniedException("账号或机构不可用");
+    if (!Long.valueOf(principal.version()).equals(rows.getFirst()[1]))
+      throw new AccessDeniedException("会话已撤销");
+    return new Snapshot(
+        account,
+        (UUID) rows.getFirst()[0],
+        rows.stream().map(r -> (PermissionRules.Entry) r[2]).toList());
+  }
+
+  @Override
+  public CurrentPermissions permissions() {
+    var value = snapshot();
+    return PermissionRules.calculate(value.account(), value.tenant(), true, value.rules());
+  }
+
+  @Override
+  public Actor requireResource(String kind, boolean maintenance) {
+    var value = snapshot();
+    return PermissionRules.resource(
+        value.account(), value.tenant(), value.rules(), kind, maintenance);
+  }
+
+  @Override
+  public Actor requireResourceInTransaction(String kind, boolean maintenance) {
+    var value = transactionSnapshot();
+    return PermissionRules.resource(
+        value.account(), value.tenant(), value.rules(), kind, maintenance);
+  }
+
+  private Snapshot transactionSnapshot() {
+    if (!org.springframework.transaction.support.TransactionSynchronizationManager
+        .isActualTransactionActive()) throw new IllegalStateException("资源权限复核要求业务事务");
+    var principal = SessionPrincipal.current();
+    var rows = sql.fetch(PermissionRules.CURRENT, principal.account());
+    if (rows.isEmpty()) throw new AccessDeniedException("账号或机构不可用");
+    if (!Long.valueOf(principal.version())
+        .equals(rows.getFirst().get("credential_version", Long.class)))
+      throw new AccessDeniedException("会话已撤销");
+    return new Snapshot(
+        principal.account(),
+        rows.getFirst().get("tenant_id", UUID.class),
+        rows.map(
+            r ->
+                new PermissionRules.Entry(
+                    r.get("action", String.class),
+                    r.get("school_id", UUID.class),
+                    r.get("effect", String.class))));
+  }
+
+  @Override
+  public Actor requireIdentityInTransaction() {
+    var value = transactionSnapshot();
+    return new Actor(value.account(), value.tenant(), java.util.Set.of());
+  }
+
+  @Override
+  public Actor requireOrganizationMaintainerInTransaction() {
+    var value = transactionSnapshot();
+    var p = PermissionRules.calculate(value.account(), value.tenant(), true, value.rules());
+    if (!p.canReadOrganizations()) throw new AccessDeniedException("无组织查询权限");
+    return new Actor(p.accountId(), p.tenantId(), p.maintainableSchoolIds());
+  }
+
   @Override
   public Actor requireOrganizationReader() {
-    var auth = SecurityContextHolder.getContext().getAuthentication();
-    if (auth == null || !auth.isAuthenticated()) throw new AccessDeniedException("需要登录");
-    UUID id;
-    try {
-      id = UUID.fromString(auth.getName());
-    } catch (IllegalArgumentException e) {
-      throw new AccessDeniedException("需要有效身份");
-    }
-    var tenants =
-        jdbc.query(
-            "select a.tenant_id from identity.account a join identity.tenant t on t.id=a.tenant_id where a.id=? and a.active and t.active and a.organization_read",
-            (r, n) -> r.getObject(1, UUID.class),
-            id);
-    if (tenants.size() != 1) throw new AccessDeniedException("无组织查询权限");
-    var schools =
-        jdbc.query(
-            "select school_id from identity.school_scope where account_id=?",
-            (r, n) -> r.getObject(1, UUID.class),
-            id);
-    return new Actor(id, tenants.getFirst(), new HashSet<>(schools));
+    var permission = permissions();
+    if (!permission.canReadOrganizations()) throw new AccessDeniedException("无组织查询权限");
+    return new Actor(permission.accountId(), permission.tenantId(), permission.readableSchoolIds());
   }
 
   @Override
   public Actor requireOrganizationMaintainer() {
-    var reader = requireOrganizationReader();
-    // 维护范围与读取范围取交集；同学校任一 DENY 压过 ALLOW。
-    var schools =
-        jdbc.query(
-            "select p.school_id from identity.organization_maintenance_permission p "
-                + "where p.account_id=? and p.tenant_id=? and p.effect='ALLOW' "
-                + "and not exists (select 1 from identity.organization_maintenance_permission d "
-                + "where d.account_id=p.account_id and d.school_id=p.school_id and d.effect='DENY')",
-            (r, n) -> r.getObject(1, UUID.class),
-            reader.accountId(),
-            reader.tenantId());
-    var effective = new HashSet<>(schools);
-    effective.retainAll(reader.schools());
-    return new Actor(reader.accountId(), reader.tenantId(), effective);
+    var permission = permissions();
+    if (!permission.canReadOrganizations()) throw new AccessDeniedException("无组织查询权限");
+    return new Actor(
+        permission.accountId(), permission.tenantId(), permission.maintainableSchoolIds());
+  }
+
+  @Override
+  public java.util.Optional<AuditSubject> auditSubject() {
+    var auth = SecurityContextHolder.getContext().getAuthentication();
+    if (auth == null
+        || !auth.isAuthenticated()
+        || auth instanceof org.springframework.security.authentication.AnonymousAuthenticationToken)
+      return java.util.Optional.empty();
+    UUID id;
+    try {
+      id = SessionPrincipal.current().account();
+    } catch (AccessDeniedException invalid) {
+      return java.util.Optional.empty();
+    }
+    // 停用/撤权后的尝试仍需归属审计，但不能借此绕过requireOrganizationMaintainer。
+    return jdbc
+        .query(
+            "select id,tenant_id from identity.account where id=?",
+            (r, n) -> new AuditSubject(r.getObject(1, UUID.class), r.getObject(2, UUID.class)),
+            id)
+        .stream()
+        .findFirst();
   }
 }

@@ -39,7 +39,7 @@ class EngineeringTest {
   @DynamicPropertySource
   static void config(DynamicPropertyRegistry r) {
     r.add("teraschool.database.url", () -> System.getenv("TS_JDBC_URL"));
-    for (String kind : List.of("app", "identity", "session")) {
+    for (String kind : List.of("app", "identity", "session", "audit")) {
       r.add("teraschool.database." + kind + ".username", () -> "ts_" + kind);
       r.add(
           "teraschool.database." + kind + ".password",
@@ -61,6 +61,18 @@ class EngineeringTest {
     }
   }
 
+  static String principal(UUID account) {
+    try (var c = admin();
+        var s = c.prepareStatement("select credential_version from identity.account where id=?")) {
+      s.setObject(1, account);
+      var r = s.executeQuery();
+      if (!r.next()) return account.toString();
+      return account + "~" + r.getLong(1);
+    } catch (Exception error) {
+      throw new RuntimeException(error);
+    }
+  }
+
   @BeforeAll
   static void seed() throws Exception {
     update("insert into identity.tenant(id,name) values (?,?), (?,?)", A, "合成机构甲", B, "合成机构乙");
@@ -77,13 +89,13 @@ class EngineeringTest {
         A,
         S);
     update(
-        "insert into identity.account(id,tenant_id,login,password_hash,organization_read) values (?,?,?, ?,true)",
+        "insert into identity.account(id,tenant_id,login,password_hash) values (?,?,?, ?)",
         USER,
         A,
         "fixture-a",
         PasswordEncoderFactories.createDelegatingPasswordEncoder().encode(PASSWORD));
     update(
-        "insert into identity.school_scope(account_id,tenant_id,school_id) values (?,?,?)",
+        "insert into identity.account_permission(account_id,tenant_id,school_id,action,effect) values (?,?,?,'ORGANIZATION_READ','ALLOW')",
         USER,
         A,
         S);
@@ -93,7 +105,7 @@ class EngineeringTest {
   void actor() {
     SecurityContextHolder.getContext()
         .setAuthentication(
-            new UsernamePasswordAuthenticationToken(USER.toString(), null, List.of()));
+            new UsernamePasswordAuthenticationToken(principal(USER), null, List.of()));
   }
 
   @AfterEach
@@ -114,12 +126,16 @@ class EngineeringTest {
 
   @Test
   void revokedPermissionAppliesToNextServiceCall() throws Exception {
-    update("update identity.account set organization_read=false where id=?", USER);
+    update(
+        "insert into identity.account_permission(account_id,tenant_id,action,effect) select id,tenant_id,'ORGANIZATION_READ','DENY' from identity.account where id=?",
+        USER);
     try {
       assertThatThrownBy(() -> queries.list(0, 20))
           .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
     } finally {
-      update("update identity.account set organization_read=true where id=?", USER);
+      update(
+          "delete from identity.account_permission where action='ORGANIZATION_READ' and school_id is null and effect='DENY' and account_id=?",
+          USER);
     }
   }
 
@@ -234,7 +250,7 @@ class EngineeringTest {
     Files.writeString(Path.of("target/openapi.json"), schema.body());
     update("update identity.account set active=false where id=?", USER);
     try {
-      assertThat(get(c, "/api/organization/units").statusCode()).isEqualTo(403);
+      assertThat(get(c, "/api/organization/units").statusCode()).isEqualTo(401);
     } finally {
       update("update identity.account set active=true where id=?", USER);
     }

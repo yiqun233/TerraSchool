@@ -8,6 +8,9 @@ import { Alert, Button, Form, Input, Table, Typography, Space } from "antd";
 import { api, login, logout } from "../../shared/http";
 import styles from "./OrganizationPage.module.css";
 import { OrganizationEditor } from "./OrganizationEditor";
+import { MyPermissions } from "./MyPermissions";
+import { ResourceWorkspace } from "./ResourceWorkspace";
+import { SchoolEditor } from "./SchoolEditor";
 import type { components } from "../../shared/generated/api";
 const labels: Record<string, string> = {
   SCHOOL: "学校",
@@ -44,6 +47,9 @@ export default function OrganizationPage() {
   );
 }
 function Workspace({ reset }: { reset: () => void }) {
+  const [section, setSection] = useState<
+    "ORGANIZATION" | "EMPLOYEE" | "TEACHER" | "ROOM"
+  >("ORGANIZATION");
   const [page, setPage] = useState(0);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -51,7 +57,9 @@ function Workspace({ reset }: { reset: () => void }) {
   const me = useQuery({
     queryKey: ["session"],
     queryFn: async ({ signal }) => {
-      const { data, response } = await api.GET("/api/session/me", { signal });
+      const { data, response } = await api.GET("/api/session/permissions", {
+        signal,
+      });
       if (response.status === 401) return null;
       if (!response.ok) throw new Error("账号当前无组织查询权限");
       return data;
@@ -59,7 +67,7 @@ function Workspace({ reset }: { reset: () => void }) {
   });
   const units = useQuery({
     queryKey: ["organization", me.data?.accountId, me.data?.tenantId, page],
-    enabled: !!me.data,
+    enabled: !!me.data?.canReadOrganizations && section === "ORGANIZATION",
     queryFn: async ({ signal }) => {
       const { data, response } = await api.GET("/api/organization/units", {
         params: { query: { page, size: 20 } },
@@ -104,18 +112,57 @@ function Workspace({ reset }: { reset: () => void }) {
       <aside className={styles.sidebar}>
         <Typography.Title level={3}>TeraSchool</Typography.Title>
         <span>学校运营工作台</span>
-        <nav aria-label="功能导航">组织与资源</nav>
+        <nav aria-label="功能导航">
+          <Space orientation="vertical">
+            <Button
+              type={section === "ORGANIZATION" ? "primary" : "text"}
+              onClick={() => setSection("ORGANIZATION")}
+            >
+              组织目录
+            </Button>
+            <Button
+              type={section === "EMPLOYEE" ? "primary" : "text"}
+              onClick={() => setSection("EMPLOYEE")}
+            >
+              员工管理
+            </Button>
+            <Button
+              type={section === "TEACHER" ? "primary" : "text"}
+              onClick={() => setSection("TEACHER")}
+            >
+              教师管理
+            </Button>
+            <Button
+              type={section === "ROOM" ? "primary" : "text"}
+              onClick={() => setSection("ROOM")}
+            >
+              教室管理
+            </Button>
+          </Space>
+        </nav>
       </aside>
       <main className={styles.main}>
         <header className={styles.header}>
           <div>
             <Typography.Text type="secondary">组织与资源</Typography.Text>
-            <Typography.Title level={2}>组织目录</Typography.Title>
+            <Typography.Title level={2}>
+              {
+                {
+                  ORGANIZATION: "组织目录",
+                  EMPLOYEE: "员工",
+                  TEACHER: "教师",
+                  ROOM: "教室",
+                }[section]
+              }
+            </Typography.Title>
           </div>
           {me.data ? (
-            <Button onClick={() => void signOut()} loading={busy}>
-              退出登录
-            </Button>
+            <Space>
+              <MyPermissions />
+              <Button onClick={() => void signOut()} loading={busy}>
+                退出登录
+              </Button>
+            </Space>
           ) : null}
         </header>
         {error ? <Alert title={error} type="error" showIcon /> : null}
@@ -125,7 +172,12 @@ function Workspace({ reset }: { reset: () => void }) {
           <Alert
             title={me.error.message}
             type="error"
-            action={<Button onClick={() => void signOut()}>退出登录</Button>}
+            action={
+              <Space>
+                <MyPermissions />
+                <Button onClick={() => void signOut()}>退出登录</Button>
+              </Space>
+            }
           />
         ) : !me.data ? (
           <section className={styles.login}>
@@ -151,6 +203,10 @@ function Workspace({ reset }: { reset: () => void }) {
               </Button>
             </Form>
           </section>
+        ) : section !== "ORGANIZATION" ? (
+          <ResourceWorkspace key={section} kind={section} />
+        ) : !me.data.canReadOrganizations ? (
+          <Alert title="账号当前无组织查询权限" type="error" />
         ) : (
           <>
             <Space className={styles.toolbar}>
@@ -192,18 +248,37 @@ function Workspace({ reset }: { reset: () => void }) {
                 },
                 { title: "学校标识", dataIndex: "schoolId" },
                 {
+                  title: "学校状态",
+                  render: (
+                    _: unknown,
+                    unit: components["schemas"]["OrganizationUnit"],
+                  ) =>
+                    unit.kind === "SCHOOL"
+                      ? unit.active
+                        ? "启用"
+                        : "停用"
+                      : "—",
+                },
+                {
                   title: "操作",
                   key: "actions",
                   render: (
                     _: unknown,
                     unit: components["schemas"]["OrganizationUnit"],
-                  ) => (
-                    <OrganizationEditor
-                      selected={unit}
-                      identityKey={me.data!.accountId!}
-                      onSaved={() => void units.refetch()}
-                    />
-                  ),
+                  ) =>
+                    unit.kind === "SCHOOL" &&
+                    me.data!.canManageAuthorizations ? (
+                      <SchoolEditor
+                        school={unit}
+                        onSaved={() => void units.refetch()}
+                      />
+                    ) : (
+                      <OrganizationEditor
+                        selected={unit}
+                        identityKey={me.data!.accountId!}
+                        onSaved={() => void units.refetch()}
+                      />
+                    ),
                 },
               ]}
               locale={{ emptyText: "当前范围内暂无组织" }}

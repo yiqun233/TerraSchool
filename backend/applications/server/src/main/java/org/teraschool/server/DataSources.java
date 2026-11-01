@@ -40,6 +40,14 @@ class DataSources {
   }
 
   @Bean
+  HikariDataSource auditDataSource() {
+    var source = pool("audit");
+    source.setMaximumPoolSize(2);
+    source.setConnectionTimeout(2000);
+    return source;
+  }
+
+  @Bean
   @SpringSessionDataSource
   HikariDataSource sessionDataSource() {
     return pool("session");

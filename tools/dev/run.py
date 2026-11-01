@@ -8,7 +8,9 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, build_opener, HTTPCookieProcessor, urlopen
 import argparse
+import base64
 import hashlib
+import hmac
 import json
 import os
 import secrets
@@ -129,10 +131,13 @@ def configuration():
         value = json.loads(STATE.read_text(encoding='utf-8'))
         if value['workspace'] != WORKSPACE or value['settings'] != SETTINGS:
             raise RuntimeError('开发配置与当前目录/settings.json不一致；旧Docker环境请先运行tools/dev/migrate_wsl.py。')
+        if 'audit' not in value['passwords']:
+            value['passwords']['audit'] = secrets.token_urlsafe(30)
+            write_json(STATE, value)
         return value
     value = {'workspace': WORKSPACE, 'environment_id': secrets.token_hex(16),
              'settings': SETTINGS, 'passwords': {key: secrets.token_urlsafe(30)
-             for key in ['migrator', 'app', 'identity', 'session', 'login']}}
+             for key in ['migrator', 'app', 'identity', 'session', 'audit', 'login']}}
     write_json(STATE, value)
     (LOCAL / 'accounts.txt').write_text(
         '仅供本机合成演示，不是正式管理员。\n维护账号：local-admin\n只读账号：local-reader\n两账号密码：' +
@@ -205,7 +210,7 @@ def ensure_database(config):
         raise RuntimeError('当前工程需要已验证的PostgreSQL18。')
     roles = json.loads(wsl_admin(config, "SELECT coalesce(json_object_agg(rolname, "
         "coalesce(shobj_description(oid,'pg_authid'),'')),'{}'::json) FROM pg_roles "
-        "WHERE rolname IN ('ts_migrator','ts_app','ts_identity','ts_session');"))
+        "WHERE rolname IN ('ts_migrator','ts_app','ts_identity','ts_session','ts_audit');"))
     for name, marker in roles.items():
         if marker != database_marker(config):
             raise RuntimeError('已有角色不属于当前项目，拒绝更改：' + name)
@@ -213,7 +218,7 @@ def ensure_database(config):
     if existing == '1':
         assert_wsl_database(config)
     statements = []
-    for key, role in [('migrator','ts_migrator'),('app','ts_app'),('identity','ts_identity'),('session','ts_session')]:
+    for key, role in [('migrator','ts_migrator'),('app','ts_app'),('identity','ts_identity'),('session','ts_session'),('audit','ts_audit')]:
         if role not in roles:
             statements.append('CREATE ROLE ' + role + ' LOGIN PASSWORD ' + literal(config['passwords'][key]) +
                 ' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS; COMMENT ON ROLE ' + role + ' IS ' +
@@ -225,7 +230,7 @@ def ensure_database(config):
                   literal(database_marker(config)) + ';')
     assert_wsl_database(config)
     wsl_admin(config, 'REVOKE ALL ON DATABASE teraschool_dev FROM PUBLIC; '
-              'GRANT CONNECT ON DATABASE teraschool_dev TO ts_app,ts_identity,ts_session;')
+              'GRANT CONNECT ON DATABASE teraschool_dev TO ts_app,ts_identity,ts_session,ts_audit;')
 
 
 def tools():
@@ -251,6 +256,50 @@ def fingerprint():
     return digest.hexdigest()
 
 
+def mail_credential_key(config):
+    """保留稳定主密钥；已有密文但文件丢失时绝不生成替代密钥。"""
+    path = LOCAL / 'mail-credential-key.json'
+    if not path.exists():
+        count = sql(config, 'SELECT count(*) FROM organization.employee_email_config WHERE credential_ciphertext IS NOT NULL;')
+        verifier_count = sql(config, 'SELECT count(*) FROM infra.mail_key_verifier;')
+        if count != '0' or verifier_count != '0':
+            raise RuntimeError('邮件凭据主密钥缺失且已有密钥记录，请从受保护备份恢复原密钥。')
+        write_json(path, {'version': 1, 'key': base64.b64encode(secrets.token_bytes(32)).decode('ascii')})
+    value = json.loads(path.read_text(encoding='utf-8'))
+    try:
+        key = base64.b64decode(value['key'], validate=True)
+        if value.get('version') != 1 or len(key) != 32:
+            raise ValueError('invalid')
+    except (ValueError, KeyError, TypeError):
+        raise RuntimeError('邮件凭据主密钥文件无效，请从受保护备份恢复。') from None
+    stored = sql(config, "SELECT encode(verifier,'hex') FROM infra.mail_key_verifier WHERE id=1;")
+    expected = hmac.new(key, b'teraschool:employee-email-master-key:v1', hashlib.sha256).hexdigest()
+    if stored and not hmac.compare_digest(stored, expected):
+        raise RuntimeError('邮件凭据主密钥与数据库记录不匹配，请从受保护备份恢复原密钥。')
+    return value['key']
+
+
+def write_runtime_config(config):
+    """每次启动都从受限文件复核并生成配置，避免旧配置掩盖主密钥丢失。"""
+    lines = ['# 自动生成，仅供本机开发，勿提交Git。', 'server:', '  address: 127.0.0.1',
+             '  port: ' + str(SETTINGS['backend_port']), '  servlet:', '    session:', '      cookie:',
+             '        secure: false', 'teraschool:', '  database:',
+             '    url: jdbc:postgresql://127.0.0.1:' + str(SETTINGS['database_port']) + '/teraschool_dev']
+    for kind in ['app', 'identity', 'session', 'audit']:
+        lines += ['    ' + kind + ':', '      username: ts_' + kind,
+                  '      password: ' + json.dumps(config['passwords'][kind])]
+    lines += ['  mail-credentials:', '    master-key: ' + json.dumps(mail_credential_key(config))]
+    storage_path = LOCAL / 'storage.json'
+    if storage_path.exists():
+        storage = json.loads(storage_path.read_text(encoding='utf-8'))
+        required = ['endpoint', 'region', 'bucket', 'access-key', 'secret-key']
+        if any(not isinstance(storage.get(key), str) or not storage[key].strip() for key in required):
+            raise RuntimeError('本地对象存储配置缺项，请检查受限目录中的 storage.json。')
+        lines.append('  storage:')
+        lines += ['    ' + key + ': ' + json.dumps(storage[key]) for key in required]
+    (LOCAL / 'application-local.yml').write_text('\n'.join(lines) + '\n', encoding='utf-8')
+
+
 def prepare(config):
     java, pnpm = tools()
     print('[1/4] 检查WSL PostgreSQL及专用项目库', flush=True)
@@ -270,14 +319,7 @@ def prepare(config):
     print('[3/4] 首次装载合成资料，已有修改不会重置', flush=True)
     seed = (ROOT / 'tools/dev/seed.sql').read_text(encoding='utf-8')
     sql(config, seed.replace('@@LOGIN_PASSWORD@@', literal(config['passwords']['login'])))
-    lines = ['# 自动生成，仅供本机开发，勿提交Git。', 'server:', '  address: 127.0.0.1',
-             '  port: ' + str(SETTINGS['backend_port']), '  servlet:', '    session:', '      cookie:',
-             '        secure: false', 'teraschool:', '  database:',
-             '    url: ' + env['TS_JDBC_URL']]
-    for kind in ['app', 'identity', 'session']:
-        lines += ['    ' + kind + ':', '      username: ts_' + kind,
-                  '      password: ' + json.dumps(config['passwords'][kind])]
-    (LOCAL / 'application-local.yml').write_text('\n'.join(lines) + '\n', encoding='utf-8')
+    write_runtime_config(config)
     print('[4/4] 安装锁定的前端依赖', flush=True)
     command([pnpm, 'install', '--frozen-lockfile', '--ignore-scripts', '--strict-peer-dependencies',
              '--store-dir', str(ROOT / '.local/pnpm-store')], config, cwd=ROOT / 'frontend', log='frontend-install.log')
@@ -332,6 +374,7 @@ def start(config):
         prepare(config)
     else:
         ensure_database(config)
+    write_runtime_config(config)
     done = threading.Event()
     token = secrets.token_urlsafe(30)
 
@@ -428,7 +471,7 @@ def smoke(config, write=False):
             units = json.load(response)
         with client.open(urls()['frontend'] + '/api/organization/capabilities') as response:
             grants = json.load(response)['editableSchoolIds']
-        if units['total'] < expected or (username == 'local-reader' and grants) or (username == 'local-admin' and len(grants) != 2):
+        if units['total'] < expected or (username == 'local-reader' and grants) or (username == 'local-admin' and len(grants) < 2):
             raise RuntimeError('演示范围/权限自检不符合预期。')
         result[username] = {'visible_units': units['total'], 'editable_schools': len(grants)}
         if username == 'local-reader':

@@ -78,6 +78,7 @@ def migrate():
                 raise RuntimeError('迁移恢复记录不匹配，拒绝重做或覆盖。')
             if dev.control('status'):
                 raise RuntimeError('请先停止前后端，再继续未完成的迁移准备。')
+            old = dev.configuration()
             finish(old, source, progress['tables'])
         print('本机配置已切换到WSL，不重复导入。')
         return old
@@ -98,9 +99,17 @@ def migrate():
             time.sleep(0.5)
     else:
         raise RuntimeError('旧开发库未就绪。')
-    target = dict(old, settings=dev.SETTINGS)
+    target = dict(old, settings=dev.SETTINGS, passwords=dict(old['passwords']))
     backups = dev.LOCAL / 'backups'
     backups.mkdir(exist_ok=True)
+    pending = backups / 'wsl-target-environment.json'
+    if pending.exists():
+        target = json.loads(pending.read_text(encoding='utf-8'))
+        if target['workspace'] != dev.WORKSPACE or target['environment_id'] != old['environment_id'] or target['settings'] != dev.SETTINGS:
+            raise RuntimeError('目标凭据恢复记录不匹配。')
+    else:
+        target['passwords'].setdefault('audit', dev.secrets.token_urlsafe(30))
+        dev.write_json(pending, target)
     dev.write_json(backups / 'docker-environment.json', old)
     print('[1/4] 备份原Docker演示库', flush=True)
     before = snapshot(lambda query: source_sql(old, query))
@@ -123,7 +132,7 @@ def migrate():
     after = snapshot(lambda query: dev.sql(target, query))
     if after != before:
         raise RuntimeError('迁移后数据核对不一致，未切换连接；原库和备份保留。')
-    target['passwords'] = {k:v for k,v in old['passwords'].items() if k != 'postgres'}
+    target['passwords'] = {k:v for k,v in target['passwords'].items() if k != 'postgres'}
     dev.write_json(backups / 'wsl-migration-progress.json', {'environment_id': target['environment_id'],
         'data_verified': True, 'tables': after})
     dev.write_json(dev.STATE, target)
