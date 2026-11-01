@@ -1,0 +1,13 @@
+package org.teraschool.enrollment.api;
+
+import java.util.List;
+import java.util.UUID;
+
+public record EnrollmentCapabilities(
+    boolean canRead, boolean canMaintain, boolean canApprove, List<SchoolOption> schools) {
+  public EnrollmentCapabilities {
+    schools = List.copyOf(schools);
+  }
+
+  public record SchoolOption(UUID id, String name, boolean maintainable) {}
+}

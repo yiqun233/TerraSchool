@@ -83,6 +83,30 @@ public class DatabaseIdentity implements UserDetailsService, CurrentActor {
         value.account(), value.tenant(), value.rules(), kind, maintenance);
   }
 
+  @Override
+  public ResourceScope requireResourceScope(String kind) {
+    var value = snapshot();
+    return PermissionRules.scope(value.account(), value.tenant(), value.rules(), kind);
+  }
+
+  @Override
+  public Actor requireAction(String action) {
+    var value = snapshot();
+    return PermissionRules.action(value.account(), value.tenant(), value.rules(), action);
+  }
+
+  @Override
+  public Actor requireActionInTransaction(String action) {
+    var value = transactionSnapshot();
+    return PermissionRules.action(value.account(), value.tenant(), value.rules(), action);
+  }
+
+  @Override
+  public ResourceScope requireResourceScopeInTransaction(String kind) {
+    var value = transactionSnapshot();
+    return PermissionRules.scope(value.account(), value.tenant(), value.rules(), kind);
+  }
+
   private Snapshot transactionSnapshot() {
     if (!org.springframework.transaction.support.TransactionSynchronizationManager
         .isActualTransactionActive()) throw new IllegalStateException("资源权限复核要求业务事务");

@@ -11,6 +11,10 @@ import { OrganizationEditor } from "./OrganizationEditor";
 import { MyPermissions } from "./MyPermissions";
 import { ResourceWorkspace } from "./ResourceWorkspace";
 import { SchoolEditor } from "./SchoolEditor";
+import { StudentDirectory } from "../archive/StudentDirectory";
+import { ProductCatalogWorkspace } from "../product/ProductCatalog";
+import { EnrollmentWorkspace } from "../enrollment/EnrollmentWorkspace";
+import { TeachingWorkspace } from "../teaching/TeachingWorkspace";
 import type { components } from "../../shared/generated/api";
 const labels: Record<string, string> = {
   SCHOOL: "学校",
@@ -48,7 +52,14 @@ export default function OrganizationPage() {
 }
 function Workspace({ reset }: { reset: () => void }) {
   const [section, setSection] = useState<
-    "ORGANIZATION" | "EMPLOYEE" | "TEACHER" | "ROOM"
+    | "ORGANIZATION"
+    | "EMPLOYEE"
+    | "TEACHER"
+    | "ROOM"
+    | "STUDENTS"
+    | "PRODUCTS"
+    | "ENROLLMENT"
+    | "TEACHING"
   >("ORGANIZATION");
   const [page, setPage] = useState(0);
   const [error, setError] = useState("");
@@ -138,6 +149,30 @@ function Workspace({ reset }: { reset: () => void }) {
             >
               教室管理
             </Button>
+            <Button
+              type={section === "STUDENTS" ? "primary" : "text"}
+              onClick={() => setSection("STUDENTS")}
+            >
+              学员档案
+            </Button>
+            <Button
+              type={section === "PRODUCTS" ? "primary" : "text"}
+              onClick={() => setSection("PRODUCTS")}
+            >
+              课程与产品
+            </Button>
+            <Button
+              type={section === "ENROLLMENT" ? "primary" : "text"}
+              onClick={() => setSection("ENROLLMENT")}
+            >
+              报名与收款
+            </Button>
+            <Button
+              type={section === "TEACHING" ? "primary" : "text"}
+              onClick={() => setSection("TEACHING")}
+            >
+              教务与考勤
+            </Button>
           </Space>
         </nav>
       </aside>
@@ -152,6 +187,10 @@ function Workspace({ reset }: { reset: () => void }) {
                   EMPLOYEE: "员工",
                   TEACHER: "教师",
                   ROOM: "教室",
+                  STUDENTS: "学员档案",
+                  PRODUCTS: "课程与产品",
+                  ENROLLMENT: "报名与收款",
+                  TEACHING: "教务与考勤",
                 }[section]
               }
             </Typography.Title>
@@ -203,6 +242,14 @@ function Workspace({ reset }: { reset: () => void }) {
               </Button>
             </Form>
           </section>
+        ) : section === "STUDENTS" ? (
+          <StudentDirectory onUnauthorized={() => void signOut()} />
+        ) : section === "PRODUCTS" ? (
+          <ProductCatalogWorkspace onUnauthorized={() => void signOut()} />
+        ) : section === "ENROLLMENT" ? (
+          <EnrollmentWorkspace onUnauthorized={() => void signOut()} />
+        ) : section === "TEACHING" ? (
+          <TeachingWorkspace onUnauthorized={() => void signOut()} />
         ) : section !== "ORGANIZATION" ? (
           <ResourceWorkspace key={section} kind={section} />
         ) : !me.data.canReadOrganizations ? (

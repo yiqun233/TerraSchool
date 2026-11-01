@@ -109,3 +109,93 @@ BEGIN
  INSERT INTO dev.resource_seed_history(seed_id) VALUES('LOCAL-PERSONNEL-001');
 END;
 $personnel_seed$;
+
+-- 学员档案授权同样只初始化本机演示管理员；已存在的规则和敏感字段授权不覆盖。
+DO $student_seed$
+DECLARE owner_id uuid; tenant_id_value uuid; action_name text;
+BEGIN
+ PERFORM pg_advisory_xact_lock(hashtextextended('teraschool-local-students-v1',0));
+ IF EXISTS(SELECT 1 FROM dev.resource_seed_history WHERE seed_id='LOCAL-STUDENT-001') THEN RETURN; END IF;
+ SELECT a.id,a.tenant_id INTO STRICT owner_id,tenant_id_value FROM identity.account a JOIN identity.tenant t ON t.id=a.tenant_id
+ WHERE a.login='local-admin' AND t.name='本地演示机构' AND a.active AND t.active;
+ FOREACH action_name IN ARRAY ARRAY['STUDENT_READ','STUDENT_MAINTAIN','STUDENT_SENSITIVE_READ'] LOOP
+  IF NOT EXISTS(SELECT 1 FROM identity.account_permission WHERE account_id=owner_id AND action=action_name) THEN
+   INSERT INTO identity.account_permission(tenant_id,account_id,action,school_id,effect)
+    SELECT tenant_id_value,owner_id,action_name,id,'ALLOW' FROM organization.unit WHERE tenant_id=tenant_id_value AND kind='SCHOOL';
+  END IF;
+ END LOOP;
+ INSERT INTO dev.resource_seed_history(seed_id) VALUES('LOCAL-STUDENT-001');
+END;
+$student_seed$;
+
+-- 课程产品授权同样只初始化本机演示管理员；定价发布权限单独授予，便于演示“维护≠定价”。
+DO $product_seed$
+DECLARE owner_id uuid; tenant_id_value uuid; action_name text;
+BEGIN
+ PERFORM pg_advisory_xact_lock(hashtextextended('teraschool-local-products-v1',0));
+ IF EXISTS(SELECT 1 FROM dev.resource_seed_history WHERE seed_id='LOCAL-PRODUCT-001') THEN RETURN; END IF;
+ SELECT a.id,a.tenant_id INTO STRICT owner_id,tenant_id_value FROM identity.account a JOIN identity.tenant t ON t.id=a.tenant_id
+ WHERE a.login='local-admin' AND t.name='本地演示机构' AND a.active AND t.active;
+ FOREACH action_name IN ARRAY ARRAY['PRODUCT_READ','PRODUCT_MAINTAIN','PRICE_PUBLISH'] LOOP
+  IF NOT EXISTS(SELECT 1 FROM identity.account_permission WHERE account_id=owner_id AND action=action_name) THEN
+   INSERT INTO identity.account_permission(tenant_id,account_id,action,school_id,effect)
+    SELECT tenant_id_value,owner_id,action_name,id,'ALLOW' FROM organization.unit WHERE tenant_id=tenant_id_value AND kind='SCHOOL';
+  END IF;
+ END LOOP;
+ INSERT INTO dev.resource_seed_history(seed_id) VALUES('LOCAL-PRODUCT-001');
+END;
+$product_seed$;
+
+-- 报名与收款授权：登记、审核、收款与分配分动作授予，便于演示职责分离。
+DO $enrollment_seed$
+DECLARE owner_id uuid; tenant_id_value uuid; action_name text;
+BEGIN
+ PERFORM pg_advisory_xact_lock(hashtextextended('teraschool-local-enrollment-v1',0));
+ IF EXISTS(SELECT 1 FROM dev.resource_seed_history WHERE seed_id='LOCAL-ENROLLMENT-001') THEN RETURN; END IF;
+ SELECT a.id,a.tenant_id INTO STRICT owner_id,tenant_id_value FROM identity.account a JOIN identity.tenant t ON t.id=a.tenant_id
+ WHERE a.login='local-admin' AND t.name='本地演示机构' AND a.active AND t.active;
+ FOREACH action_name IN ARRAY ARRAY['ENROLLMENT_READ','ENROLLMENT_MAINTAIN','ENROLLMENT_APPROVE','FUNDS_READ','FUNDS_RECEIPT','FUNDS_ALLOCATE'] LOOP
+  IF NOT EXISTS(SELECT 1 FROM identity.account_permission WHERE account_id=owner_id AND action=action_name) THEN
+   INSERT INTO identity.account_permission(tenant_id,account_id,action,school_id,effect)
+    SELECT tenant_id_value,owner_id,action_name,id,'ALLOW' FROM organization.unit WHERE tenant_id=tenant_id_value AND kind='SCHOOL';
+  END IF;
+ END LOOP;
+ INSERT INTO dev.resource_seed_history(seed_id) VALUES('LOCAL-ENROLLMENT-001');
+END;
+$enrollment_seed$;
+
+-- 教务授权：班级与课次维护、考勤登记、关闭课次分别授予。
+DO $teaching_seed$
+DECLARE owner_id uuid; tenant_id_value uuid; action_name text;
+BEGIN
+ PERFORM pg_advisory_xact_lock(hashtextextended('teraschool-local-teaching-v1',0));
+ IF EXISTS(SELECT 1 FROM dev.resource_seed_history WHERE seed_id='LOCAL-TEACHING-001') THEN RETURN; END IF;
+ SELECT a.id,a.tenant_id INTO STRICT owner_id,tenant_id_value FROM identity.account a JOIN identity.tenant t ON t.id=a.tenant_id
+ WHERE a.login='local-admin' AND t.name='本地演示机构' AND a.active AND t.active;
+ FOREACH action_name IN ARRAY ARRAY['TEACHING_READ','TEACHING_MAINTAIN','ATTENDANCE_RECORD','LESSON_CLOSE'] LOOP
+  IF NOT EXISTS(SELECT 1 FROM identity.account_permission WHERE account_id=owner_id AND action=action_name) THEN
+   INSERT INTO identity.account_permission(tenant_id,account_id,action,school_id,effect)
+    SELECT tenant_id_value,owner_id,action_name,id,'ALLOW' FROM organization.unit WHERE tenant_id=tenant_id_value AND kind='SCHOOL';
+  END IF;
+ END LOOP;
+ INSERT INTO dev.resource_seed_history(seed_id) VALUES('LOCAL-TEACHING-001');
+END;
+$teaching_seed$;
+
+-- 退款授权：退课时与现金退款分别授予，便于演示两步流程与职责分离。
+DO $refund_seed$
+DECLARE owner_id uuid; tenant_id_value uuid; action_name text;
+BEGIN
+ PERFORM pg_advisory_xact_lock(hashtextextended('teraschool-local-refund-v1',0));
+ IF EXISTS(SELECT 1 FROM dev.resource_seed_history WHERE seed_id='LOCAL-REFUND-001') THEN RETURN; END IF;
+ SELECT a.id,a.tenant_id INTO STRICT owner_id,tenant_id_value FROM identity.account a JOIN identity.tenant t ON t.id=a.tenant_id
+ WHERE a.login='local-admin' AND t.name='本地演示机构' AND a.active AND t.active;
+ FOREACH action_name IN ARRAY ARRAY['REFUND_READ','REFUND_APPLY','REFUND_PAY'] LOOP
+  IF NOT EXISTS(SELECT 1 FROM identity.account_permission WHERE account_id=owner_id AND action=action_name) THEN
+   INSERT INTO identity.account_permission(tenant_id,account_id,action,school_id,effect)
+    SELECT tenant_id_value,owner_id,action_name,id,'ALLOW' FROM organization.unit WHERE tenant_id=tenant_id_value AND kind='SCHOOL';
+  END IF;
+ END LOOP;
+ INSERT INTO dev.resource_seed_history(seed_id) VALUES('LOCAL-REFUND-001');
+END;
+$refund_seed$;

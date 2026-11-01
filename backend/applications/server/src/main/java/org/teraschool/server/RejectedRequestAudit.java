@@ -20,13 +20,159 @@ class RejectedRequestAudit {
   void record(HttpServletRequest request, String code) {
     if (!request.getMethod().equals("POST")
         && !(request.getMethod().equals("GET")
-            && request
-                .getServletPath()
-                .matches("/api/organization/employees/[^/]+/attachments/[^/]+"))) return;
+            && (request
+                    .getServletPath()
+                    .matches("/api/organization/employees/[^/]+/attachments/[^/]+")
+                || request.getServletPath().matches("/api/archive/students/[^/]+")))) return;
     String path = request.getServletPath();
     UUID resource = null;
     FailureAudit.Action action;
-    if (path.equals("/api/employee/me/email-config"))
+    if (path.matches("/api/funds/enrollments/[^/]+/cancel-hours")) {
+      action = FailureAudit.Action.REFUND_HOURS;
+      try {
+        resource =
+            UUID.fromString(
+                path.substring(
+                    "/api/funds/enrollments/".length(), path.length() - "/cancel-hours".length()));
+      } catch (IllegalArgumentException invalid) {
+        /* 不保存原始路径文本。 */
+      }
+    } else if (path.equals("/api/funds/refunds")) action = FailureAudit.Action.REFUND_PREPARE;
+    else if (path.matches("/api/funds/refunds/[^/]+/(confirm|cancel)")) {
+      action =
+          path.endsWith("/confirm")
+              ? FailureAudit.Action.REFUND_PAID
+              : FailureAudit.Action.REFUND_CANCEL;
+      String suffix = path.substring(path.lastIndexOf('/'));
+      try {
+        resource =
+            UUID.fromString(
+                path.substring("/api/funds/refunds/".length(), path.length() - suffix.length()));
+      } catch (IllegalArgumentException invalid) {
+        /* 不保存原始路径文本。 */
+      }
+    } else if (path.equals("/api/teaching/classes")) action = FailureAudit.Action.CLASS_CREATE;
+    else if (path.matches("/api/teaching/classes/[^/]+/members")) {
+      action = FailureAudit.Action.CLASS_MEMBER_ADD;
+      try {
+        resource =
+            UUID.fromString(
+                path.substring(
+                    "/api/teaching/classes/".length(), path.length() - "/members".length()));
+      } catch (IllegalArgumentException invalid) {
+        /* 不保存原始路径文本。 */
+      }
+    } else if (path.equals("/api/teaching/lessons")) action = FailureAudit.Action.LESSON_CREATE;
+    else if (path.matches("/api/teaching/lessons/[^/]+/(publish|attendance|close)")) {
+      action =
+          path.endsWith("/publish")
+              ? FailureAudit.Action.LESSON_PUBLISH
+              : path.endsWith("/attendance")
+                  ? FailureAudit.Action.ATTENDANCE_CONFIRM
+                  : FailureAudit.Action.LESSON_CLOSE;
+      String suffix = path.substring(path.lastIndexOf('/'));
+      try {
+        resource =
+            UUID.fromString(
+                path.substring("/api/teaching/lessons/".length(), path.length() - suffix.length()));
+      } catch (IllegalArgumentException invalid) {
+        /* 不保存原始路径文本。 */
+      }
+    } else if (path.equals("/api/enrollment/enrollments"))
+      action = FailureAudit.Action.ENROLLMENT_CREATE;
+    else if (path.matches("/api/enrollment/enrollments/[^/]+/approve")) {
+      action = FailureAudit.Action.ENROLLMENT_APPROVE;
+      try {
+        resource =
+            UUID.fromString(
+                path.substring(
+                    "/api/enrollment/enrollments/".length(), path.length() - "/approve".length()));
+      } catch (IllegalArgumentException invalid) {
+        /* 不保存原始路径文本。 */
+      }
+    } else if (path.equals("/api/funds/receipts")) action = FailureAudit.Action.RECEIPT_CONFIRM;
+    else if (path.matches("/api/funds/receipts/[^/]+/void")) {
+      action = FailureAudit.Action.RECEIPT_VOID;
+      try {
+        resource =
+            UUID.fromString(
+                path.substring("/api/funds/receipts/".length(), path.length() - "/void".length()));
+      } catch (IllegalArgumentException invalid) {
+        /* 不保存原始路径文本。 */
+      }
+    } else if (path.equals("/api/funds/allocations"))
+      action = FailureAudit.Action.ALLOCATION_CREATE;
+    else if (path.matches("/api/funds/allocations/[^/]+/release")) {
+      action = FailureAudit.Action.ALLOCATION_RELEASE;
+      try {
+        resource =
+            UUID.fromString(
+                path.substring(
+                    "/api/funds/allocations/".length(), path.length() - "/release".length()));
+      } catch (IllegalArgumentException invalid) {
+        /* 不保存原始路径文本。 */
+      }
+    } else if (path.equals("/api/product/curricula"))
+      action = FailureAudit.Action.CURRICULUM_CREATE;
+    else if (path.matches("/api/product/curricula/[^/]+/update")) {
+      action = FailureAudit.Action.CURRICULUM_UPDATE;
+      try {
+        resource =
+            UUID.fromString(
+                path.substring(
+                    "/api/product/curricula/".length(), path.length() - "/update".length()));
+      } catch (IllegalArgumentException invalid) {
+        /* 不保存原始路径文本。 */
+      }
+    } else if (path.equals("/api/product/products")) action = FailureAudit.Action.PRODUCT_CREATE;
+    else if (path.matches("/api/product/products/[^/]+/update")) {
+      action = FailureAudit.Action.PRODUCT_UPDATE;
+      try {
+        resource =
+            UUID.fromString(
+                path.substring(
+                    "/api/product/products/".length(), path.length() - "/update".length()));
+      } catch (IllegalArgumentException invalid) {
+        /* 不保存原始路径文本。 */
+      }
+    } else if (path.equals("/api/product/price-versions"))
+      action = FailureAudit.Action.PRICE_VERSION_CREATE;
+    else if (path.matches("/api/product/price-versions/[^/]+/(update|publish|retire)")) {
+      action =
+          path.endsWith("/update")
+              ? FailureAudit.Action.PRICE_VERSION_UPDATE
+              : path.endsWith("/publish")
+                  ? FailureAudit.Action.PRICE_VERSION_PUBLISH
+                  : FailureAudit.Action.PRICE_VERSION_RETIRE;
+      String suffix = path.substring(path.lastIndexOf('/'));
+      try {
+        resource =
+            UUID.fromString(
+                path.substring(
+                    "/api/product/price-versions/".length(), path.length() - suffix.length()));
+      } catch (IllegalArgumentException invalid) {
+        /* 不保存原始路径文本。 */
+      }
+    } else if (path.equals("/api/archive/students")) action = FailureAudit.Action.STUDENT_CREATE;
+    else if (path.matches("/api/archive/students/[^/]+/(update|status)")) {
+      action = FailureAudit.Action.STUDENT_UPDATE;
+      String suffix = path.endsWith("/update") ? "/update" : "/status";
+      try {
+        resource =
+            UUID.fromString(
+                path.substring("/api/archive/students/".length(), path.length() - suffix.length()));
+      } catch (IllegalArgumentException invalid) {
+        /* 不保存原始路径文本。 */
+      }
+    } else if (path.matches("/api/archive/students/[^/]+")) {
+      // 读取敏感字段被拒绝时也要留下追踪；路径解析失败则不记录。
+      action = FailureAudit.Action.STUDENT_SENSITIVE_READ;
+      try {
+        resource = UUID.fromString(path.substring("/api/archive/students/".length()));
+      } catch (IllegalArgumentException invalid) {
+        /* 不保存原始路径文本。 */
+      }
+    } else if (path.equals("/api/employee/me/email-config"))
       action = FailureAudit.Action.EMPLOYEE_EMAIL_UPDATE;
     else if (path.equals("/api/organization/units"))
       action = FailureAudit.Action.ORGANIZATION_CREATE;

@@ -56,6 +56,33 @@ class Errors {
     return problem(409, error.code());
   }
 
+  @ExceptionHandler(org.teraschool.archive.api.StudentConflict.class)
+  ResponseEntity<ProblemDetail> studentConflict(org.teraschool.archive.api.StudentConflict error) {
+    return problem(409, error.code());
+  }
+
+  @ExceptionHandler(org.teraschool.product.api.ProductConflict.class)
+  ResponseEntity<ProblemDetail> productConflict(org.teraschool.product.api.ProductConflict error) {
+    return problem(409, error.code());
+  }
+
+  @ExceptionHandler(org.teraschool.enrollment.api.EnrollmentConflict.class)
+  ResponseEntity<ProblemDetail> enrollmentConflict(
+      org.teraschool.enrollment.api.EnrollmentConflict error) {
+    return problem(409, error.code());
+  }
+
+  @ExceptionHandler(org.teraschool.funds.api.FundsConflict.class)
+  ResponseEntity<ProblemDetail> fundsConflict(org.teraschool.funds.api.FundsConflict error) {
+    return problem(409, error.code());
+  }
+
+  @ExceptionHandler(org.teraschool.teaching.api.TeachingConflict.class)
+  ResponseEntity<ProblemDetail> teachingConflict(
+      org.teraschool.teaching.api.TeachingConflict error) {
+    return problem(409, error.code());
+  }
+
   @ExceptionHandler(AccessDeniedException.class)
   ResponseEntity<ProblemDetail> denied() {
     return problem(403, "ACCESS_DENIED");

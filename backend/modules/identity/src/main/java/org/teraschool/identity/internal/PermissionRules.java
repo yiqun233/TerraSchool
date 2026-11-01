@@ -17,7 +17,23 @@ final class PermissionRules {
           "ROOM_READ",
           "ROOM_MAINTAIN",
           "PERSONNEL_READ",
-          "PERSONNEL_MAINTAIN");
+          "PERSONNEL_MAINTAIN",
+          "STUDENT_READ",
+          "STUDENT_MAINTAIN",
+          "STUDENT_SENSITIVE_READ",
+          "PRODUCT_READ",
+          "PRODUCT_MAINTAIN",
+          "PRICE_PUBLISH",
+          "ENROLLMENT_READ",
+          "ENROLLMENT_MAINTAIN",
+          "ENROLLMENT_APPROVE",
+          "FUNDS_READ",
+          "FUNDS_RECEIPT",
+          "FUNDS_ALLOCATE",
+          "TEACHING_READ",
+          "TEACHING_MAINTAIN",
+          "ATTENDANCE_RECORD",
+          "LESSON_CLOSE");
   static final String EXPANDED =
       """
     SELECT p.account_id,p.tenant_id,p.action,p.school_id,p.effect FROM identity.account_permission p
@@ -90,10 +106,70 @@ final class PermissionRules {
         manage.schools());
   }
 
+  /**
+   * 一次快照同时给出查看、维护与敏感字段范围。
+   *
+   * <p>敏感字段范围只有与查看范围相交才生效，避免出现“能看敏感字段但不能看这条档案”的矛盾授权。
+   */
+  static org.teraschool.identity.api.ResourceScope scope(
+      UUID account, UUID tenant, List<Entry> rules, String kind) {
+    if (!Set.of(
+            "EMPLOYEE",
+            "TEACHER",
+            "ROOM",
+            "PERSONNEL",
+            "STUDENT",
+            "PRODUCT",
+            "ENROLLMENT",
+            "FUNDS",
+            "TEACHING")
+        .contains(Objects.toString(kind, ""))) throw new IllegalArgumentException("无效资源类型");
+    var read = new Decision();
+    var maintain = new Decision();
+    var sensitive = new Decision();
+    for (var rule : rules) {
+      if ((kind + "_READ").equals(rule.action())) read.accept(rule);
+      else if ((kind + "_MAINTAIN").equals(rule.action())) maintain.accept(rule);
+      else if ((kind + "_SENSITIVE_READ").equals(rule.action())) sensitive.accept(rule);
+    }
+    if (!read.enabled())
+      throw new org.springframework.security.access.AccessDeniedException("无资源读取权限");
+    var readable = read.schools();
+    var maintainable = new HashSet<>(maintain.schools());
+    maintainable.retainAll(readable);
+    var sensitiveSchools = new HashSet<>(sensitive.schools());
+    sensitiveSchools.retainAll(readable);
+    return new org.teraschool.identity.api.ResourceScope(
+        account, tenant, readable, maintainable, sensitiveSchools);
+  }
+
+  /**
+   * 任意具名动作的学校范围。
+   *
+   * <p>用于“发布定价”这类不能与普通维护合并的动作：调用方必须持有该动作，范围与查看范围无关。
+   */
+  static org.teraschool.identity.api.Actor action(
+      UUID account, UUID tenant, List<Entry> rules, String action) {
+    var decision = new Decision();
+    for (var rule : rules) if (action.equals(rule.action())) decision.accept(rule);
+    if (!decision.enabled())
+      throw new org.springframework.security.access.AccessDeniedException("无该动作权限");
+    return new org.teraschool.identity.api.Actor(account, tenant, decision.schools());
+  }
+
   static org.teraschool.identity.api.Actor resource(
       UUID account, UUID tenant, List<Entry> rules, String kind, boolean write) {
-    if (!Set.of("EMPLOYEE", "TEACHER", "ROOM", "PERSONNEL").contains(Objects.toString(kind, "")))
-      throw new IllegalArgumentException("无效资源类型");
+    if (!Set.of(
+            "EMPLOYEE",
+            "TEACHER",
+            "ROOM",
+            "PERSONNEL",
+            "STUDENT",
+            "PRODUCT",
+            "ENROLLMENT",
+            "FUNDS",
+            "TEACHING")
+        .contains(Objects.toString(kind, ""))) throw new IllegalArgumentException("无效资源类型");
     var read = new Decision();
     var maintain = new Decision();
     for (var rule : rules) {

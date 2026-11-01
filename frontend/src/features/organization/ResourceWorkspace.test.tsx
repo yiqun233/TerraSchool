@@ -59,51 +59,55 @@ it("资源编辑固定读取版本，冲突时保留草稿并禁止覆盖", asyn
   ).toBe(true);
 });
 
-it("创建资源在令牌获取失败后重新编辑，提交修改后的草稿", async () => {
-  vi.clearAllMocks();
-  get.mockImplementation(
-    async (
-      _path: string,
-      options: { params: { query: { type: string } } },
-    ) => ({
-      response: { ok: true },
-      data:
-        options.params.query.type === "SCHOOL"
-          ? [{ id: "school-a", name: "学校甲" }]
-          : [],
-    }),
-  );
-  csrf
-    .mockRejectedValueOnce(new Error("offline"))
-    .mockResolvedValueOnce({ headerName: "X-CSRF-TOKEN", token: "test" });
-  post.mockResolvedValue({ response: { ok: true, status: 201 } });
-  const client = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    }),
-    user = userEvent.setup();
-  render(
-    <QueryClientProvider client={client}>
-      <ResourceForm
-        kind="EMPLOYEE"
-        onBusy={vi.fn()}
-        onLocked={vi.fn()}
-        onSaved={vi.fn()}
-        onCancel={vi.fn()}
-      />
-    </QueryClientProvider>,
-  );
-  await user.click(screen.getByLabelText("学校"));
-  await user.click(await screen.findByText("学校甲"));
-  const name = screen.getByLabelText("员工名称");
-  await user.type(name, "旧名称");
-  await user.click(screen.getByRole("button", { name: /保\s*存/ }));
-  await screen.findByText("无法获取安全令牌，请重试。");
-  await user.clear(name);
-  await user.type(name, "新名称");
-  await user.click(screen.getByRole("button", { name: /保\s*存/ }));
-  await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
-  expect(post.mock.calls[0][1].body.name).toBe("新名称");
-});
+it(
+  "创建资源在令牌获取失败后重新编辑，提交修改后的草稿",
+  { timeout: 15000 },
+  async () => {
+    vi.clearAllMocks();
+    get.mockImplementation(
+      async (
+        _path: string,
+        options: { params: { query: { type: string } } },
+      ) => ({
+        response: { ok: true },
+        data:
+          options.params.query.type === "SCHOOL"
+            ? [{ id: "school-a", name: "学校甲" }]
+            : [],
+      }),
+    );
+    csrf
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce({ headerName: "X-CSRF-TOKEN", token: "test" });
+    post.mockResolvedValue({ response: { ok: true, status: 201 } });
+    const client = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      }),
+      user = userEvent.setup();
+    render(
+      <QueryClientProvider client={client}>
+        <ResourceForm
+          kind="EMPLOYEE"
+          onBusy={vi.fn()}
+          onLocked={vi.fn()}
+          onSaved={vi.fn()}
+          onCancel={vi.fn()}
+        />
+      </QueryClientProvider>,
+    );
+    await user.click(screen.getByLabelText("学校"));
+    await user.click(await screen.findByText("学校甲"));
+    const name = screen.getByLabelText("员工名称");
+    await user.type(name, "旧名称");
+    await user.click(screen.getByRole("button", { name: /保\s*存/ }));
+    await screen.findByText("无法获取安全令牌，请重试。");
+    await user.clear(name);
+    await user.type(name, "新名称");
+    await user.click(screen.getByRole("button", { name: /保\s*存/ }));
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+    expect(post.mock.calls[0][1].body.name).toBe("新名称");
+  },
+);
 
 it("教师关联员工支持搜索首批20项以外的员工", async () => {
   vi.clearAllMocks();

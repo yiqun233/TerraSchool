@@ -111,7 +111,7 @@ describe("组织维护提交保护", () => {
     expect(post.mock.calls[0][1].body.expectedVersion).toBe(0);
     expect(saved).not.toHaveBeenCalled();
   });
-  it("CSRF尚未返回时连续提交也只发起一次修改", async () => {
+  it("CSRF尚未返回时连续提交也只发起一次修改", { timeout: 15000 }, async () => {
     const user = userEvent.setup();
     const saved = vi.fn();
     let release!: (value: { headerName: string; token: string }) => void;

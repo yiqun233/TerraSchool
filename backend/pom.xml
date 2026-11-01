@@ -15,6 +15,11 @@
         <module>modules/platform</module>
         <module>modules/identity</module>
         <module>modules/organization</module>
+        <module>modules/archive</module>
+        <module>modules/product</module>
+        <module>modules/enrollment</module>
+        <module>modules/funds</module>
+        <module>modules/teaching</module>
         <module>applications/server</module>
     </modules>
     <properties>
