@@ -19,6 +19,7 @@ import {
 } from "antd";
 import { api, csrf } from "../../shared/http";
 import { SchedulePlanner } from "./SchedulePlanner";
+import { SchedulingSettings } from "./SchedulingSettings";
 import type { components } from "../../shared/generated/api";
 
 type LessonView = components["schemas"]["LessonView"];
@@ -47,6 +48,7 @@ export function TeachingWorkspace({
   const [creatingClass, setCreatingClass] = useState(false);
   const [creatingLesson, setCreatingLesson] = useState(false);
   const [scheduling, setScheduling] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [attendanceFor, setAttendanceFor] = useState<LessonView | null>(null);
   const [reconcileFor, setReconcileFor] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -154,6 +156,7 @@ export function TeachingWorkspace({
         {school?.maintainable ? (
           <Button onClick={() => setCreatingClass(true)}>新建班级</Button>
         ) : null}
+        <Button onClick={() => setSettingsOpen(true)}>排课设置</Button>
         <Button
           onClick={() => void classes.refetch()}
           loading={classes.isFetching}
@@ -325,6 +328,14 @@ export function TeachingWorkspace({
             setCreatingLesson(false);
             void lessons.refetch();
           }}
+        />
+      ) : null}
+      {settingsOpen && current ? (
+        <SchedulingSettings
+          schoolId={current}
+          canMaintain={!!school?.maintainable}
+          onClose={() => setSettingsOpen(false)}
+          onUnauthorized={() => void onUnauthorized()}
         />
       ) : null}
       {scheduling && classId ? (
