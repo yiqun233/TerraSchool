@@ -592,6 +592,7 @@ export function ClassCreator({
           schoolId,
           curriculumId: values.curriculumId,
           name: values.name,
+          classType: values.classType ?? "NORMAL",
         },
       });
       if (!response.ok) {
@@ -628,6 +629,21 @@ export function ClassCreator({
           ]}
         >
           <Input maxLength={100} disabled={busy} />
+        </Form.Item>
+        <Form.Item
+          label="班型"
+          name="classType"
+          initialValue="NORMAL"
+          extra="结算模式 0（自动）时：VIP 走平均价格，大班与普通班走课程匹配"
+        >
+          <Select
+            disabled={busy}
+            options={[
+              { value: "VIP", label: "VIP" },
+              { value: "LARGE", label: "大班" },
+              { value: "NORMAL", label: "普通班" },
+            ]}
+          />
         </Form.Item>
         <Form.Item
           label="课程"

@@ -8,7 +8,6 @@ import java.util.function.Supplier;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -16,9 +15,8 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.teraschool.enrollment.api.*;
 import org.teraschool.funds.api.*;
 import org.teraschool.product.api.*;
-import org.teraschool.teaching.api.*;
 
-/** 结算模式防护：只实现模式 1，其余模式必须在发布、消费与退费处显式拒绝，不得按模式 1 静默算钱。 */
+/** 结算模式取值防护：0–5 全部可用，越界值在起草阶段就拒绝；模式 0 未解析前不能退费。 */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class SettlementModeGuardTest {
   static final UUID TENANT = UUID.randomUUID(),
@@ -26,12 +24,9 @@ class SettlementModeGuardTest {
       CURRICULUM = UUID.randomUUID(),
       PRODUCT = UUID.randomUUID(),
       OPS = UUID.randomUUID();
-  static final String PASSWORD = UUID.randomUUID().toString();
 
-  @LocalServerPort int port;
   @Autowired ProductCommands catalog;
   @Autowired EnrollmentCommands enrollments;
-  @Autowired TeachingCommands teaching;
   @Autowired FundsCommands funds;
 
   @DynamicPropertySource
@@ -52,6 +47,13 @@ class SettlementModeGuardTest {
         CURRICULUM,
         TENANT,
         SCHOOL);
+    update(
+        "insert into product.product(id,tenant_id,school_id,curriculum_id,name,settlement_mode)"
+            + " values (?,?,?,?,'模式产品',1)",
+        PRODUCT,
+        TENANT,
+        SCHOOL,
+        CURRICULUM);
     var encoder =
         org.springframework.security.crypto.factory.PasswordEncoderFactories
             .createDelegatingPasswordEncoder();
@@ -60,13 +62,18 @@ class SettlementModeGuardTest {
         OPS,
         TENANT,
         "mode-ops",
-        encoder.encode(PASSWORD));
+        encoder.encode(UUID.randomUUID().toString()));
     for (var action :
         new String[] {
-          "PRODUCT_READ", "PRODUCT_MAINTAIN", "PRICE_PUBLISH", "ENROLLMENT_READ",
-          "ENROLLMENT_MAINTAIN", "ENROLLMENT_APPROVE", "FUNDS_READ", "FUNDS_RECEIPT",
-          "FUNDS_ALLOCATE", "TEACHING_READ", "TEACHING_MAINTAIN", "ATTENDANCE_RECORD",
-          "LESSON_CLOSE", "REFUND_READ", "REFUND_APPLY"
+          "PRODUCT_READ",
+          "PRODUCT_MAINTAIN",
+          "PRICE_PUBLISH",
+          "ENROLLMENT_READ",
+          "ENROLLMENT_MAINTAIN",
+          "ENROLLMENT_APPROVE",
+          "FUNDS_READ",
+          "REFUND_READ",
+          "REFUND_APPLY"
         })
       update(
           "insert into identity.account_permission(tenant_id,account_id,school_id,action,effect)"
@@ -91,23 +98,14 @@ class SettlementModeGuardTest {
     }
   }
 
-  CourseProduct product() {
-    return asActor(
-        OPS,
-        () ->
-            catalog.createProduct(
-                new CreateProduct(
-                    UUID.randomUUID(), SCHOOL, CURRICULUM, "模式产品" + UUID.randomUUID(), 1)));
-  }
-
-  PriceVersion draft(UUID productId, int mode) {
+  PriceVersion draft(int mode) {
     return asActor(
         OPS,
         () ->
             catalog.draftPriceVersion(
                 new DraftPriceVersion(
                     UUID.randomUUID(),
-                    productId,
+                    PRODUCT,
                     "1000.00",
                     "10.00",
                     "0.00",
@@ -117,27 +115,39 @@ class SettlementModeGuardTest {
                     null)));
   }
 
-  UUID legacyEnrollment(int mode) throws Exception {
-    var product = product();
-    var priceId = UUID.randomUUID();
-    try {
-      update(
-          "insert into product.price_version(id,tenant_id,product_id,version_no,status,price,hours,"
-              + " service_fee,settlement_mode,effective_from)"
-              + " values (?,?,?,1,'PUBLISHED',1000.00,10.00,0,?,'2026-01-01')",
-          priceId,
-          TENANT,
-          product.id(),
-          mode);
-    } catch (Exception error) {
-      throw new IllegalStateException(error);
+  @Test
+  void invalidModeIsRejectedAtDraft() {
+    assertThatThrownBy(() -> draft(6))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("结算模式");
+  }
+
+  @Test
+  void everyModeZeroToFiveIsPublishable() {
+    for (var mode = 0; mode <= 5; mode++) {
+      var price = draft(mode);
+      assertThat(
+              asActor(
+                      OPS,
+                      () ->
+                          catalog.publishPriceVersion(
+                              price.id(), new ExpectedVersion(price.version())))
+                  .status())
+          .isEqualTo("PUBLISHED");
     }
+  }
+
+  @Test
+  void refundBeforeAutoModeResolvedIsRejected() throws Exception {
+    var price = draft(0);
+    asActor(
+        OPS, () -> catalog.publishPriceVersion(price.id(), new ExpectedVersion(price.version())));
     var student = UUID.randomUUID();
     update(
         "insert into archive.student(id,tenant_id,student_no,name,sex,school_id) values (?,?,?,?,?,?)",
         student,
         TENANT,
-        "S9" + student.toString().replace("-", "").substring(0, 6),
+        "S2" + student.toString().replace("-", "").substring(0, 6),
         "模式学员" + student.toString().substring(0, 4),
         "FEMALE",
         SCHOOL);
@@ -146,120 +156,21 @@ class SettlementModeGuardTest {
             OPS,
             () ->
                 enrollments.create(
-                    new CreateEnrollment(UUID.randomUUID(), student, priceId, "2026-02-10")));
+                    new CreateEnrollment(UUID.randomUUID(), student, price.id(), "2026-02-10")));
     var approved =
         asActor(
             OPS, () -> enrollments.approve(created.id(), new EnrollmentVersion(created.version())));
-    assertThat(approved.settlementMode()).isEqualTo(mode);
-    return approved.id();
-  }
-
-  @Test
-  void publishingUnimplementedModeIsRejected() throws Exception {
-    var product = product();
-    // 模式 0（自动）需要班型判断，尚未实现：必须拒绝发布。
-    var modeFour = draft(product.id(), 0);
-    assertThatThrownBy(
-            () ->
-                asActor(
-                    OPS,
-                    () ->
-                        catalog.publishPriceVersion(
-                            modeFour.id(), new ExpectedVersion(modeFour.version()))))
-        .isInstanceOf(ProductConflict.class)
-        .hasMessage("SETTLEMENT_MODE_UNSUPPORTED");
-    // 模式 2/3/4/5 已实现，可以发布。
-    var modeTwo = draft(product.id(), 4);
-    assertThat(
-            asActor(
-                    OPS,
-                    () ->
-                        catalog.publishPriceVersion(
-                            modeTwo.id(), new ExpectedVersion(modeTwo.version())))
-                .status())
-        .isEqualTo("PUBLISHED");
-    var modeOne = draft(product.id(), 1);
-    assertThat(
-            asActor(
-                    OPS,
-                    () ->
-                        catalog.publishPriceVersion(
-                            modeOne.id(), new ExpectedVersion(modeOne.version())))
-                .status())
-        .isEqualTo("PUBLISHED");
-  }
-
-  @Test
-  void closingLessonOnLegacyModeIsRejected() throws Exception {
-    var enrollmentId = legacyEnrollment(0);
-    var classView =
-        asActor(
-            OPS,
-            () ->
-                teaching.createClass(
-                    new CreateClass(
-                        UUID.randomUUID(), SCHOOL, CURRICULUM, "模式班" + UUID.randomUUID())));
-    asActor(OPS, () -> teaching.addMember(classView.id(), new AddClassMember(enrollmentId)));
-    var lesson =
-        asActor(
-            OPS,
-            () ->
-                teaching.createLesson(
-                    new CreateLesson(
-                        UUID.randomUUID(),
-                        classView.id(),
-                        "2026-03-02",
-                        "09:00",
-                        "10:00",
-                        null,
-                        null,
-                        "课",
-                        "1.00")));
-    var published =
-        asActor(
-            OPS, () -> teaching.publishLesson(lesson.id(), new LessonVersion(lesson.version())));
-    var confirmed =
-        asActor(
-            OPS,
-            () ->
-                teaching.confirmAttendance(
-                    published.id(),
-                    new ConfirmAttendance(
-                        published.version(),
-                        List.of(new AttendanceInput(enrollmentId, "PRESENT")))));
-    assertThatThrownBy(
-            () ->
-                asActor(
-                    OPS,
-                    () ->
-                        teaching.closeLesson(
-                            confirmed.id(), new LessonVersion(confirmed.version()))))
-        .isInstanceOf(TeachingConflict.class)
-        .hasMessage("SETTLEMENT_MODE_UNSUPPORTED");
-  }
-
-  @Test
-  void refundingLegacyModeIsRejected() throws Exception {
-    var enrollmentId = legacyEnrollment(0);
-    var student = UUID.randomUUID();
-    update(
-        "insert into archive.student(id,tenant_id,student_no,name,sex,school_id) values (?,?,?,?,?,?)",
-        student,
-        TENANT,
-        "S9" + student.toString().replace("-", "").substring(0, 6),
-        "模式学员" + student.toString().substring(0, 4),
-        "FEMALE",
-        SCHOOL);
+    assertThat(approved.settlementMode()).isZero();
     assertThatThrownBy(
             () ->
                 asActor(
                     OPS,
                     () ->
                         funds.cancelHoursAndReturnToAccount(
-                            enrollmentId,
+                            approved.id(),
                             new CancelHoursAndReturnCommand(
-                                UUID.randomUUID(), "2.00", "退课时", null))))
+                                UUID.randomUUID(), "1.00", "退课", null))))
         .isInstanceOf(FundsConflict.class)
-        .hasMessage("SETTLEMENT_MODE_UNSUPPORTED");
+        .hasMessage("SETTLEMENT_MODE_UNRESOLVED");
   }
 }

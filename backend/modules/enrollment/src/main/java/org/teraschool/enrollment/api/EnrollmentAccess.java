@@ -35,4 +35,11 @@ public interface EnrollmentAccess {
   }
 
   EnrollmentRef require(UUID enrollmentId);
+
+  /**
+   * 把声明为 0（自动）的结算模式解析成 1/2 并持久化。
+   *
+   * <p>解析只发生一次：首个金额事实（进班/消费/退费）确定班型后写入，之后消费与退费共用同一口径。
+   */
+  void resolveSettlementMode(UUID enrollmentId, int resolvedMode);
 }

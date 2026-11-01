@@ -42,6 +42,12 @@ class EnrollmentHttp {
     return commands.create(command);
   }
 
+  /** 登记一次性减免：只写金额与原因，不承担优惠券/阶梯折扣等规则计算。 */
+  @PostMapping(value = "/api/enrollment/enrollments/{id}/discounts", consumes = "application/json")
+  EnrollmentView discount(@PathVariable UUID id, @RequestBody ApplyDiscount command) {
+    return commands.applyDiscount(id, command);
+  }
+
   /** 审核是独立动作与独立权限，不能靠修改接口设置状态。 */
   @PostMapping(value = "/api/enrollment/enrollments/{id}/approve", consumes = "application/json")
   EnrollmentView approve(@PathVariable UUID id, @RequestBody EnrollmentVersion command) {

@@ -285,12 +285,14 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
           var id = UUID.randomUUID();
           try {
             sql.execute(
-                "insert into teaching.class(id,tenant_id,school_id,curriculum_id,name) values (?,?,?,?,?)",
+                "insert into teaching.class(id,tenant_id,school_id,curriculum_id,name,class_type)"
+                    + " values (?,?,?,?,?,?)",
                 id,
                 scope.tenantId(),
                 command.schoolId(),
                 command.curriculumId(),
-                name);
+                name,
+                classType(command.classType()));
           } catch (RuntimeException error) {
             if (uniqueViolation(error)) throw new TeachingConflict("DUPLICATE_CLASS_NAME");
             throw error;
@@ -337,6 +339,7 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
                       + " where enrollment_id=? and class_id=? and active",
                   command.enrollmentId(),
                   classId);
+          resolveAutoMode(enrollment, classId);
           if (current != null) {
             return classView(requireClass(verified, classId), schools.require(schoolId).name());
           }
@@ -728,6 +731,29 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
   }
 
   private record ResourceRef(UUID id, String name) {}
+
+  /**
+   * 结算模式 0（自动）的解析：VIP 走平均价格(1)，其余（大班/普通）走课程匹配(2)。
+   *
+   * <p>只在声明值为 0 且尚未解析时写入一次，之后消费与退费共用同一口径。
+   */
+  private void resolveAutoMode(
+      org.teraschool.enrollment.api.EnrollmentAccess.EnrollmentRef enrollment, UUID classId) {
+    if (enrollment.settlementMode() != 0) return;
+    var row = sql.fetchOne("select class_type from teaching.class where id=?", classId);
+    var type = row == null ? "NORMAL" : row.get("class_type", String.class);
+    enrollments.resolveSettlementMode(enrollment.id(), "VIP".equals(type) ? 1 : 2);
+  }
+
+  private String classType(String value) {
+    var text =
+        value == null || value.isBlank()
+            ? "NORMAL"
+            : value.strip().toUpperCase(java.util.Locale.ROOT);
+    if (!java.util.Set.of("VIP", "LARGE", "NORMAL").contains(text))
+      throw new IllegalArgumentException("班型须为 VIP / LARGE / NORMAL");
+    return text;
+  }
 
   private LessonView lessonView(Record row) {
     return new LessonView(

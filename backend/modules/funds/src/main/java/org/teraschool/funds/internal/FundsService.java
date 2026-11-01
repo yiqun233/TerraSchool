@@ -472,6 +472,8 @@ public class FundsService implements FundsQueries, FundsCommands {
           if (!"ACTIVE".equals(enrollment.status()))
             throw new FundsConflict("ENROLLMENT_NOT_ACTIVE");
           var mode = enrollment.settlementMode();
+          // 模式 0（自动）必须先由进班确定班型并解析成 1/2，否则退费口径不明。
+          if (mode == 0) throw new FundsConflict("SETTLEMENT_MODE_UNRESOLVED");
           if (mode < 1 || mode > 5) throw new FundsConflict("SETTLEMENT_MODE_UNSUPPORTED");
           // 课程维度模式 2/3/5 必须指定课程；模式 1/4 按报名总额退。
           if (mode != 1 && mode != 4 && command.curriculumId() == null)

@@ -13,4 +13,7 @@ public interface EnrollmentCommands {
    * <p>只校验「不超过购买课时与已退课时」；可退课时还要扣除已消耗课时，由编排的退款用例先用 {@code teaching.ConsumptionAccess} 校验。
    */
   CancellationView cancelHours(UUID id, CancelHours command);
+
+  /** 登记一次性减免：写一条应收减项并留审计。 */
+  EnrollmentView applyDiscount(UUID id, ApplyDiscount command);
 }

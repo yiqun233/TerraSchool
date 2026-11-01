@@ -567,6 +567,7 @@ export function EnrollmentDetail({
 }) {
   const [error, setError] = useState("");
   const [receipting, setReceipting] = useState(false);
+  const [discounting, setDiscounting] = useState(false);
   const detail = useQuery({
     queryKey: ["enrollment", id],
     queryFn: async ({ signal }) => {
@@ -678,6 +679,7 @@ export function EnrollmentDetail({
           >
             <Space wrap>
               <Button onClick={() => setReceipting(true)}>确认收款</Button>
+              <Button onClick={() => setDiscounting(true)}>登记减免</Button>
               <AllocateAction
                 enrollmentId={id}
                 outstanding={outstanding.data ?? null}
@@ -802,6 +804,18 @@ export function EnrollmentDetail({
             />
           </Card>
         </>
+      ) : null}
+      {discounting ? (
+        <DiscountModal
+          enrollmentId={id}
+          onCancel={() => setDiscounting(false)}
+          onDone={() => {
+            setDiscounting(false);
+            void detail.refetch();
+            void outstanding.refetch();
+          }}
+          onError={setError}
+        />
       ) : null}
       {receipting && studentId ? (
         <ReceiptCreator
@@ -1109,5 +1123,100 @@ export function VoidReceiptButton({
     >
       撤销
     </Button>
+  );
+}
+
+/** 登记一次性减免：只写金额与原因，落到应收减项。 */
+export function DiscountModal({
+  enrollmentId,
+  onCancel,
+  onDone,
+  onError,
+}: {
+  enrollmentId: string;
+  onCancel: () => void;
+  onDone: () => void;
+  onError: (message: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [form] = Form.useForm();
+
+  async function save() {
+    let values;
+    try {
+      values = await form.validateFields();
+    } catch {
+      return;
+    }
+    setBusy(true);
+    try {
+      const token = await csrf();
+      const { response } = await api.POST(
+        "/api/enrollment/enrollments/{id}/discounts",
+        {
+          params: { path: { id: enrollmentId } },
+          headers: { [token.headerName!]: token.token! },
+          body: {
+            requestId: crypto.randomUUID(),
+            amount: String(values.amount),
+            reason: values.reason || undefined,
+          },
+        },
+      );
+      if (response.status === 409) {
+        onError("减免金额超过剩余应收，或报名当前状态不允许减免。");
+        return;
+      }
+      if (!response.ok) {
+        onError("登记减免失败，请核对报名维护权限。");
+        return;
+      }
+      onDone();
+    } catch {
+      onError("无法获取安全令牌或网络中断，请重试。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      title="登记减免"
+      open
+      onCancel={onCancel}
+      mask={{ closable: !busy }}
+      footer={null}
+    >
+      <Form form={form} layout="vertical">
+        <Form.Item
+          label="减免金额（元）"
+          name="amount"
+          rules={[{ required: true, message: "请输入金额" }]}
+        >
+          <InputNumber
+            min={0.01}
+            precision={2}
+            style={{ width: "100%" }}
+            disabled={busy}
+          />
+        </Form.Item>
+        <Form.Item label="原因" name="reason">
+          <Input maxLength={200} disabled={busy} />
+        </Form.Item>
+        <Typography.Text type="secondary">
+          减免只写金额与原因，不改课时与单价；如需审批请走通用审批流。
+        </Typography.Text>
+        <div style={{ marginTop: 12 }}>
+          <Button
+            type="primary"
+            onClick={() => void save()}
+            loading={busy}
+            disabled={busy}
+          >
+            确认减免
+          </Button>
+        </div>
+      </Form>
+    </Modal>
   );
 }

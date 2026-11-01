@@ -572,9 +572,9 @@ public class ProductCatalogService implements ProductQueries, ProductCommands {
             throw new ProductConflict("PRICE_VERSION_NOT_DRAFT");
           if (!current.get("version", Long.class).equals(command.expectedVersion()))
             throw new ProductConflict("VERSION_CONFLICT");
-          // 结算模式防护：模式 0（自动）依赖班型（VIP/大班）尚未实现，其余模式 1–5 已有公式。
+          // 结算模式 0 是"自动"：进班时按班型解析成 1（VIP）或 2（大班/普通），其余 1–5 直接用公式。
           var mode = current.get("settlement_mode", Integer.class);
-          if (mode == null || mode < 1 || mode > 5)
+          if (mode == null || mode < 0 || mode > 5)
             throw new ProductConflict("SETTLEMENT_MODE_UNSUPPORTED");
           // 同一产品只保留一个已发布版本：先作废旧版本，旧版本仍保留为历史。
           var existing =

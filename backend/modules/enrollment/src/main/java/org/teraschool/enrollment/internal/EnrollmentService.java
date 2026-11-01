@@ -181,6 +181,17 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
                     row.get("cancelled_amount", BigDecimal.class)));
   }
 
+  @Override
+  public void resolveSettlementMode(UUID enrollmentId, int resolvedMode) {
+    if (resolvedMode != 1 && resolvedMode != 2)
+      throw new IllegalArgumentException("自动模式只能解析为 1 或 2");
+    sql.execute(
+        "update enrollment.enrollment set settlement_mode=?,settlement_mode_resolved_at="
+            + "CURRENT_TIMESTAMP where id=? and settlement_mode=0",
+        resolvedMode,
+        enrollmentId);
+  }
+
   // ---------------------------------------------------------------- 写入
 
   @Override
@@ -234,12 +245,19 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
               new BigDecimal(snapshot.hours()),
               new BigDecimal(snapshot.serviceFee()),
               snapshot.settlementMode());
+          // 应收 = 商品价格 + 服务费；服务费在价格快照里单列，不摊进课时单价。
+          var receivable =
+              new BigDecimal(snapshot.price()).add(new BigDecimal(snapshot.serviceFee()));
           sql.execute(
               "insert into enrollment.charge(tenant_id,enrollment_id,kind,amount,reason)"
-                  + " values (?,?,'ORIGINAL',?,'报名原始约定')",
+                  + " values (?,?,'ORIGINAL',?,'报名原始约定（含服务费）')",
               scope.tenantId(),
               id,
-              new BigDecimal(snapshot.price()));
+              receivable);
+          sql.execute(
+              "update enrollment.enrollment set declared_settlement_mode=? where id=?",
+              snapshot.settlementMode(),
+              id);
           insertCourses(scope.tenantId(), id, schoolId, snapshot, command.courses());
           rememberRequest(scope, command.requestId(), id, fingerprint);
           audit(scope, "ENROLLMENT_CREATED", id, schoolId, "");
@@ -514,6 +532,61 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
 
   private String hours(BigDecimal value) {
     return value == null ? null : value.setScale(2, RoundingMode.UNNECESSARY).toPlainString();
+  }
+
+  @Override
+  public EnrollmentView applyDiscount(UUID id, ApplyDiscount command) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      return applyDiscountWithTrace(id, command);
+    }
+  }
+
+  /**
+   * 登记一次性减免。
+   *
+   * <p>只写"减免多少 + 原因"，落到应收减项，不承担优惠券、阶梯折扣等规则计算；审批走通用审批流（如需要）。
+   */
+  private EnrollmentView applyDiscountWithTrace(UUID id, ApplyDiscount command) {
+    if (id == null || command == null) throw new IllegalArgumentException("需要报名与减免金额");
+    var amount = positiveHours(command.amount());
+    var reason = text(command.reason(), 200, "减免原因");
+    var scope = actors.requireResourceScope("ENROLLMENT");
+    return tx.execute(
+        scope.tenantId(),
+        () -> {
+          schools.lockTenant(scope.tenantId());
+          var verified = actors.requireResourceScopeInTransaction("ENROLLMENT");
+          var row = requireEnrollmentForUpdate(id);
+          var schoolId = row.get("school_id", UUID.class);
+          if (!verified.maintainableSchoolIds().contains(schoolId))
+            throw new AccessDeniedException("无该学校的报名维护权限");
+          if (!schools.require(schoolId).active()) throw new AccessDeniedException("学校已停用，不能登记减免");
+          if (!"ACTIVE".equals(row.get("status", String.class)))
+            throw new EnrollmentConflict("ENROLLMENT_NOT_ACTIVE");
+          var original =
+              row.get("price", BigDecimal.class).add(row.get("service_fee", BigDecimal.class));
+          var outstanding = netAmount(id);
+          if (amount.compareTo(outstanding) > 0)
+            throw new EnrollmentConflict("DISCOUNT_EXCEED_RECEIVABLE");
+          sql.execute(
+              "insert into enrollment.discount(tenant_id,enrollment_id,amount,reason,created_by)"
+                  + " values (?,?,?,?,?)",
+              scope.tenantId(),
+              id,
+              amount,
+              reason,
+              scope.accountId());
+          sql.execute(
+              "insert into enrollment.charge(tenant_id,enrollment_id,kind,amount,reason)"
+                  + " values (?,?,'ADJUSTMENT',?,'优惠减免')",
+              scope.tenantId(),
+              id,
+              amount.negate());
+          audit(scope, "DISCOUNT_ADDED", id, schoolId, amount.toPlainString());
+          return view(
+              requireEnrollment(verified, id),
+              students.require(row.get("student_id", UUID.class)).name());
+        });
   }
 
   // ---------------------------------------------------------------- 内部
