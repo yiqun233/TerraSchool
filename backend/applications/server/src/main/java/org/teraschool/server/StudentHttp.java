@@ -51,4 +51,13 @@ class StudentHttp {
   StudentProfile changeStatus(@PathVariable UUID id, @RequestBody ChangeStudentStatus command) {
     return commands.changeStatus(id, command);
   }
+
+  /** 导出学员 CSV：字段按字段级授权脱敏，导出写审计。 */
+  @GetMapping(value = "/api/archive/students/export", produces = "text/csv; charset=UTF-8")
+  org.springframework.http.ResponseEntity<String> export(@RequestParam UUID schoolId) {
+    var csv = queries.exportCsv(schoolId);
+    return org.springframework.http.ResponseEntity.ok()
+        .header("Content-Disposition", "attachment; filename=\"students-" + schoolId + ".csv\"")
+        .body(csv);
+  }
 }

@@ -45,6 +45,8 @@ export function StudentDirectory({
   onUnauthorized: () => void;
 }) {
   const [page, setPage] = useState(0);
+  const [exporting, setExporting] = useState(false);
+  // 导出按学校范围进行：取当前账号第一所可读学校。
   const [search, setSearch] = useState("");
   const [keyword, setKeyword] = useState("");
   const [detailId, setDetailId] = useState<string | null>(null);
@@ -66,6 +68,8 @@ export function StudentDirectory({
       return data;
     },
   });
+  // 导出按学校范围进行：取当前账号第一所可读学校。
+  const exportSchool = capabilities.data?.maintainableSchools?.[0]?.id;
   const students = useQuery({
     queryKey: ["archive-students", page, keyword],
     enabled: !!capabilities.data?.canRead,
@@ -89,6 +93,33 @@ export function StudentDirectory({
   if (capabilities.isPending) return <p role="status">正在读取学员档案权限…</p>;
   if (!capabilities.data?.canRead)
     return <Alert title="账号当前无学员档案读取权限" type="error" />;
+
+  /** 导出走浏览器下载，服务端已按字段权限脱敏并写审计。 */
+  async function exportCsv() {
+    if (!exportSchool) return;
+    setExporting(true);
+    try {
+      const response = await fetch(
+        `/api/archive/students/export?schoolId=${encodeURIComponent(exportSchool)}`,
+        { credentials: "include" },
+      );
+      if (!response.ok) {
+        setError("导出失败，请核对学员读取权限。");
+        return;
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `students-${exportSchool}.csv`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      setError("导出失败，请稍后重试。");
+    } finally {
+      setExporting(false);
+    }
+  }
 
   return (
     <>
@@ -121,8 +152,15 @@ export function StudentDirectory({
         >
           刷新
         </Button>
+        <Button
+          onClick={() => void exportCsv()}
+          loading={exporting}
+          disabled={!exportSchool || exporting}
+        >
+          导出 CSV
+        </Button>
         <Typography.Text type="secondary">
-          敏感字段按当前权限脱敏显示
+          敏感字段按当前权限脱敏显示；导出同样按字段权限脱敏
         </Typography.Text>
       </Space>
       {error ? <Alert title={error} type="error" showIcon /> : null}

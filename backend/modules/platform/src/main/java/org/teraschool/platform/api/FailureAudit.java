@@ -71,7 +71,8 @@ public interface FailureAudit {
     ENROLLMENT_DISCOUNT,
     MIGRATION_STAGE,
     MIGRATION_DRY_RUN,
-    MIGRATION_COMMIT
+    MIGRATION_COMMIT,
+    STUDENT_EXPORT
   }
 
   enum Result {

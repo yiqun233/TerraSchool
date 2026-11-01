@@ -804,6 +804,75 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
     return String.join(",", Collections.nCopies(size, "?"));
   }
 
+  @Override
+  public String exportCsv(UUID schoolId) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      var scope = actors.requireResourceScope("STUDENT");
+      if (schoolId == null || !scope.readableSchoolIds().contains(schoolId))
+        throw new AccessDeniedException("无该学校的学员读取权限");
+      return tx.execute(
+          scope.tenantId(),
+          () -> {
+            // 导出与详情用同一套字段授权：没有字段权限的列一律输出脱敏值。
+            var granted = fieldAccess.readableFields(scope.accountId(), schoolId);
+            var denied = fieldAccess.deniedFields(scope.accountId(), schoolId);
+            var full = scope.sensitiveSchoolIds().contains(schoolId);
+            var phoneOk =
+                (full || granted.contains("STUDENT_PHONE")) && !denied.contains("STUDENT_PHONE");
+            var certOk =
+                (full || granted.contains("STUDENT_CERT")) && !denied.contains("STUDENT_CERT");
+            var birthdayOk =
+                (full || granted.contains("STUDENT_BIRTHDAY"))
+                    && !denied.contains("STUDENT_BIRTHDAY");
+            var emailOk =
+                (full || granted.contains("STUDENT_EMAIL")) && !denied.contains("STUDENT_EMAIL");
+            var rows =
+                sql.fetch(
+                    "select student_no,name,sex,birthday,cert_code,phone,email from archive.student"
+                        + " where school_id=? order by student_no limit 5000",
+                    schoolId);
+            var csv = new StringBuilder();
+            csv.append("学员号,姓名,性别,出生日期,证件号,电话,邮箱").append(NEWLINE);
+            for (var row : rows) {
+              var birthday = row.get("birthday", LocalDate.class);
+              csv.append(cell(row.get("student_no", String.class)))
+                  .append(',')
+                  .append(cell(row.get("name", String.class)))
+                  .append(',')
+                  .append(cell(row.get("sex", String.class)))
+                  .append(',')
+                  .append(
+                      cell(
+                          masked(
+                              birthdayOk,
+                              Masking::birthday,
+                              birthday == null ? null : birthday.toString())))
+                  .append(',')
+                  .append(
+                      cell(
+                          masked(certOk, Masking::certificate, row.get("cert_code", String.class))))
+                  .append(',')
+                  .append(cell(masked(phoneOk, Masking::phone, row.get("phone", String.class))))
+                  .append(',')
+                  .append(cell(masked(emailOk, Masking::email, row.get("email", String.class))))
+                  .append(NEWLINE);
+            }
+            audit(scope, "STUDENT_EXPORTED", schoolId, schoolId, "rows=" + rows.size());
+            return csv.toString();
+          });
+    }
+  }
+
+  private static final char NEWLINE = (char) 10;
+
+  private String cell(String value) {
+    if (value == null) return "";
+    var text = value.replace("\"", "\"\"");
+    return text.indexOf(',') >= 0 || text.indexOf('"') >= 0 || text.indexOf(NEWLINE) >= 0
+        ? "\"" + text + "\""
+        : text;
+  }
+
   private void audit(ResourceScope scope, String action, UUID student, UUID school, String fields) {
     sql.execute(
         "insert into audit.student_event(tenant_id,actor_id,action,resource_id,school_id,changed_fields,trace_id)"
