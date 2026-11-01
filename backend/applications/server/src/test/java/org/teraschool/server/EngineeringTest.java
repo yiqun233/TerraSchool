@@ -46,6 +46,11 @@ class EngineeringTest {
           () -> System.getenv("TS_" + kind.toUpperCase() + "_PASSWORD"));
     }
     r.add("server.servlet.session.cookie.secure", () -> false);
+    // 每个测试类有独立上下文与连接池；连接池总量会随类数增长，
+    // 限制单池大小并允许空闲回收，避免临时库连接数被打满（表现为 Failed to obtain JDBC Connection）。
+    // 每个测试类有独立上下文与连接池：每池 2 条（并发用例需要第二条连接等锁），
+    // 配合临时库放宽的 max_connections，避免缓存上下文把连接数打满。
+    r.add("teraschool.database.pool-size", () -> "2");
   }
 
   static Connection admin() throws Exception {

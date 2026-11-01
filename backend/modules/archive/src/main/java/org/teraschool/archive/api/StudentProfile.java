@@ -21,8 +21,10 @@ public record StudentProfile(
     String status,
     long version,
     List<StudentContact> contacts,
-    boolean sensitiveFieldsMasked) {
+    boolean sensitiveFieldsMasked,
+    List<String> maskedFields) {
   public StudentProfile {
     contacts = List.copyOf(contacts);
+    maskedFields = maskedFields == null ? List.of() : List.copyOf(maskedFields);
   }
 }

@@ -40,7 +40,7 @@ try:
  context=capture([docker,'context','show']);env['DOCKER_HOST']=capture([docker,'context','inspect',context,'--format','{{.Endpoints.docker.Host}}'])
  image='postgres@sha256:979bccfde35445db618c65107d27d08c6c21339d8dc3ad4c830c6633947be0e4';env['TS_POSTGRES_IMAGE']=image
  env['POSTGRES_PASSWORD']=env['TS_ADMIN_PASSWORD'];env['POSTGRES_DB']='teraschool_test'
- container=capture([docker,'run','-d','--rm','--name','teraschool-engineering-'+RUN,'--label','org.teraschool.engineering='+RUN,'-e','POSTGRES_PASSWORD','-e','POSTGRES_DB','-p','127.0.0.1::5432',image])
+ container=capture([docker,'run','-d','--rm','--name','teraschool-engineering-'+RUN,'--label','org.teraschool.engineering='+RUN,'-e','POSTGRES_PASSWORD','-e','POSTGRES_DB','-p','127.0.0.1::5432',image,'-c','max_connections=300'])
  details=json.loads(capture([docker,'inspect',container]))[0];port=details['NetworkSettings']['Ports']['5432/tcp'][0]['HostPort'];env['TS_JDBC_URL']='jdbc:postgresql://127.0.0.1:'+port+'/teraschool_test'
  for attempt in range(40):
   try:capture([docker,'exec',container,'pg_isready','-U','postgres']);break

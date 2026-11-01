@@ -473,7 +473,7 @@ export function StudentDetail({
               type="info"
               showIcon
               title="当前显示脱敏值"
-              description="完整证件号、电话与生日需要额外的敏感字段权限。"
+              description="字段级权限决定每个敏感字段是否可见；下方标「无字段权限」的项需要单独授权。"
             />
           ) : null}
           <Descriptions column={1} size="small" bordered>
@@ -488,15 +488,27 @@ export function StudentDetail({
             </Descriptions.Item>
             <Descriptions.Item label="出生日期">
               {detail.data.birthday ?? "—"}
+              {detail.data.maskedFields?.includes("STUDENT_BIRTHDAY") ? (
+                <Tag>无字段权限</Tag>
+              ) : null}
             </Descriptions.Item>
             <Descriptions.Item label="证件号">
               {detail.data.certCode ?? "—"}
+              {detail.data.maskedFields?.includes("STUDENT_CERT") ? (
+                <Tag>无字段权限</Tag>
+              ) : null}
             </Descriptions.Item>
             <Descriptions.Item label="电话">
               {detail.data.phone ?? "—"}
+              {detail.data.maskedFields?.includes("STUDENT_PHONE") ? (
+                <Tag>无字段权限</Tag>
+              ) : null}
             </Descriptions.Item>
             <Descriptions.Item label="邮箱">
               {detail.data.email ?? "—"}
+              {detail.data.maskedFields?.includes("STUDENT_EMAIL") ? (
+                <Tag>无字段权限</Tag>
+              ) : null}
             </Descriptions.Item>
             <Descriptions.Item label="归属学校">
               {detail.data.schoolName ?? "—"}

@@ -23,7 +23,7 @@ class DataSources {
     ds.setJdbcUrl(env.getRequiredProperty("teraschool.database.url"));
     ds.setUsername(env.getRequiredProperty("teraschool.database." + kind + ".username"));
     ds.setPassword(env.getRequiredProperty("teraschool.database." + kind + ".password"));
-    ds.setMaximumPoolSize(4);
+    ds.setMaximumPoolSize(env.getProperty("teraschool.database.pool-size", Integer.class, 4));
     ds.setMinimumIdle(0);
     return ds;
   }
@@ -42,7 +42,8 @@ class DataSources {
   @Bean
   HikariDataSource auditDataSource() {
     var source = pool("audit");
-    source.setMaximumPoolSize(2);
+    source.setMaximumPoolSize(
+        Math.min(2, env.getProperty("teraschool.database.pool-size", Integer.class, 4)));
     source.setConnectionTimeout(2000);
     return source;
   }

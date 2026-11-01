@@ -45,12 +45,19 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
   private final DSLContext sql;
   private final SchoolAccess schools;
 
+  private final org.teraschool.identity.api.FieldAccess fieldAccess;
+
   public StudentDirectory(
-      CurrentActor actors, TenantTransactions tx, DSLContext sql, SchoolAccess schools) {
+      CurrentActor actors,
+      TenantTransactions tx,
+      DSLContext sql,
+      SchoolAccess schools,
+      org.teraschool.identity.api.FieldAccess fieldAccess) {
     this.actors = actors;
     this.tx = tx;
     this.sql = sql;
     this.schools = schools;
+    this.fieldAccess = fieldAccess;
   }
 
   // ---------------------------------------------------------------- 查询
@@ -540,6 +547,22 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
     var schoolId = row.get("school_id", UUID.class);
     var full = scope.sensitiveSchoolIds().contains(schoolId);
     if (full) audit(scope, "STUDENT_SENSITIVE_READ", studentId, schoolId, "");
+    // 字段级授权：功能动作之外再按字段判断；STUDENT_SENSITIVE_READ 视为拥有全部字段。
+    var granted = fieldAccess.readableFields(scope.accountId(), schoolId);
+    var denied = fieldAccess.deniedFields(scope.accountId(), schoolId);
+    var phoneOk = (full || granted.contains("STUDENT_PHONE")) && !denied.contains("STUDENT_PHONE");
+    var certOk = (full || granted.contains("STUDENT_CERT")) && !denied.contains("STUDENT_CERT");
+    var birthdayOk =
+        (full || granted.contains("STUDENT_BIRTHDAY")) && !denied.contains("STUDENT_BIRTHDAY");
+    var emailOk = (full || granted.contains("STUDENT_EMAIL")) && !denied.contains("STUDENT_EMAIL");
+    var contactPhoneOk =
+        (full || granted.contains("CONTACT_PHONE")) && !denied.contains("CONTACT_PHONE");
+    var maskedFields = new java.util.ArrayList<String>();
+    if (!phoneOk) maskedFields.add("STUDENT_PHONE");
+    if (!certOk) maskedFields.add("STUDENT_CERT");
+    if (!birthdayOk) maskedFields.add("STUDENT_BIRTHDAY");
+    if (!emailOk) maskedFields.add("STUDENT_EMAIL");
+    if (!contactPhoneOk) maskedFields.add("CONTACT_PHONE");
     var contacts =
         sql.fetch(
                 "select c.id,c.name,sc.relation,sc.is_primary,c.phone,c.phone_alt,c.email,c.wechat"
@@ -554,9 +577,9 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
                         row2.get("name", String.class),
                         row2.get("relation", String.class),
                         row2.get("is_primary", Boolean.class),
-                        masked(full, Masking::phone, row2.get("phone", String.class)),
-                        masked(full, Masking::phone, row2.get("phone_alt", String.class)),
-                        masked(full, Masking::email, row2.get("email", String.class)),
+                        masked(contactPhoneOk, Masking::phone, row2.get("phone", String.class)),
+                        masked(contactPhoneOk, Masking::phone, row2.get("phone_alt", String.class)),
+                        masked(emailOk, Masking::email, row2.get("email", String.class)),
                         row2.get("wechat", String.class)));
     var names = schools.names(List.of(schoolId));
     var birthday = row.get("birthday", LocalDate.class);
@@ -566,18 +589,19 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
         row.get("name", String.class),
         row.get("name_english", String.class),
         row.get("sex", String.class),
-        masked(full, Masking::birthday, birthday == null ? null : birthday.toString()),
+        masked(birthdayOk, Masking::birthday, birthday == null ? null : birthday.toString()),
         row.get("cert_type", String.class),
-        masked(full, Masking::certificate, row.get("cert_code", String.class)),
-        masked(full, Masking::phone, row.get("phone", String.class)),
-        masked(full, Masking::email, row.get("email", String.class)),
+        masked(certOk, Masking::certificate, row.get("cert_code", String.class)),
+        masked(phoneOk, Masking::phone, row.get("phone", String.class)),
+        masked(emailOk, Masking::email, row.get("email", String.class)),
         schoolId,
         names.get(schoolId),
         row.get("campus_id", UUID.class),
         row.get("status", String.class),
         row.get("version", Long.class),
         contacts,
-        !full);
+        !full,
+        maskedFields);
   }
 
   private String masked(boolean full, java.util.function.UnaryOperator<String> mask, String value) {
