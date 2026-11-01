@@ -158,7 +158,8 @@ def available(port):
         try:
             listener.bind(('127.0.0.1', port))
         except OSError as error:
-            raise RuntimeError('端口已被占用：' + str(port) + '，请先处理冲突。') from error
+            raise RuntimeError('端口 ' + str(port) + ' 已被占用：可能上一次启动的进程没有退出。'
+                               '请先运行 stop-local.cmd；仍被占用时，在任务管理器结束残留的 java / node 进程后重试。') from error
 
 
 def wsl_args(program, *arguments):
@@ -344,6 +345,18 @@ def control(action):
         return None
 
 
+def open_browser(url):
+    """启动成功后打开页面；打不开浏览器不影响服务本身。"""
+    try:
+        if os.name == 'nt':
+            os.startfile(url)
+        else:
+            import webbrowser
+            webbrowser.open(url)
+    except Exception:
+        print('无法自动打开浏览器，请手动访问：' + url, flush=True)
+
+
 def wait_http(url, processes):
     for _ in range(120):
         if any(p.poll() is not None for p in processes):
@@ -423,6 +436,8 @@ def start(config):
         threading.Thread(target=server.serve_forever, daemon=True).start()
         serving = True
         print('启动完成：' + urls()['frontend'], flush=True)
+        if not getattr(start, 'no_open', False):
+            open_browser(urls()['frontend'])
         print('后端：' + urls()['backend'] + '；数据库：' + urls()['database'], flush=True)
         print('账号密码：' + str(LOCAL / 'accounts.txt'), flush=True)
         print('保持此终端运行；Ctrl+C或stop-local.cmd停止前后端，WSL数据库继续运行。', flush=True)
@@ -522,6 +537,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=['prepare', 'start', 'stop', 'status', 'check'])
     parser.add_argument('--write', action='store_true', help='check时实际创建一条合成校区并验证重试')
+    parser.add_argument('--no-open', action='store_true', help='启动成功后不自动打开浏览器')
     args = parser.parse_args()
     if args.action == 'status':
         print('运行中' if control('status') else '前后端未由本工具运行')
@@ -539,6 +555,17 @@ def main():
                 raise RuntimeError('停止尚未完成，请查看启动终端。')
         with operation_lock(wait=10 if was_running else 0):
             pass
+        lingering = []
+        for port in (SETTINGS['backend_port'], SETTINGS['frontend_port']):
+            with socket.socket() as listener:
+                try:
+                    listener.bind(('127.0.0.1', port))
+                except OSError:
+                    lingering.append(port)
+        if lingering:
+            print('警告：端口 ' + '、'.join(str(port) for port in lingering) +
+                  ' 仍有进程监听，说明是上次异常退出留下的服务。'
+                  '请在任务管理器结束残留的 java / node 进程后再启动。')
         print('前后端已停止，WSL PostgreSQL服务保持运行，开发数据保留。')
         return
     if args.action == 'check':
@@ -548,13 +575,19 @@ def main():
         return
     if control('status'):
         print('前后端已经运行：' + urls()['frontend'])
-        return
+        print('如果浏览器没有自动打开，请手动访问上面的地址。')
+        print('需要重启时，先运行 stop-local.cmd 再运行本脚本。')
+        if not args.no_open:
+            open_browser(urls()['frontend'])
+        # 专用退出码：批处理据此区分“已在运行”和“启动失败”，避免窗口一闪而过。
+        sys.exit(3)
     private_directory()
     with operation_lock():
         config = configuration()
         if args.action == 'prepare':
             prepare(config)
         else:
+            start.no_open = args.no_open
             start(config)
 
 
@@ -566,4 +599,5 @@ if __name__ == '__main__':
     except Exception as error:
         config = json.loads(STATE.read_text(encoding='utf-8')) if STATE.exists() else None
         print('错误：' + redact(str(error), config), file=sys.stderr)
-        sys.exit(1)
+        # 2 = 启动/准备失败；与“服务已结束”(0) 和“已在运行”(3) 区分开。
+        sys.exit(2)
