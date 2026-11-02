@@ -9,6 +9,9 @@ public interface FundsCommands {
 
   Allocation allocate(AllocateReceipt command);
 
+  /** 记一条期初余额（迁移用）；不产生实收，也不影响未收金额。 */
+  StudentBalance openBalance(OpenBalance command);
+
   /** 释放分配只把状态从 ACTIVE 迁到 RELEASED，不需要额外版本。 */
   Allocation releaseAllocation(UUID id);
 

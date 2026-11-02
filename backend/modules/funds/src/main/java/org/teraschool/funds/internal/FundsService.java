@@ -73,6 +73,69 @@ public class FundsService implements FundsQueries, FundsCommands {
     this.periods = periods;
   }
 
+  @Override
+  public StudentBalance openBalance(OpenBalance command) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      return openBalanceWithTrace(command);
+    }
+  }
+
+  /**
+   * 记一条期初余额。
+   *
+   * <p>只写 `OPENING` 账户分录：不建收款、不参与分配来源，因此不影响"未收金额"。 金额为负表示历史欠款（旧库余额可能为负），会直接减少可用余额。
+   */
+  private StudentBalance openBalanceWithTrace(OpenBalance command) {
+    if (command == null
+        || command.requestId() == null
+        || command.schoolId() == null
+        || command.studentId() == null) throw new IllegalArgumentException("需要请求身份、学校与学员");
+    var amount = new BigDecimal(command.amount() == null ? "0" : command.amount().strip());
+    if (amount.signum() == 0 || amount.scale() > 2)
+      throw new IllegalArgumentException("期初金额必须非零且最多两位小数");
+    var occurredOn = businessDate(command.occurredOn(), "期初日期");
+    var reason = text(command.reason(), 200, "期初原因");
+    var scope = actors.requireResourceScope("FUNDS");
+    return tx.execute(
+        scope.tenantId(),
+        () -> {
+          schools.lockTenant(scope.tenantId());
+          var verified = actors.requireResourceScopeInTransaction("FUNDS");
+          var student = students.require(command.studentId());
+          if (!verified.readableSchoolIds().contains(command.schoolId()))
+            throw new AccessDeniedException("无该学校的资金权限");
+          if (!command.schoolId().equals(student.schoolId()))
+            throw new FundsConflict("STUDENT_NOT_IN_SCHOOL");
+          if (!schools.require(command.schoolId()).active())
+            throw new AccessDeniedException("学校已停用，不能记期初余额");
+          periods.requireOpen(command.schoolId(), occurredOn);
+          var fingerprint =
+              fingerprint(
+                  command.studentId().toString(), amount.toPlainString(), occurredOn.toString());
+          var previous = previousRequest(scope.reader(), command.requestId(), fingerprint);
+          // 幂等命中时 resource_id 是账户分录 id，余额仍按学员算。
+          if (previous != null) return balance(command.studentId());
+          var id = UUID.randomUUID();
+          sql.execute(
+              "insert into funds.account_entry(id,tenant_id,student_id,kind,amount,source_id)"
+                  + " values (?,?,?,'OPENING',?,?)",
+              id,
+              scope.tenantId(),
+              command.studentId(),
+              amount,
+              id);
+          rememberRequest(scope.reader(), command.requestId(), "OPENING", id, fingerprint);
+          audit(
+              scope.reader(),
+              "OPENING_POSTED",
+              id,
+              command.schoolId(),
+              amount,
+              reason == null ? "迁移期初" : reason);
+          return balance(command.studentId());
+        });
+  }
+
   // ---------------------------------------------------------------- 查询
 
   @Override

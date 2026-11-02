@@ -42,6 +42,12 @@ class FundsHttp {
     return queries.outstanding(enrollmentId);
   }
 
+  /** 期初余额（迁移用）：只写 OPENING 分录，不产生实收。 */
+  @PostMapping(value = "/api/funds/openings", consumes = "application/json")
+  StudentBalance openBalance(@RequestBody OpenBalance command) {
+    return commands.openBalance(command);
+  }
+
   /** 收款 CSV 导出：按学校与日期范围，导出写审计。 */
   @GetMapping(value = "/api/funds/receipts/export", produces = "text/csv; charset=UTF-8")
   org.springframework.http.ResponseEntity<String> exportReceipts(
