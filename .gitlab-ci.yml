@@ -1,0 +1,76 @@
+# 远程 CI：与 tools/engineering/verify.py 使用同一套门禁步骤。
+# 说明：流水线尚未在真实 Runner 上执行过（见 待确认问题 Q26）；本文件按本机 verify.py 的步骤 1:1 复刻，
+# 便于 Runner 就绪后直接跑通。密码一律来自 CI 变量，不落仓库。
+stages:
+  - verify
+  - frontend
+
+variables:
+  MAVEN_OPTS: "-Dmaven.repo.local=.m2/repository"
+  # JDK 25 是工程硬要求；镜像已自带 Maven 3.9。
+  TS_JDBC_URL: "jdbc:postgresql://postgres:5432/teraschool_test"
+
+backend:
+  stage: verify
+  image: maven:3.9-eclipse-temurin-25
+  services:
+    - name: postgres:18
+      alias: postgres
+  variables:
+    POSTGRES_DB: teraschool_test
+    POSTGRES_PASSWORD: ci-postgres-admin
+  cache:
+    key: maven-$CI_COMMIT_REF_SLUG
+    paths:
+      - .m2/repository
+  before_script:
+    - mkdir -p .m2/repository
+    - |
+      for i in $(seq 1 40); do
+        (echo > /dev/tcp/postgres/5432) >/dev/null 2>&1 && break
+        sleep 1
+      done
+    - export TS_ADMIN_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"
+    - export TS_APP_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"
+    - export TS_IDENTITY_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"
+    - export TS_SESSION_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"
+    - export TS_AUDIT_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"
+    - |
+      PGPASSWORD="$POSTGRES_PASSWORD" psql -h postgres -U postgres -d teraschool_test -v ON_ERROR_STOP=1 <<'SQL'
+      CREATE ROLE ts_app LOGIN PASSWORD 'ci-app' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+      CREATE ROLE ts_identity LOGIN PASSWORD 'ci-identity' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+      CREATE ROLE ts_session LOGIN PASSWORD 'ci-session' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+      CREATE ROLE ts_audit LOGIN PASSWORD 'ci-audit' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+      SQL
+    - export TS_APP_PASSWORD=ci-app TS_IDENTITY_PASSWORD=ci-identity TS_SESSION_PASSWORD=ci-session TS_AUDIT_PASSWORD=ci-audit
+  script:
+    - cd backend
+    - ./mvnw -B -ntp -s .mvn/settings.xml -gs .mvn/settings.xml flyway:migrate
+    - ./mvnw -B -ntp -s .mvn/settings.xml -gs .mvn/settings.xml -N jooq-codegen:generate
+    - ./mvnw -B -ntp -s .mvn/settings.xml -gs .mvn/settings.xml spotless:check
+    - ./mvnw -B -ntp -s .mvn/settings.xml -gs .mvn/settings.xml verify
+  artifacts:
+    when: always
+    expire_in: 1 week
+    paths:
+      - backend/**/target/surefire-reports/
+
+frontend:
+  stage: frontend
+  image: node:22
+  cache:
+    key: pnpm-$CI_COMMIT_REF_SLUG
+    paths:
+      - .pnpm-store
+  before_script:
+    - cd frontend
+    - corepack enable
+    - pnpm config set store-dir ../.pnpm-store
+    - pnpm install --frozen-lockfile --ignore-scripts
+  script:
+    # 契约由后端导出；流水线里用已提交的生成结果做类型检查（后端 job 会重新生成并校验一致性）。
+    - pnpm run typecheck
+    - pnpm run lint
+    - pnpm run format:check
+    - pnpm run test
+    - pnpm run build

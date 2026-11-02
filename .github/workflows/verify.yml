@@ -1,0 +1,82 @@
+name: verify
+
+# 与 tools/engineering/verify.py 同一套门禁；GitHub Actions 版（与 .gitlab-ci.yml 等价）。
+# 说明：尚未在远程执行过（见 待确认问题 Q26）。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: teraschool_test
+          POSTGRES_PASSWORD: ci-postgres-admin
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      TS_JDBC_URL: jdbc:postgresql://127.0.0.1:5432/teraschool_test
+      TS_ADMIN_PASSWORD: ci-admin
+      TS_APP_PASSWORD: ci-app
+      TS_IDENTITY_PASSWORD: ci-identity
+      TS_SESSION_PASSWORD: ci-session
+      TS_AUDIT_PASSWORD: ci-audit
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      - name: create roles
+        run: |
+          PGPASSWORD=ci-postgres-admin psql -h 127.0.0.1 -U postgres -d teraschool_test -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE ts_app LOGIN PASSWORD 'ci-app' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+          CREATE ROLE ts_identity LOGIN PASSWORD 'ci-identity' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+          CREATE ROLE ts_session LOGIN PASSWORD 'ci-session' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+          CREATE ROLE ts_audit LOGIN PASSWORD 'ci-audit' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+          SQL
+      - name: migrate, generate, verify
+        working-directory: backend
+        run: |
+          ./mvnw -B -ntp -s .mvn/settings.xml -gs .mvn/settings.xml flyway:migrate
+          ./mvnw -B -ntp -s .mvn/settings.xml -gs .mvn/settings.xml -N jooq-codegen:generate
+          ./mvnw -B -ntp -s .mvn/settings.xml -gs .mvn/settings.xml spotless:check
+          ./mvnw -B -ntp -s .mvn/settings.xml -gs .mvn/settings.xml verify
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: surefire-reports
+          path: backend/**/target/surefire-reports/
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: pnpm run typecheck
+      - run: pnpm run lint
+      - run: pnpm run format:check
+      - run: pnpm run test
+      - run: pnpm run build
