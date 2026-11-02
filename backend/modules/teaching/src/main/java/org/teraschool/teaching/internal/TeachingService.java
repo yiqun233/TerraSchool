@@ -200,8 +200,9 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
               sql.fetch(
                       "select c.id,c.enrollment_id,c.lesson_id,l.lesson_date,c.hours,c.amount,"
                           + "c.settlement_mode,c.price_snapshot,c.hours_snapshot"
-                          + " from teaching.consumption c join teaching.lesson l on l.id=c.lesson_id"
-                          + " where c.enrollment_id=? order by l.lesson_date, c.id",
+                          // 期初消耗没有课次（lesson_id 为空），必须用左连接，否则会被过滤掉。
+                          + " from teaching.consumption c left join teaching.lesson l on l.id=c.lesson_id"
+                          + " where c.enrollment_id=? order by l.lesson_date nulls first, c.id",
                       enrollmentId)
                   .map(
                       row ->
@@ -580,7 +581,8 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
                 "insert into teaching.consumption(tenant_id,enrollment_id,lesson_id,hours,amount,"
                     + "settlement_mode,price_snapshot,hours_snapshot,curriculum_id)"
                     + " values (?,?,?,?,?,?,?,?,?)"
-                    + " on conflict (enrollment_id,lesson_id) do nothing",
+                    // 唯一约束改成了"仅课次消费"的部分索引，冲突推断需要带同样的谓词。
+                    + " on conflict (enrollment_id,lesson_id) where source='LESSON' do nothing",
                 close.tenantId(),
                 enrollmentId,
                 id,
@@ -826,6 +828,53 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
         : text;
   }
 
+  @Override
+  public void openingConsumption(UUID enrollmentId, OpeningConsumption command) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      var scope = actors.requireAction("TEACHING_MAINTAIN");
+      tx.execute(
+          scope.tenantId(),
+          () -> {
+            schools.lockTenant(scope.tenantId());
+            var verified = actors.requireActionInTransaction("TEACHING_MAINTAIN");
+            if (enrollmentId == null || command == null)
+              throw new IllegalArgumentException("需要报名与期初消耗");
+            var enrollment = enrollments.require(enrollmentId);
+            if (!verified.schools().contains(enrollment.schoolId()))
+              throw new AccessDeniedException("无该学校的课次维护权限");
+            var hours = positiveHours(command.hours(), "期初消耗课时");
+            // 旧库可能只有课时没有金额：允许 0，但不接受负数。
+            var amount = nonNegativeAmount(command.amount());
+            var existing =
+                sql.fetchOne(
+                    "select id from teaching.consumption where enrollment_id=? and source='OPENING'",
+                    enrollmentId);
+            if (existing != null) throw new TeachingConflict("OPENING_ALREADY_RECORDED");
+            var consumed = consumedHours(enrollmentId);
+            if (consumed.add(hours).compareTo(enrollment.hours()) > 0)
+              throw new TeachingConflict("HOURS_EXCEED_PURCHASED");
+            sql.execute(
+                "insert into teaching.consumption(tenant_id,enrollment_id,lesson_id,hours,amount,"
+                    + "settlement_mode,price_snapshot,hours_snapshot,source)"
+                    + " values (?,?,null,?,?,?,?,?,'OPENING')",
+                scope.tenantId(),
+                enrollmentId,
+                hours,
+                amount,
+                enrollment.settlementMode(),
+                enrollment.price(),
+                enrollment.hours());
+            audit(
+                verified,
+                "OPENING_CONSUMPTION_POSTED",
+                enrollmentId,
+                enrollment.schoolId(),
+                hours.toPlainString() + "/" + amount.toPlainString());
+            return null;
+          });
+    }
+  }
+
   private LessonView lessonView(Record row) {
     return new LessonView(
         row.get("id", UUID.class),
@@ -850,6 +899,15 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
     if (text.length() > max || text.codePoints().anyMatch(Character::isISOControl))
       throw new IllegalArgumentException(label + "超出长度或含控制字符");
     return text;
+  }
+
+  private BigDecimal nonNegativeAmount(String value) {
+    if (value == null || value.isBlank()) return BigDecimal.ZERO.setScale(2);
+    var text = value.strip();
+    if (!HOURS.matcher(text).matches()) throw new IllegalArgumentException("金额须为最多两位小数的十进制数");
+    var amount = new BigDecimal(text).setScale(2, RoundingMode.UNNECESSARY);
+    if (amount.signum() < 0) throw new IllegalArgumentException("金额不能为负");
+    return amount;
   }
 
   private BigDecimal positiveHours(String value, String label) {

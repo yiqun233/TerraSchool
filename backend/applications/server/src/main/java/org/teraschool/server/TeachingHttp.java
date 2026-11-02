@@ -53,6 +53,15 @@ class TeachingHttp {
     return queries.reconciliation(id);
   }
 
+  /** 期初已消耗（迁移用）：无课次，计入已消耗课时与金额。 */
+  @PostMapping(
+      value = "/api/teaching/enrollments/{id}/opening-consumption",
+      consumes = "application/json")
+  @ResponseStatus(org.springframework.http.HttpStatus.NO_CONTENT)
+  void openingConsumption(@PathVariable UUID id, @RequestBody OpeningConsumption command) {
+    commands.openingConsumption(id, command);
+  }
+
   /** 课次 CSV 导出：按学校与日期范围，导出写审计。 */
   @GetMapping(value = "/api/teaching/lessons/export", produces = "text/csv; charset=UTF-8")
   org.springframework.http.ResponseEntity<String> exportLessons(

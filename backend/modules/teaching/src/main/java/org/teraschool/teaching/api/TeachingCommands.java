@@ -15,4 +15,7 @@ public interface TeachingCommands {
 
   /** 关闭课次并固化消费；需要单独权限。 */
   LessonView closeLesson(UUID id, LessonVersion command);
+
+  /** 记一条期初已消耗（迁移用）：无课次，计入已消耗课时与金额。 */
+  void openingConsumption(UUID enrollmentId, OpeningConsumption command);
 }
