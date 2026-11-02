@@ -17,6 +17,7 @@ import type { components } from "../../shared/generated/api";
 type MigrationReport = components["schemas"]["MigrationReport"];
 type MigrationIssue = components["schemas"]["MigrationIssue"];
 type OpeningReport = components["schemas"]["Report"];
+type Reconciliation = components["schemas"]["OpeningReconciliation"];
 
 const STUDENT_HELP =
   "每行：旧主键,学员号,姓名,性别(MALE/FEMALE/UNKNOWN),生日,证件号,电话,联系人,联系人电话";
@@ -54,6 +55,9 @@ export function MigrationConsole({
   const [batchId, setBatchId] = useState(() => `open-${Date.now()}`);
   const [dryRun, setDryRun] = useState(true);
   const [openingReport, setOpeningReport] = useState<OpeningReport | null>(
+    null,
+  );
+  const [reconciliation, setReconciliation] = useState<Reconciliation | null>(
     null,
   );
   const [error, setError] = useState("");
@@ -132,6 +136,37 @@ export function MigrationConsole({
       );
     } catch {
       setError("无法获取安全令牌或网络中断，请重试。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** 按批次对账：应有值 vs 系统当前实际值。 */
+  async function reconcile() {
+    if (!current) {
+      setError("请先选择学校");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const { data, response } = await api.GET(
+        "/api/migration/openings/reconciliation",
+        {
+          params: { query: { schoolId: current!, batchId } },
+        },
+      );
+      if (response.status === 401) {
+        onUnauthorized();
+        return;
+      }
+      if (!response.ok || !data) {
+        setError("对账失败：请核对批次号与权限。");
+        return;
+      }
+      setReconciliation(data);
+    } catch {
+      setError("对账请求失败，请重试。");
     } finally {
       setBusy(false);
     }
@@ -290,6 +325,13 @@ export function MigrationConsole({
         >
           导入期初
         </Button>
+        <Button
+          style={{ marginLeft: 8, marginTop: 8 }}
+          onClick={() => void reconcile()}
+          loading={busy}
+        >
+          按批次对账
+        </Button>
         {openingReport ? (
           <Table
             style={{ marginTop: 8 }}
@@ -307,6 +349,44 @@ export function MigrationConsole({
           />
         ) : null}
       </Card>
+      {reconciliation ? (
+        <Card
+          size="small"
+          title={`对账结果（批次 ${reconciliation.batchId}）`}
+          style={{ marginTop: 12 }}
+        >
+          <Space wrap>
+            <span>
+              行数 {reconciliation.rows}，对上 {reconciliation.matched}，差异{" "}
+              {reconciliation.mismatched}
+            </span>
+            <span>
+              金额：应有 {reconciliation.expectedAmount} / 实际{" "}
+              {reconciliation.actualAmount}
+            </span>
+            <span>
+              课时：应有 {reconciliation.expectedHours} / 实际{" "}
+              {reconciliation.actualHours}
+            </span>
+          </Space>
+          <Table
+            rowKey={(row: { studentNo?: string }) => row.studentNo ?? ""}
+            size="small"
+            style={{ marginTop: 8 }}
+            dataSource={reconciliation.details ?? []}
+            pagination={false}
+            columns={[
+              { title: "学员号", dataIndex: "studentNo" },
+              { title: "应有金额", dataIndex: "expectedAmount" },
+              { title: "实际金额", dataIndex: "actualAmount" },
+              { title: "金额差", dataIndex: "amountDiff" },
+              { title: "应有课时", dataIndex: "expectedHours" },
+              { title: "实际课时", dataIndex: "actualHours" },
+              { title: "结果", dataIndex: "status" },
+            ]}
+          />
+        </Card>
+      ) : null}
       {report ? (
         <Card
           size="small"

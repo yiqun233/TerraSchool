@@ -30,6 +30,7 @@ class OpeningImportTest {
   @Autowired ProductCommands catalog;
   @Autowired EnrollmentCommands enrollments;
   @Autowired FundsQueries fundsQueries;
+  @Autowired org.teraschool.funds.api.FundsCommands funds;
   @Autowired TeachingQueries teachingQueries;
   @Autowired LegacyMigration migration;
 
@@ -222,5 +223,64 @@ class OpeningImportTest {
     assertThat(report.mode()).isEqualTo("DRY_RUN");
     assertThat(report.ok()).isEqualTo(1);
     assertThat(report.totalAmount()).isEqualTo("999.00");
+  }
+
+  @Test
+  void reconciliationMatchesAfterImport() throws Exception {
+    var no = studentWithEnrollment("005");
+    asActor(
+        OPS,
+        () ->
+            migration.importOpenings(
+                SCHOOL,
+                request("B5", false, new OpeningImport.Row(no, "700.00", "3.00", "300.00"))));
+    var report = asActor(OPS, () -> migration.reconcileOpenings(SCHOOL, "B5"));
+    assertThat(report.rows()).isEqualTo(1);
+    assertThat(report.matched()).isEqualTo(1);
+    assertThat(report.mismatched()).isZero();
+    assertThat(report.expectedAmount()).isEqualTo("700.00");
+    assertThat(report.actualAmount()).isEqualTo("700.00");
+    assertThat(report.expectedHours()).isEqualTo("3.00");
+  }
+
+  @Test
+  void reconciliationDetectsExtraOpening() throws Exception {
+    var no = studentWithEnrollment("006");
+    asActor(
+        OPS,
+        () ->
+            migration.importOpenings(
+                SCHOOL, request("B6", false, new OpeningImport.Row(no, "200.00", "0", "0"))));
+    // 额外再记一笔期初余额（模拟人工重复导入）：对账必须报出 150.00 的差额。
+    var studentId = studentIdOf(no);
+    asActor(
+        OPS,
+        () ->
+            funds.openBalance(
+                new OpenBalance(
+                    UUID.randomUUID(), SCHOOL, studentId, "150.00", "2026-02-10", "重复导入")));
+    var report = asActor(OPS, () -> migration.reconcileOpenings(SCHOOL, "B6"));
+    assertThat(report.matched()).isZero();
+    assertThat(report.mismatched()).isEqualTo(1);
+    assertThat(report.expectedAmount()).isEqualTo("200.00");
+    assertThat(report.actualAmount()).isEqualTo("350.00");
+    assertThat(report.details())
+        .singleElement()
+        .satisfies(
+            row -> {
+              assertThat(row.amountDiff()).isEqualTo("150.00");
+              assertThat(row.status()).isEqualTo("MISMATCHED");
+            });
+  }
+
+  private UUID studentIdOf(String studentNo) throws Exception {
+    try (var connection = EngineeringTest.admin();
+        var statement =
+            connection.prepareStatement("select id from archive.student where student_no=?")) {
+      statement.setString(1, studentNo);
+      var rows = statement.executeQuery();
+      rows.next();
+      return rows.getObject(1, UUID.class);
+    }
   }
 }

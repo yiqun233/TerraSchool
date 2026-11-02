@@ -284,6 +284,15 @@ public class LegacyMigrationService implements LegacyMigration {
         var studentNo = row.studentNo().strip();
         var studentId = studentIdOf(actor, schoolId, studentNo);
         if (studentId == null) {
+          recordOpeningRow(
+              actor,
+              schoolId,
+              request.batchId(),
+              studentNo,
+              blankToZero(row.amount()),
+              blankToZero(row.hours()),
+              "FAILED",
+              "新库没有该学员");
           results.add(new OpeningImport.RowResult(studentNo, "FAILED", "新库没有该学员"));
           failed++;
           continue;
@@ -336,9 +345,17 @@ public class LegacyMigrationService implements LegacyMigration {
               }
             }
           }
-          results.add(
-              new OpeningImport.RowResult(
-                  studentNo, notes.isEmpty() ? "SKIPPED" : "OK", String.join("；", notes)));
+          var status = notes.isEmpty() ? "SKIPPED" : "OK";
+          recordOpeningRow(
+              actor,
+              schoolId,
+              request.batchId(),
+              studentNo,
+              blankToZero(row.amount()),
+              blankToZero(row.hours()),
+              status,
+              String.join("；", notes));
+          results.add(new OpeningImport.RowResult(studentNo, status, String.join("；", notes)));
           if (notes.isEmpty()) skipped++;
           else ok++;
         } catch (RuntimeException error) {
@@ -409,6 +426,122 @@ public class LegacyMigrationService implements LegacyMigration {
                   studentId);
           return row == null ? null : row.get("id", UUID.class);
         });
+  }
+
+  private void recordOpeningRow(
+      Actor actor,
+      UUID schoolId,
+      String batchId,
+      String studentNo,
+      String expectedAmount,
+      String expectedHours,
+      String status,
+      String detail) {
+    tx.execute(
+        actor.tenantId(),
+        () -> {
+          sql.execute(
+              "insert into migration.opening_row(tenant_id,school_id,batch_id,student_no,"
+                  + "expected_amount,expected_hours,status,detail) values (?,?,?,?,?,?,?,?)"
+                  + " on conflict (tenant_id,batch_id,student_no) do update set"
+                  + " expected_amount=excluded.expected_amount,"
+                  + " expected_hours=excluded.expected_hours,status=excluded.status,"
+                  + " detail=excluded.detail",
+              actor.tenantId(),
+              schoolId,
+              batchId,
+              studentNo,
+              new BigDecimal(expectedAmount),
+              new BigDecimal(expectedHours),
+              status,
+              detail == null || detail.isBlank() ? null : text(detail, 300, "说明"));
+          return null;
+        });
+  }
+
+  @Override
+  public OpeningReconciliation reconcileOpenings(UUID schoolId, String batchId) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      var actor = actors.requireAction("MIGRATION_MANAGE");
+      if (batchId == null || batchId.isBlank()) throw new IllegalArgumentException("需要批次号");
+      return tx.execute(
+          actor.tenantId(),
+          () -> {
+            requireSchool(actor, schoolId);
+            var rows =
+                sql.fetch(
+                    "select student_no,expected_amount,expected_hours,status from migration.opening_row"
+                        + " where school_id=? and batch_id=? order by student_no",
+                    schoolId,
+                    batchId);
+            var details = new ArrayList<OpeningReconciliation.Row>();
+            var matched = 0;
+            var mismatched = 0;
+            var expectedAmount = BigDecimal.ZERO;
+            var actualAmount = BigDecimal.ZERO;
+            var expectedHours = BigDecimal.ZERO;
+            var actualHours = BigDecimal.ZERO;
+            for (var row : rows) {
+              var studentNo = row.get("student_no", String.class);
+              var expectedA = row.get("expected_amount", BigDecimal.class);
+              var expectedH = row.get("expected_hours", BigDecimal.class);
+              var student =
+                  sql.fetchOne(
+                      "select id from archive.student where school_id=? and student_no=?",
+                      schoolId,
+                      studentNo);
+              var actualA = BigDecimal.ZERO;
+              var actualH = BigDecimal.ZERO;
+              if (student != null) {
+                var studentId = student.get("id", UUID.class);
+                actualA =
+                    sql.fetchOne(
+                            "select coalesce(sum(amount),0) as total from funds.account_entry"
+                                + " where student_id=? and kind='OPENING'",
+                            studentId)
+                        .get("total", BigDecimal.class);
+                actualH =
+                    sql.fetchOne(
+                            "select coalesce(sum(hours),0) as total from teaching.consumption"
+                                + " where enrollment_id in (select id from enrollment.enrollment"
+                                + " where student_id=? and school_id=?) and source='OPENING'",
+                            studentId,
+                            schoolId)
+                        .get("total", BigDecimal.class);
+              }
+              var amountDiff = actualA.subtract(expectedA);
+              var hoursDiff = actualH.subtract(expectedH);
+              // 旧库该行本来就该是 0（例如只有金额）时，差额也应为 0 才算对上。
+              var matched_row = amountDiff.signum() == 0 && hoursDiff.signum() == 0;
+              if (matched_row) matched++;
+              else mismatched++;
+              expectedAmount = expectedAmount.add(expectedA);
+              actualAmount = actualAmount.add(actualA);
+              expectedHours = expectedHours.add(expectedH);
+              actualHours = actualHours.add(actualH);
+              details.add(
+                  new OpeningReconciliation.Row(
+                      studentNo,
+                      money(expectedA),
+                      hoursView(expectedH),
+                      money(actualA),
+                      hoursView(actualH),
+                      money(amountDiff),
+                      hoursView(hoursDiff),
+                      matched_row ? "MATCHED" : "MISMATCHED"));
+            }
+            return new OpeningReconciliation(
+                batchId,
+                details.size(),
+                matched,
+                mismatched,
+                money(expectedAmount),
+                money(actualAmount),
+                hoursView(expectedHours),
+                hoursView(actualHours),
+                details);
+          });
+    }
   }
 
   private String blankToZero(String value) {

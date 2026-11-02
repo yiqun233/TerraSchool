@@ -29,6 +29,13 @@ class MigrationHttp {
     return migration.importOpenings(schoolId, request);
   }
 
+  /** 期初对账：按批次对比应有值与系统当前实际值。 */
+  @GetMapping("/openings/reconciliation")
+  OpeningReconciliation reconcileOpenings(
+      @RequestParam UUID schoolId, @RequestParam String batchId) {
+    return migration.reconcileOpenings(schoolId, batchId);
+  }
+
   @GetMapping("/dry-run")
   MigrationReport dryRun(@RequestParam UUID schoolId) {
     return migration.dryRun(schoolId);
