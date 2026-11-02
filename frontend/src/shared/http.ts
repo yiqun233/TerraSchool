@@ -41,3 +41,20 @@ export async function logout() {
   if (!response.ok && response.status !== 401)
     throw new Error("退出失败，请重试");
 }
+
+/** 下载 CSV：走浏览器下载，服务端已按权限处理并写审计。 */
+export async function downloadCsv(
+  path: string,
+  filename: string,
+): Promise<boolean> {
+  const response = await fetch(path, { credentials: "include" });
+  if (!response.ok) return false;
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+  return true;
+}

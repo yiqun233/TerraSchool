@@ -17,7 +17,7 @@ import {
   Tag,
   Typography,
 } from "antd";
-import { api, csrf } from "../../shared/http";
+import { api, csrf, downloadCsv } from "../../shared/http";
 import { SchedulePlanner } from "./SchedulePlanner";
 import { SchedulingSettings } from "./SchedulingSettings";
 import type { components } from "../../shared/generated/api";
@@ -220,6 +220,17 @@ export function TeachingWorkspace({
               loading={lessons.isFetching}
             >
               刷新课次
+            </Button>
+            <Button
+              onClick={() =>
+                void downloadCsv(
+                  `/api/teaching/lessons/export?schoolId=${encodeURIComponent(current ?? "")}`,
+                  "lessons.csv",
+                )
+              }
+              disabled={!current}
+            >
+              导出课次
             </Button>
             <Typography.Text type="secondary">
               在班 {members.data?.length ?? 0} 人

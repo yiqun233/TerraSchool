@@ -48,6 +48,14 @@ class EnrollmentHttp {
     return commands.applyDiscount(id, command);
   }
 
+  /** 报名 CSV 导出：按学校，导出写审计。 */
+  @GetMapping(value = "/api/enrollment/enrollments/export", produces = "text/csv; charset=UTF-8")
+  org.springframework.http.ResponseEntity<String> export(@RequestParam UUID schoolId) {
+    return org.springframework.http.ResponseEntity.ok()
+        .header("Content-Disposition", "attachment; filename=\"enrollments.csv\"")
+        .body(queries.exportCsv(schoolId));
+  }
+
   /** 审核是独立动作与独立权限，不能靠修改接口设置状态。 */
   @PostMapping(value = "/api/enrollment/enrollments/{id}/approve", consumes = "application/json")
   EnrollmentView approve(@PathVariable UUID id, @RequestBody EnrollmentVersion command) {

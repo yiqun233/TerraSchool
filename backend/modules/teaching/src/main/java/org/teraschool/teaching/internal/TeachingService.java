@@ -755,6 +755,77 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
     return text;
   }
 
+  @Override
+  public String exportLessonsCsv(UUID schoolId, String from, String to) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      var scope = actors.requireResourceScope("TEACHING");
+      if (schoolId == null || !scope.readableSchoolIds().contains(schoolId))
+        throw new AccessDeniedException("无该学校的课次读取权限");
+      var start = from == null || from.isBlank() ? LocalDate.now() : businessDate(from, "开始日期");
+      var end = to == null || to.isBlank() ? start.plusDays(60) : businessDate(to, "结束日期");
+      return tx.execute(
+          scope.tenantId(),
+          () -> {
+            var rows =
+                sql.fetch(
+                    "select c.name as class_name,cl.curriculum_id,l.lesson_date,l.starts_at,"
+                        + "l.ends_at,l.teacher_name,l.room_name,l.hours,l.status"
+                        + " from teaching.lesson l"
+                        + " join teaching.class c on c.id=l.class_id"
+                        + " left join teaching.class cl on cl.id=l.class_id"
+                        + " where c.school_id=? and l.lesson_date between ? and ?"
+                        + " order by l.lesson_date, l.starts_at limit 5000",
+                    schoolId,
+                    start,
+                    end);
+            var csv = new StringBuilder();
+            csv.append("班级,日期,开始,结束,教师,教室,课时,状态").append(NEWLINE);
+            for (var row : rows) {
+              csv.append(cell(row.get("class_name", String.class)))
+                  .append(',')
+                  .append(cell(date(row.get("lesson_date", LocalDate.class))))
+                  .append(',')
+                  .append(cell(time(row.get("starts_at", LocalTime.class))))
+                  .append(',')
+                  .append(cell(time(row.get("ends_at", LocalTime.class))))
+                  .append(',')
+                  .append(cell(row.get("teacher_name", String.class)))
+                  .append(',')
+                  .append(cell(row.get("room_name", String.class)))
+                  .append(',')
+                  .append(cell(hours(row.get("hours", BigDecimal.class))))
+                  .append(',')
+                  .append(cell(row.get("status", String.class)))
+                  .append(NEWLINE);
+            }
+            auditLessonsExport(scope, schoolId, rows.size());
+            return csv.toString();
+          });
+    }
+  }
+
+  private void auditLessonsExport(ResourceScope scope, UUID schoolId, int rows) {
+    sql.execute(
+        "insert into audit.teaching_event(tenant_id,actor_id,action,resource_id,school_id,"
+            + "changed_fields,trace_id) values (?,?,'LESSONS_EXPORTED',?,?,?,?)",
+        scope.tenantId(),
+        scope.accountId(),
+        schoolId,
+        schoolId,
+        "rows=" + rows,
+        RequestTrace.id());
+  }
+
+  private static final char NEWLINE = (char) 10;
+
+  private String cell(String value) {
+    if (value == null) return "";
+    var text = value.replace("\"", "\"\"");
+    return text.indexOf(',') >= 0 || text.indexOf('"') >= 0 || text.indexOf(NEWLINE) >= 0
+        ? "\"" + text + "\""
+        : text;
+  }
+
   private LessonView lessonView(Record row) {
     return new LessonView(
         row.get("id", UUID.class),

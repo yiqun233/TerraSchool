@@ -8,4 +8,7 @@ public interface EnrollmentQueries {
   EnrollmentPage list(UUID schoolId, String status, int page, int size);
 
   EnrollmentView detail(UUID id);
+
+  /** 报名 CSV 导出（学校），导出写审计。 */
+  String exportCsv(UUID schoolId);
 }

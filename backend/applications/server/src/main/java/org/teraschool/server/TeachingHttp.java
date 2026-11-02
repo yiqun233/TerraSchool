@@ -53,6 +53,17 @@ class TeachingHttp {
     return queries.reconciliation(id);
   }
 
+  /** 课次 CSV 导出：按学校与日期范围，导出写审计。 */
+  @GetMapping(value = "/api/teaching/lessons/export", produces = "text/csv; charset=UTF-8")
+  org.springframework.http.ResponseEntity<String> exportLessons(
+      @RequestParam UUID schoolId,
+      @RequestParam(defaultValue = "") String from,
+      @RequestParam(defaultValue = "") String to) {
+    return org.springframework.http.ResponseEntity.ok()
+        .header("Content-Disposition", "attachment; filename=\"lessons.csv\"")
+        .body(queries.exportLessonsCsv(schoolId, from, to));
+  }
+
   @PostMapping(value = "/api/teaching/classes", consumes = "application/json")
   @ResponseStatus(org.springframework.http.HttpStatus.CREATED)
   ClassView createClass(@RequestBody CreateClass command) {

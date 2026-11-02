@@ -589,6 +589,69 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
         });
   }
 
+  @Override
+  public String exportCsv(UUID schoolId) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      var scope = actors.requireResourceScope("ENROLLMENT");
+      if (schoolId == null || !scope.readableSchoolIds().contains(schoolId))
+        throw new AccessDeniedException("无该学校的报名读取权限");
+      return tx.execute(
+          scope.tenantId(),
+          () -> {
+            var rows =
+                sql.fetch(
+                    "select e.id,e.product_name,e.curriculum_name,e.price,e.hours,"
+                        + "coalesce((select sum(c.amount) from enrollment.charge c"
+                        + " where c.enrollment_id=e.id),0) as net_amount,"
+                        + "e.status,e.created_at,s.student_no,s.name as student_name"
+                        + " from enrollment.enrollment e"
+                        + " join archive.student s on s.id=e.student_id and s.tenant_id=e.tenant_id"
+                        + " where e.school_id=? order by e.created_at desc limit 5000",
+                    schoolId);
+            var csv = new StringBuilder();
+            csv.append("学员号,学员姓名,产品,课程,价格,课时,净应收,状态,报名时间").append(NEWLINE);
+            for (var row : rows) {
+              csv.append(cell(row.get("student_no", String.class)))
+                  .append(',')
+                  .append(cell(row.get("student_name", String.class)))
+                  .append(',')
+                  .append(cell(row.get("product_name", String.class)))
+                  .append(',')
+                  .append(cell(row.get("curriculum_name", String.class)))
+                  .append(',')
+                  .append(cell(money(row.get("price", BigDecimal.class))))
+                  .append(',')
+                  .append(cell(hours(row.get("hours", BigDecimal.class))))
+                  .append(',')
+                  .append(cell(money(row.get("net_amount", BigDecimal.class))))
+                  .append(',')
+                  .append(cell(row.get("status", String.class)))
+                  .append(',')
+                  .append(
+                      cell(
+                          row.get("created_at", java.time.OffsetDateTime.class) == null
+                              ? null
+                              : row.get("created_at", java.time.OffsetDateTime.class)
+                                  .toInstant()
+                                  .toString()))
+                  .append(NEWLINE);
+            }
+            audit(scope, "ENROLLMENTS_EXPORTED", schoolId, schoolId, "rows=" + rows.size());
+            return csv.toString();
+          });
+    }
+  }
+
+  private static final char NEWLINE = (char) 10;
+
+  private String cell(String value) {
+    if (value == null) return "";
+    var text = value.replace("\"", "\"\"");
+    return text.indexOf(',') >= 0 || text.indexOf('"') >= 0 || text.indexOf(NEWLINE) >= 0
+        ? "\"" + text + "\""
+        : text;
+  }
+
   // ---------------------------------------------------------------- 内部
 
   private boolean hasAction(String action) {

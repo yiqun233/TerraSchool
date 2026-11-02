@@ -850,6 +850,62 @@ public class FundsService implements FundsQueries, FundsCommands {
     return value == null ? BigDecimal.ZERO : value;
   }
 
+  @Override
+  public String exportReceiptsCsv(UUID schoolId, String from, String to) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      var scope = actors.requireResourceScope("FUNDS");
+      if (schoolId == null || !scope.readableSchoolIds().contains(schoolId))
+        throw new AccessDeniedException("无该学校的收款读取权限");
+      var start =
+          from == null || from.isBlank()
+              ? LocalDate.now().minusDays(30)
+              : businessDate(from, "开始日期");
+      var end = to == null || to.isBlank() ? LocalDate.now() : businessDate(to, "结束日期");
+      return tx.execute(
+          scope.tenantId(),
+          () -> {
+            var rows =
+                sql.fetch(
+                    "select s.student_no,s.name as student_name,r.amount,r.method,r.occurred_on,"
+                        + "r.status from funds.receipt r"
+                        + " join archive.student s on s.id=r.student_id and s.tenant_id=r.tenant_id"
+                        + " where r.school_id=? and r.occurred_on between ? and ?"
+                        + " order by r.occurred_on, r.id limit 5000",
+                    schoolId,
+                    start,
+                    end);
+            var csv = new StringBuilder();
+            csv.append("学员号,学员姓名,金额,方式,收款日期,状态").append(NEWLINE);
+            for (var row : rows) {
+              csv.append(cell(row.get("student_no", String.class)))
+                  .append(',')
+                  .append(cell(row.get("student_name", String.class)))
+                  .append(',')
+                  .append(cell(money(row.get("amount", BigDecimal.class))))
+                  .append(',')
+                  .append(cell(row.get("method", String.class)))
+                  .append(',')
+                  .append(row.get("occurred_on", LocalDate.class))
+                  .append(',')
+                  .append(cell(row.get("status", String.class)))
+                  .append(NEWLINE);
+            }
+            audit(scope, "RECEIPTS_EXPORTED", schoolId, schoolId, "rows=" + rows.size());
+            return csv.toString();
+          });
+    }
+  }
+
+  private static final char NEWLINE = (char) 10;
+
+  private String cell(String value) {
+    if (value == null) return "";
+    var text = value.replace("\"", "\"\"");
+    return text.indexOf(',') >= 0 || text.indexOf('"') >= 0 || text.indexOf(NEWLINE) >= 0
+        ? "\"" + text + "\""
+        : text;
+  }
+
   private String hours(BigDecimal value) {
     return value == null ? null : value.setScale(2, RoundingMode.UNNECESSARY).toPlainString();
   }

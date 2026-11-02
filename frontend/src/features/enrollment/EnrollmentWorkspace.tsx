@@ -16,7 +16,7 @@ import {
   Tag,
   Typography,
 } from "antd";
-import { api, csrf } from "../../shared/http";
+import { api, csrf, downloadCsv } from "../../shared/http";
 import type { components } from "../../shared/generated/api";
 import { RefundPanel } from "./RefundPanel";
 
@@ -119,6 +119,17 @@ export function EnrollmentWorkspace({
           loading={enrollments.isFetching}
         >
           刷新
+        </Button>
+        <Button
+          onClick={() =>
+            void downloadCsv(
+              `/api/enrollment/enrollments/export?schoolId=${encodeURIComponent(current ?? "")}`,
+              "enrollments.csv",
+            )
+          }
+          disabled={!current}
+        >
+          导出 CSV
         </Button>
         <Typography.Text type="secondary">
           报名冻结价格与课时；收款与分配分开记账

@@ -42,6 +42,17 @@ class FundsHttp {
     return queries.outstanding(enrollmentId);
   }
 
+  /** 收款 CSV 导出：按学校与日期范围，导出写审计。 */
+  @GetMapping(value = "/api/funds/receipts/export", produces = "text/csv; charset=UTF-8")
+  org.springframework.http.ResponseEntity<String> exportReceipts(
+      @RequestParam UUID schoolId,
+      @RequestParam(defaultValue = "") String from,
+      @RequestParam(defaultValue = "") String to) {
+    return org.springframework.http.ResponseEntity.ok()
+        .header("Content-Disposition", "attachment; filename=\"receipts.csv\"")
+        .body(queries.exportReceiptsCsv(schoolId, from, to));
+  }
+
   @PostMapping(value = "/api/funds/receipts", consumes = "application/json")
   @ResponseStatus(org.springframework.http.HttpStatus.CREATED)
   Receipt createReceipt(@RequestBody CreateReceipt command) {

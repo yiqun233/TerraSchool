@@ -13,6 +13,9 @@ public interface TeachingQueries {
 
   List<LessonView> lessons(UUID classId);
 
+  /** 课次 CSV 导出（学校 + 日期范围），导出写审计。 */
+  String exportLessonsCsv(UUID schoolId, String from, String to);
+
   List<AttendanceInput> attendance(UUID lessonId);
 
   EnrollmentReconciliation reconciliation(UUID enrollmentId);
