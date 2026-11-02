@@ -10,4 +10,7 @@ public interface LegacyMigration {
   MigrationReport dryRun(UUID schoolId);
 
   MigrationReport commit(UUID schoolId);
+
+  /** 批量导入期初余额与期初课时；逐行返回结果，按 batchId 幂等。 */
+  OpeningImport.Report importOpenings(UUID schoolId, OpeningImport request);
 }

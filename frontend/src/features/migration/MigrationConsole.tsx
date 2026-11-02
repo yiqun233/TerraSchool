@@ -7,6 +7,7 @@ import {
   Input,
   Select,
   Space,
+  Switch,
   Table,
   Typography,
 } from "antd";
@@ -15,6 +16,7 @@ import type { components } from "../../shared/generated/api";
 
 type MigrationReport = components["schemas"]["MigrationReport"];
 type MigrationIssue = components["schemas"]["MigrationIssue"];
+type OpeningReport = components["schemas"]["Report"];
 
 const STUDENT_HELP =
   "每行：旧主键,学员号,姓名,性别(MALE/FEMALE/UNKNOWN),生日,证件号,电话,联系人,联系人电话";
@@ -48,6 +50,12 @@ export function MigrationConsole({
   const [studentCsv, setStudentCsv] = useState("");
   const [receiptCsv, setReceiptCsv] = useState("");
   const [report, setReport] = useState<MigrationReport | null>(null);
+  const [openingCsv, setOpeningCsv] = useState("");
+  const [batchId, setBatchId] = useState(() => `open-${Date.now()}`);
+  const [dryRun, setDryRun] = useState(true);
+  const [openingReport, setOpeningReport] = useState<OpeningReport | null>(
+    null,
+  );
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -81,6 +89,52 @@ export function MigrationConsole({
       occurredOn: cells[4],
     }));
     return { students, receipts };
+  }
+
+  /** 期初导入：学员号,金额,课时,已消耗金额；逐行返回结果。 */
+  async function importOpenings() {
+    if (!current) {
+      setError("请先选择学校");
+      return;
+    }
+    const rows = parse(openingCsv).map((cells) => ({
+      studentNo: cells[0],
+      amount: cells[1] || "0",
+      hours: cells[2] || "0",
+      consumedAmount: cells[3] || "0",
+    }));
+    if (rows.length === 0) {
+      setError("请先填写期初导入行");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const token = await csrf();
+      const { data, response } = await api.POST("/api/migration/openings", {
+        params: { query: { schoolId: current! } },
+        headers: { [token.headerName!]: token.token! },
+        body: { batchId, occurredOn: "", reason: "旧库期初迁移", rows, dryRun },
+      });
+      if (response.status === 401) {
+        onUnauthorized();
+        return;
+      }
+      if (!response.ok || !data) {
+        setError("期初导入失败：请核对权限、学员号与金额格式。");
+        return;
+      }
+      const imported = data as OpeningReport;
+      setOpeningReport(imported);
+      setMessage(
+        `期初导入${imported.mode === "DRY_RUN" ? "干跑" : "完成"}：成功 ${imported.ok}、跳过 ${imported.skipped}、失败 ${imported.failed}`,
+      );
+    } catch {
+      setError("无法获取安全令牌或网络中断，请重试。");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function call(path: string, body?: unknown) {
@@ -190,6 +244,69 @@ export function MigrationConsole({
           干跑不写业务表；确认按旧主键记账，重复确认不会重复导入
         </Typography.Text>
       </Space>
+      <Card
+        size="small"
+        title="期初导入（历史余额与已消耗课时）"
+        style={{ marginTop: 12 }}
+      >
+        <Typography.Text type="secondary">
+          每行：学员号,金额,课时,已消耗金额（金额可空，课时可空；批次号相同重跑不会重复导入）
+        </Typography.Text>
+        <Space wrap style={{ marginTop: 8 }}>
+          <Input
+            aria-label="批次号"
+            style={{ width: 200 }}
+            value={batchId}
+            onChange={(event) => setBatchId(event.target.value)}
+            disabled={!canManage || busy}
+          />
+          <Space>
+            <Switch
+              checked={dryRun}
+              onChange={setDryRun}
+              disabled={!canManage || busy}
+              aria-label="干跑"
+            />
+            <Typography.Text>
+              {dryRun ? "干跑（不写库）" : "实际导入"}
+            </Typography.Text>
+          </Space>
+        </Space>
+        <Input.TextArea
+          aria-label="期初 CSV"
+          rows={3}
+          style={{ marginTop: 8 }}
+          value={openingCsv}
+          onChange={(event) => setOpeningCsv(event.target.value)}
+          disabled={!canManage || busy}
+          placeholder="L0001,500.00,4.00,400.00"
+        />
+        <Button
+          style={{ marginTop: 8 }}
+          type="primary"
+          onClick={() => void importOpenings()}
+          loading={busy}
+          disabled={!canManage || busy}
+        >
+          导入期初
+        </Button>
+        {openingReport ? (
+          <Table
+            style={{ marginTop: 8 }}
+            rowKey={(row: { studentNo?: string }) =>
+              row.studentNo ?? Math.random().toString()
+            }
+            size="small"
+            dataSource={openingReport.rows ?? []}
+            pagination={false}
+            columns={[
+              { title: "学员号", dataIndex: "studentNo" },
+              { title: "结果", dataIndex: "status" },
+              { title: "说明", dataIndex: "detail" },
+            ]}
+          />
+        ) : null}
+      </Card>
       {report ? (
         <Card
           size="small"

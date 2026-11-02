@@ -2,6 +2,7 @@ package org.teraschool.migration.internal;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
 import java.util.*;
@@ -35,18 +36,24 @@ public class LegacyMigrationService implements LegacyMigration {
   private final DSLContext sql;
   private final SchoolAccess schools;
   private final StudentAccess students;
+  private final org.teraschool.funds.api.FundsCommands funds;
+  private final org.teraschool.teaching.api.TeachingCommands teaching;
 
   public LegacyMigrationService(
       CurrentActor actors,
       TenantTransactions tx,
       DSLContext sql,
       SchoolAccess schools,
-      StudentAccess students) {
+      StudentAccess students,
+      org.teraschool.funds.api.FundsCommands funds,
+      org.teraschool.teaching.api.TeachingCommands teaching) {
     this.actors = actors;
     this.tx = tx;
     this.sql = sql;
     this.schools = schools;
     this.students = students;
+    this.funds = funds;
+    this.teaching = teaching;
   }
 
   @Override
@@ -240,6 +247,181 @@ public class LegacyMigrationService implements LegacyMigration {
             return result;
           });
     }
+  }
+
+  @Override
+  public OpeningImport.Report importOpenings(UUID schoolId, OpeningImport request) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      var actor = actors.requireAction("MIGRATION_MANAGE");
+      if (request == null || request.rows() == null || request.rows().isEmpty())
+        throw new IllegalArgumentException("期初导入至少需要一行");
+      if (request.batchId() == null || request.batchId().isBlank())
+        throw new IllegalArgumentException("期初导入需要批次号");
+      var occurredOn =
+          request.occurredOn() == null || request.occurredOn().isBlank()
+              ? LocalDate.now().toString()
+              : date(request.occurredOn()).toString();
+      var reason = text(request.reason(), 200, "期初原因");
+      // 学校校验与学员查询都在租户上下文里：organization.unit 启用了 FORCE RLS。
+      tx.execute(
+          actor.tenantId(),
+          () -> {
+            requireSchool(actor, schoolId);
+            return null;
+          });
+      var results = new ArrayList<OpeningImport.RowResult>();
+      var ok = 0;
+      var skipped = 0;
+      var failed = 0;
+      var totalAmount = BigDecimal.ZERO;
+      var totalHours = BigDecimal.ZERO;
+      for (var row : request.rows()) {
+        if (row == null || row.studentNo() == null || row.studentNo().isBlank()) {
+          results.add(new OpeningImport.RowResult("", "FAILED", "缺少学员号"));
+          failed++;
+          continue;
+        }
+        var studentNo = row.studentNo().strip();
+        var studentId = studentIdOf(actor, schoolId, studentNo);
+        if (studentId == null) {
+          results.add(new OpeningImport.RowResult(studentNo, "FAILED", "新库没有该学员"));
+          failed++;
+          continue;
+        }
+        if (request.dryRun()) {
+          results.add(
+              new OpeningImport.RowResult(
+                  studentNo,
+                  "READY",
+                  "可导入：金额 " + blankToZero(row.amount()) + "，课时 " + blankToZero(row.hours())));
+          ok++;
+          totalAmount = totalAmount.add(new BigDecimal(blankToZero(row.amount())));
+          totalHours = totalHours.add(new BigDecimal(blankToZero(row.hours())));
+          continue;
+        }
+        // 每行独立事务：单行失败不影响其他行，也不会把整批标记为回滚。
+        var notes = new ArrayList<String>();
+        try {
+          var amount = new BigDecimal(blankToZero(row.amount()));
+          if (amount.signum() != 0) {
+            funds.openBalance(
+                new org.teraschool.funds.api.OpenBalance(
+                    rowRequestId(request.batchId(), studentNo, "AMOUNT"),
+                    schoolId,
+                    studentId,
+                    amount.toPlainString(),
+                    occurredOn,
+                    reason == null ? "旧库余额迁移" : reason));
+            notes.add("余额 " + amount.toPlainString());
+            totalAmount = totalAmount.add(amount);
+          }
+          var hours = new BigDecimal(blankToZero(row.hours()));
+          if (hours.signum() > 0) {
+            var enrollmentId = activeEnrollmentOf(actor, schoolId, studentId);
+            if (enrollmentId == null) {
+              notes.add("没有在读报名，课时未带入");
+            } else {
+              try {
+                teaching.openingConsumption(
+                    enrollmentId,
+                    new org.teraschool.teaching.api.OpeningConsumption(
+                        hours.toPlainString(),
+                        new BigDecimal(blankToZero(row.consumedAmount())).toPlainString(),
+                        reason == null ? "旧库已消耗迁移" : reason));
+                notes.add("已消耗课时 " + hours.toPlainString());
+                totalHours = totalHours.add(hours);
+              } catch (org.teraschool.teaching.api.TeachingConflict conflict) {
+                if (!"OPENING_ALREADY_RECORDED".equals(conflict.getMessage())) throw conflict;
+                notes.add("课时已存在，跳过");
+              }
+            }
+          }
+          results.add(
+              new OpeningImport.RowResult(
+                  studentNo, notes.isEmpty() ? "SKIPPED" : "OK", String.join("；", notes)));
+          if (notes.isEmpty()) skipped++;
+          else ok++;
+        } catch (RuntimeException error) {
+          results.add(
+              new OpeningImport.RowResult(
+                  studentNo, "FAILED", error.getMessage() == null ? "导入失败" : error.getMessage()));
+          failed++;
+        }
+      }
+      var report =
+          new OpeningImport.Report(
+              request.batchId(),
+              request.dryRun() ? "DRY_RUN" : "COMMIT",
+              ok,
+              skipped,
+              failed,
+              money(totalAmount),
+              hoursView(totalHours),
+              results);
+      // lambda 里只能用 effectively final 的值，先复制到局部变量。
+      final var runOk = ok;
+      final var runFailed = failed;
+      final var runMode = request.dryRun() ? "DRY_RUN" : "COMMIT";
+      tx.execute(
+          actor.tenantId(),
+          () -> {
+            sql.execute(
+                "insert into migration.run(tenant_id,school_id,mode,actor_id,students_staged,"
+                    + "students_imported,receipts_staged,receipts_imported,issues)"
+                    + " values (?,?,?,?,?,?,?,?,?::jsonb)",
+                actor.tenantId(),
+                schoolId,
+                runMode,
+                actor.accountId(),
+                runOk,
+                runFailed,
+                0,
+                0,
+                "[]");
+            return null;
+          });
+      return report;
+    }
+  }
+
+  private UUID studentIdOf(Actor actor, UUID schoolId, String studentNo) {
+    return tx.execute(
+        actor.tenantId(),
+        () -> {
+          var row =
+              sql.fetchOne(
+                  "select id from archive.student where school_id=? and student_no=?",
+                  schoolId,
+                  studentNo);
+          return row == null ? null : row.get("id", UUID.class);
+        });
+  }
+
+  private UUID activeEnrollmentOf(Actor actor, UUID schoolId, UUID studentId) {
+    return tx.execute(
+        actor.tenantId(),
+        () -> {
+          var row =
+              sql.fetchOne(
+                  "select id from enrollment.enrollment where school_id=? and student_id=?"
+                      + " and status='ACTIVE' order by created_at desc limit 1",
+                  schoolId,
+                  studentId);
+          return row == null ? null : row.get("id", UUID.class);
+        });
+  }
+
+  private String blankToZero(String value) {
+    return value == null || value.isBlank() ? "0" : value.strip();
+  }
+
+  private String hoursView(BigDecimal value) {
+    return value == null ? "0.00" : value.setScale(2, RoundingMode.UNNECESSARY).toPlainString();
+  }
+
+  private UUID rowRequestId(String batchId, String studentNo, String kind) {
+    return UUID.nameUUIDFromBytes(
+        (batchId + "|" + studentNo + "|" + kind).getBytes(StandardCharsets.UTF_8));
   }
 
   // ---------------------------------------------------------------- 对账

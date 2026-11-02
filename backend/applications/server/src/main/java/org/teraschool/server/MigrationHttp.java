@@ -22,6 +22,13 @@ class MigrationHttp {
     return migration.stage(schoolId, request.students(), request.receipts());
   }
 
+  /** 期初导入：逐行导入历史余额与已消耗课时，逐行返回结果。 */
+  @PostMapping(value = "/openings", consumes = "application/json")
+  OpeningImport.Report importOpenings(
+      @RequestParam UUID schoolId, @RequestBody OpeningImport request) {
+    return migration.importOpenings(schoolId, request);
+  }
+
   @GetMapping("/dry-run")
   MigrationReport dryRun(@RequestParam UUID schoolId) {
     return migration.dryRun(schoolId);
