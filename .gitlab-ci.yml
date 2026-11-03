@@ -1,21 +1,25 @@
 # 远程 CI：与 tools/engineering/verify.py 使用同一套门禁步骤。
-# 说明：流水线尚未在真实 Runner 上执行过（见 待确认问题 Q26）；本文件按本机 verify.py 的步骤 1:1 复刻，
-# 便于 Runner 就绪后直接跑通。密码一律来自 CI 变量，不落仓库。
+# Runner 必须提供 docker 执行器：两个 job 都用 tags 固定，避免被 shell 执行器领取
+# （shell 执行器不提供 services，非 root 也装不了 psql，曾导致 exit 127）。
+# 密码一律在作业内临时生成或来自 CI 变量，不落仓库。
 stages:
   - verify
   - frontend
 
 variables:
   MAVEN_OPTS: "-Dmaven.repo.local=.m2/repository"
-  TS_POSTGRES_IMAGE: "postgres@sha256:979bccfde35445db618c65107d27d08c6c21339d8dc3ad4c830c6633947be0e4"
+  # 暂用 tag 固定 service 镜像：本机 Runner 无法直达 Docker Hub，digest 拉取会失败。
+  # 待 Runner 具备 Hub 访问后改回 digest（记录见 REV-005 验证记录）。
+  TS_POSTGRES_IMAGE: "postgres:18"
   # JDK 25 是工程硬要求；镜像已自带 Maven 3.9。
   TS_JDBC_URL: "jdbc:postgresql://postgres:5432/teraschool_test"
 
 backend:
   stage: verify
+  tags: [docker]
   image: maven:3.9-eclipse-temurin-25
   services:
-    - name: postgres:18
+    - name: $TS_POSTGRES_IMAGE
       alias: postgres
   variables:
     POSTGRES_DB: teraschool_test
@@ -25,27 +29,33 @@ backend:
     paths:
       - .m2/repository
   before_script:
-    - apt-get update && apt-get install -y postgresql-client python3 docker.io
+    - |
+      # maven 镜像基于 Ubuntu：换阿里云源后再装 psql（建角色用）与 python3（抽取自检用）。
+      if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+        sed -i 's|http://archive.ubuntu.com|https://mirrors.aliyun.com|g; s|http://security.ubuntu.com|https://mirrors.aliyun.com|g' /etc/apt/sources.list.d/ubuntu.sources
+      fi
+    - apt-get update && apt-get install -y --no-install-recommends postgresql-client python3
     - mkdir -p .m2/repository
     - |
       for i in $(seq 1 40); do
         (echo > /dev/tcp/postgres/5432) >/dev/null 2>&1 && break
         sleep 1
       done
-    - export TS_ADMIN_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"
-    - export TS_APP_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"
-    - export TS_IDENTITY_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"
-    - export TS_SESSION_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"
-    - export TS_AUDIT_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"
     - |
-      PGPASSWORD="$POSTGRES_PASSWORD" psql -h postgres -U postgres -d teraschool_test -v ON_ERROR_STOP=1 <<'SQL'
-      CREATE ROLE ts_app LOGIN PASSWORD 'ci-app' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
-      CREATE ROLE ts_identity LOGIN PASSWORD 'ci-identity' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
-      CREATE ROLE ts_session LOGIN PASSWORD 'ci-session' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
-      CREATE ROLE ts_audit LOGIN PASSWORD 'ci-audit' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+      TS_APP_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"
+      TS_IDENTITY_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"
+      TS_SESSION_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"
+      TS_AUDIT_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"
+      export TS_ADMIN_PASSWORD="$POSTGRES_PASSWORD" \
+        TS_APP_PASSWORD TS_IDENTITY_PASSWORD TS_SESSION_PASSWORD TS_AUDIT_PASSWORD
+      PGPASSWORD="$POSTGRES_PASSWORD" psql -h postgres -U postgres -d teraschool_test -v ON_ERROR_STOP=1 \
+        -v app="$TS_APP_PASSWORD" -v identity="$TS_IDENTITY_PASSWORD" \
+        -v session="$TS_SESSION_PASSWORD" -v audit="$TS_AUDIT_PASSWORD" <<'SQL'
+      CREATE ROLE ts_app LOGIN PASSWORD :'app' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+      CREATE ROLE ts_identity LOGIN PASSWORD :'identity' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+      CREATE ROLE ts_session LOGIN PASSWORD :'session' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+      CREATE ROLE ts_audit LOGIN PASSWORD :'audit' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
       SQL
-    - export TS_APP_PASSWORD=ci-app TS_IDENTITY_PASSWORD=ci-identity TS_SESSION_PASSWORD=ci-session TS_AUDIT_PASSWORD=ci-audit
-    - export TS_ADMIN_PASSWORD="$POSTGRES_PASSWORD"
   script:
     - python3 tools/migration/extract_legacy.py --self-check
     - cd backend
@@ -62,6 +72,7 @@ backend:
 
 frontend:
   stage: frontend
+  tags: [docker]
   image: node:24
   needs:
     - job: backend
