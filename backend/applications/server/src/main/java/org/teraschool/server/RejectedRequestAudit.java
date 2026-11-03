@@ -27,7 +27,25 @@ class RejectedRequestAudit {
     String path = request.getServletPath();
     UUID resource = null;
     FailureAudit.Action action;
-    if (path.matches("/api/teaching/classes/[^/]+/schedule/(preview|confirm)")) {
+    if (path.equals("/api/admissions/customers")) action = FailureAudit.Action.CUSTOMER_CREATE;
+    else if (path.equals("/api/admissions/customers/cancel"))
+      action = FailureAudit.Action.CUSTOMER_CANCEL;
+    else if (path.matches("/api/admissions/customers/[^/]+/phone")) {
+      action = FailureAudit.Action.CUSTOMER_PHONE_VIEW;
+      try {
+        resource = UUID.fromString(path.split("/")[4]);
+      } catch (IllegalArgumentException invalid) {
+        /* 不记录原路径 */
+      }
+    } else if (path.equals("/api/admissions/channels")) action = FailureAudit.Action.CHANNEL_CREATE;
+    else if (path.matches("/api/admissions/channels/[^/]+/update")) {
+      action = FailureAudit.Action.CHANNEL_UPDATE;
+      try {
+        resource = UUID.fromString(path.split("/")[4]);
+      } catch (IllegalArgumentException invalid) {
+        /* 不记录原路径 */
+      }
+    } else if (path.matches("/api/teaching/classes/[^/]+/schedule/(preview|confirm)")) {
       action =
           path.endsWith("/confirm")
               ? FailureAudit.Action.SCHEDULE_CONFIRM

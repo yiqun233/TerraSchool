@@ -105,6 +105,18 @@ class Errors {
     return problem(409, error.code());
   }
 
+  @ExceptionHandler(org.teraschool.admissions.api.ChannelConflict.class)
+  ResponseEntity<ProblemDetail> channelConflict(
+      org.teraschool.admissions.api.ChannelConflict error) {
+    return problem(409, error.code());
+  }
+
+  @ExceptionHandler(org.teraschool.admissions.api.CustomerConflict.class)
+  ResponseEntity<ProblemDetail> customerConflict(
+      org.teraschool.admissions.api.CustomerConflict error) {
+    return problem(409, error.code());
+  }
+
   @ExceptionHandler(AccessDeniedException.class)
   ResponseEntity<ProblemDetail> denied() {
     return problem(403, "ACCESS_DENIED");

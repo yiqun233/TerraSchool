@@ -23,6 +23,7 @@
         <module>modules/approval</module>
         <module>modules/finance</module>
         <module>modules/migration</module>
+        <module>modules/admissions</module>
         <module>applications/server</module>
     </modules>
     <properties>

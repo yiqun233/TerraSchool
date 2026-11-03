@@ -18,6 +18,8 @@ import { TeachingWorkspace } from "../teaching/TeachingWorkspace";
 import { ApprovalInbox } from "../approval/ApprovalInbox";
 import { PeriodManager } from "../finance/PeriodManager";
 import { MigrationConsole } from "../migration/MigrationConsole";
+import { ChannelWorkspace } from "../admissions/ChannelWorkspace";
+import { CustomerWorkspace } from "../admissions/CustomerWorkspace";
 import type { components } from "../../shared/generated/api";
 const labels: Record<string, string> = {
   SCHOOL: "学校",
@@ -66,6 +68,8 @@ function Workspace({ reset }: { reset: () => void }) {
     | "APPROVAL"
     | "FINANCE"
     | "MIGRATION"
+    | "CHANNELS"
+    | "CUSTOMERS"
   >("ORGANIZATION");
   const [page, setPage] = useState(0);
   const [error, setError] = useState("");
@@ -156,6 +160,18 @@ function Workspace({ reset }: { reset: () => void }) {
               教室管理
             </Button>
             <Button
+              type={section === "CHANNELS" ? "primary" : "text"}
+              onClick={() => setSection("CHANNELS")}
+            >
+              招生渠道
+            </Button>
+            <Button
+              type={section === "CUSTOMERS" ? "primary" : "text"}
+              onClick={() => setSection("CUSTOMERS")}
+            >
+              本人客户
+            </Button>
+            <Button
               type={section === "STUDENTS" ? "primary" : "text"}
               onClick={() => setSection("STUDENTS")}
             >
@@ -218,6 +234,8 @@ function Workspace({ reset }: { reset: () => void }) {
                   APPROVAL: "审批",
                   FINANCE: "财务期间",
                   MIGRATION: "数据迁移",
+                  CHANNELS: "招生渠道",
+                  CUSTOMERS: "本人客户",
                 }[section]
               }
             </Typography.Title>
@@ -269,6 +287,16 @@ function Workspace({ reset }: { reset: () => void }) {
               </Button>
             </Form>
           </section>
+        ) : section === "CUSTOMERS" ? (
+          <CustomerWorkspace
+            accountKey={`${me.data.tenantId}:${me.data.accountId}`}
+            onUnauthorized={() => void signOut()}
+          />
+        ) : section === "CHANNELS" ? (
+          <ChannelWorkspace
+            accountKey={`${me.data.tenantId}:${me.data.accountId}`}
+            onUnauthorized={() => void signOut()}
+          />
         ) : section === "STUDENTS" ? (
           <StudentDirectory onUnauthorized={() => void signOut()} />
         ) : section === "PRODUCTS" ? (
