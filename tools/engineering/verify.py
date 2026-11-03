@@ -50,7 +50,7 @@ try:
  roles='\n'.join("CREATE ROLE ts_"+kind+" LOGIN PASSWORD '"+env['TS_'+kind.upper()+'_PASSWORD']+"' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;" for kind in ['app','identity','session','audit'])
  p=subprocess.run([docker,'exec','-i',container,'psql','-v','ON_ERROR_STOP=1','-U','postgres','-d','teraschool_test'],input=roles,text=True,capture_output=True,env=env)
  if p.returncode:raise RuntimeError(safe(p.stderr))
- step('clean',mvn+['clean']);step('migration',mvn+['-N','flyway:migrate']);step('codegen',mvn+['-N','jooq-codegen:generate']);step('format',mvn+['spotless:apply'] if '--format' in sys.argv else mvn+['spotless:check']);step('verify',mvn+['verify'])
+ step('extract',[sys.executable,str(ROOT/'tools/migration/extract_legacy.py'),'--self-check'],cwd=ROOT);step('clean',mvn+['clean']);step('migration',mvn+['-N','flyway:migrate']);step('codegen',mvn+['-N','jooq-codegen:generate']);step('format',mvn+['spotless:apply'] if '--format' in sys.argv else mvn+['spotless:check']);step('verify',mvn+['verify'])
  import xml.etree.ElementTree as ET
  suites=[ET.parse(p).getroot() for p in (ROOT/'backend/applications/server/target/surefire-reports').glob('TEST-*.xml')]
  if not suites or any(int(s.get('failures','0'))+int(s.get('errors','0'))+int(s.get('skipped','0')) for s in suites):raise RuntimeError('测试必须执行且不可失败/跳过')
