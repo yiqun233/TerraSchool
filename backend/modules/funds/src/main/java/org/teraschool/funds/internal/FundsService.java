@@ -354,6 +354,7 @@ public class FundsService implements FundsQueries, FundsCommands {
           var row = requireReceiptForUpdate(id);
           var schoolId = row.get("school_id", UUID.class);
           if (!verified.schools().contains(schoolId)) throw new AccessDeniedException("无该学校的收款权限");
+          if (!schools.require(schoolId).active()) throw new AccessDeniedException("学校已停用，不能撤销收款");
           var student = students.require(row.get("student_id", UUID.class));
           periods.requireOpen(schoolId, row.get("occurred_on", LocalDate.class));
           lockStudent(student.id());
@@ -404,6 +405,7 @@ public class FundsService implements FundsQueries, FundsCommands {
           var enrollment = enrollments.require(command.enrollmentId());
           var schoolId = receipt.get("school_id", UUID.class);
           if (!verified.schools().contains(schoolId)) throw new AccessDeniedException("无该学校的分配权限");
+          if (!schools.require(schoolId).active()) throw new AccessDeniedException("学校已停用，不能分配收款");
           var studentId = receipt.get("student_id", UUID.class);
           periods.requireOpen(schoolId, receipt.get("occurred_on", LocalDate.class));
           lockStudent(studentId);
@@ -462,6 +464,7 @@ public class FundsService implements FundsQueries, FundsCommands {
           var receipt = requireReceipt(row.get("receipt_id", UUID.class));
           var schoolId = receipt.get("school_id", UUID.class);
           if (!verified.schools().contains(schoolId)) throw new AccessDeniedException("无该学校的分配权限");
+          if (!schools.require(schoolId).active()) throw new AccessDeniedException("学校已停用，不能释放分配");
           var studentId = receipt.get("student_id", UUID.class);
           periods.requireOpen(schoolId, receipt.get("occurred_on", LocalDate.class));
           lockStudent(studentId);
@@ -731,6 +734,8 @@ public class FundsService implements FundsQueries, FundsCommands {
           var schoolId = row.get("school_id", UUID.class);
           if (!verified.schools().contains(schoolId))
             throw new AccessDeniedException("无该学校的现金退款权限");
+          if (!schools.require(schoolId).active())
+            throw new AccessDeniedException("学校已停用，不能确认退款已付");
           if (!"PREPARED".equals(row.get("status", String.class)))
             throw new FundsConflict("CASH_REFUND_NOT_PREPARED");
           if (!row.get("version", Long.class).equals(command.expectedVersion()))
@@ -783,6 +788,7 @@ public class FundsService implements FundsQueries, FundsCommands {
           var schoolId = row.get("school_id", UUID.class);
           if (!verified.schools().contains(schoolId))
             throw new AccessDeniedException("无该学校的现金退款权限");
+          if (!schools.require(schoolId).active()) throw new AccessDeniedException("学校已停用，不能取消退款");
           if (!"PREPARED".equals(row.get("status", String.class)))
             throw new FundsConflict("CASH_REFUND_NOT_PREPARED");
           if (!row.get("version", Long.class).equals(command.expectedVersion()))

@@ -43,7 +43,7 @@ try:
  container=capture([docker,'run','-d','--rm','--name','teraschool-engineering-'+RUN,'--label','org.teraschool.engineering='+RUN,'-e','POSTGRES_PASSWORD','-e','POSTGRES_DB','-p','127.0.0.1::5432',image,'-c','max_connections=300'])
  details=json.loads(capture([docker,'inspect',container]))[0];port=details['NetworkSettings']['Ports']['5432/tcp'][0]['HostPort'];env['TS_JDBC_URL']='jdbc:postgresql://127.0.0.1:'+port+'/teraschool_test'
  for attempt in range(40):
-  try:capture([docker,'exec',container,'pg_isready','-U','postgres']);break
+  try:capture([docker,'exec',container,'pg_isready','-h','127.0.0.1','-U','postgres']);break
   except RuntimeError:time.sleep(1)
  else:raise RuntimeError('PG 未就绪')
  # SQL 通过 stdin 传递，不在命令行或日志中输出随机口令。

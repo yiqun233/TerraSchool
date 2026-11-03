@@ -447,6 +447,7 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
           var schoolId = classSchool(row.get("class_id", UUID.class));
           if (!verified.schools().contains(schoolId))
             throw new AccessDeniedException("无该学校的考勤登记权限");
+          if (!schools.require(schoolId).active()) throw new AccessDeniedException("学校已停用，不能登记考勤");
           if (!"PUBLISHED".equals(row.get("status", String.class)))
             throw new TeachingConflict("LESSON_NOT_PUBLISHED");
           if (!row.get("version", Long.class).equals(command.expectedVersion()))
@@ -510,6 +511,7 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
           var schoolId = classSchool(row.get("class_id", UUID.class));
           if (!verified.schools().contains(schoolId))
             throw new AccessDeniedException("无该学校的课次关闭权限");
+          if (!schools.require(schoolId).active()) throw new AccessDeniedException("学校已停用，不能关闭课次");
           if (!"CONFIRMED".equals(row.get("status", String.class)))
             throw new TeachingConflict("LESSON_NOT_CONFIRMED");
           // 结算模式防护：历史数据若是未实现的模式，宁可拒绝消费也不按模式 1 静默计算。
@@ -651,6 +653,7 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
           var schoolId = classSchool(row.get("class_id", UUID.class));
           if (!verified.schools().contains(schoolId))
             throw new AccessDeniedException("无该学校的课次操作权限");
+          if (!schools.require(schoolId).active()) throw new AccessDeniedException("学校已停用，不能操作课次");
           if (!"DRAFT".equals(row.get("status", String.class)))
             throw new TeachingConflict("LESSON_NOT_DRAFT");
           if (!row.get("version", Long.class).equals(command.expectedVersion()))
@@ -871,6 +874,8 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
             if (!verified.schools().contains(enrollment.schoolId())
                 || !migrationScope.schools().contains(enrollment.schoolId()))
               throw new AccessDeniedException("无该学校的课次维护权限");
+            if (!schools.require(enrollment.schoolId()).active())
+              throw new AccessDeniedException("学校已停用，不能登记期初消费");
             var occurredOn = businessDate(command.occurredOn(), "期初日期");
             periods.requireOpen(enrollment.schoolId(), occurredOn);
             var hours = positiveHours(command.hours(), "期初消耗课时");
