@@ -551,6 +551,12 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
               feeHours = line.hours();
             }
             // 模式 4/5 是"退课后实际费用"变体：先扣掉已退费用与已退课时，再算单价。
+            // 模式 1（平均价格）在旧系统里就是"总价 − 优惠"再除以总课时
+            // （FClassStudent#getConsumeEHM: fee = getTotalPrice() - getPriceDiscount()），这里对齐。
+            if (mode == 1) {
+              fee = fee.subtract(discountTotal(enrollment));
+              if (fee.signum() < 0) fee = BigDecimal.ZERO;
+            }
             // 模式 4/5 是"退课后实际费用"变体：先扣优惠，再扣已退费用与已退课时。
             // 优惠只减少应收，不摊进服务费（服务费按既有口径不摊销）。
             if (mode == 4) {

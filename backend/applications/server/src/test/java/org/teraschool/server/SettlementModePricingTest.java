@@ -344,4 +344,28 @@ class SettlementModePricingTest {
     assertThat(rec.consumedHours()).isEqualTo("3.00");
     assertThat(rec.consumptions()).hasSize(3);
   }
+
+  @Test
+  void modeOneDeductsDiscountLikeLegacy() throws Exception {
+    var enrollment = multiCourse(1);
+    // 旧系统：fee = 总价 − 优惠。总价 2000 元 4 课时 → 优惠 400 后 1600 / 4 = 400 元/课时。
+    asActor(
+        OPS,
+        () ->
+            enrollments.applyDiscount(
+                enrollment.id(), new ApplyDiscount(UUID.randomUUID(), "400.00", "开学优惠")));
+    assertThat(consume(enrollment, CHINESE, "1.00")).isEqualTo("400.00");
+  }
+
+  @Test
+  void modeOneTrailingFillsNetAfterDiscount() throws Exception {
+    var enrollment = multiCourse(1);
+    asActor(
+        OPS,
+        () ->
+            enrollments.applyDiscount(
+                enrollment.id(), new ApplyDiscount(UUID.randomUUID(), "400.00", "开学优惠")));
+    // 4 课时一次上完：正好补齐到 1600.00。
+    assertThat(consume(enrollment, CHINESE, "4.00")).isEqualTo("1600.00");
+  }
 }
