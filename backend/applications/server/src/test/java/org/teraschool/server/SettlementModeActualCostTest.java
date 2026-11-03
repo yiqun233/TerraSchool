@@ -304,16 +304,16 @@ class SettlementModeActualCostTest {
   }
 
   @Test
-  void modeFiveProratesDiscountAcrossCourses() throws Exception {
-    // 两门课各 500 元 50 课时（合计等于价格快照 1000 元 100 课时），优惠 200 元按金额比例各摊 100 元。
+  void modeFiveIgnoresDiscountLikeLegacy() throws Exception {
+    // 旧系统模式 5 只减已退费用、不减优惠：语文 500 元 50 课时，优惠 200 后仍是 10.00 元/课时。
+    // 这条行为有"消耗可能超过折后应收"的疑点，登记为 Q35；确认前先与旧系统保持一致。
     var enrollment = enrollmentWithTwoCourses(5);
     asActor(
         OPS,
         () ->
             enrollments.applyDiscount(
                 enrollment.id(), new ApplyDiscount(UUID.randomUUID(), "200.00", "开业优惠")));
-    // 语文摊 100 元：400 元 / 50 课时 = 8.00 元/课时。
-    assertThat(consume(enrollment, "1.00")).isEqualTo("8.00");
+    assertThat(consume(enrollment, "1.00")).isEqualTo("10.00");
   }
 
   /** 两门课程的报名：语文 + 数学各 50 课时 500 元。 */

@@ -563,10 +563,11 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
               fee = fee.subtract(discountTotal(enrollment)).subtract(cancelledAmount(enrollmentId));
               feeHours = feeHours.subtract(enrollment.cancelledHours());
             } else if (mode == 5 && consumedCurriculum != null) {
-              var lineDiscount = courseDiscount(enrollment, consumedCurriculum);
+              // 旧系统模式 5 只减已退费用、不减优惠（FClassStudent#getConsumeEHM），先照旧系统。
+              // 这会带来"课程模式消耗可能超过折后应收"的疑点，已登记为 Q35 待确认。
               for (var course : enrollment.courses())
                 if (course.curriculumId().equals(consumedCurriculum)) {
-                  fee = fee.subtract(lineDiscount).subtract(course.cancelledAmount());
+                  fee = fee.subtract(course.cancelledAmount());
                   feeHours = feeHours.subtract(course.cancelledHours());
                   break;
                 }
