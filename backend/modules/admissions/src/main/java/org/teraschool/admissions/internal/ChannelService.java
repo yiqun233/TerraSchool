@@ -33,9 +33,11 @@ class ChannelService implements ChannelCommands, ChannelQueries {
     return tx.execute(
         scope.tenantId(),
         () -> {
-          var names = schools.names(scope.readableSchoolIds());
+          schools.lockTenant(scope.tenantId());
+          var verified = actors.requireResourceScopeInTransaction("CHANNEL");
+          var names = schools.names(verified.readableSchoolIds());
           var options =
-              scope.readableSchoolIds().stream()
+              verified.readableSchoolIds().stream()
                   .filter(names::containsKey)
                   .sorted(Comparator.comparing((UUID id) -> names.get(id)).thenComparing(id -> id))
                   .map(
@@ -43,7 +45,7 @@ class ChannelService implements ChannelCommands, ChannelQueries {
                           new ChannelSchoolOption(
                               id,
                               names.get(id),
-                              scope.maintainableSchoolIds().contains(id)
+                              verified.maintainableSchoolIds().contains(id)
                                   && schools.require(id).active()))
                   .toList();
           return new ChannelCapabilities(options);
@@ -60,6 +62,10 @@ class ChannelService implements ChannelCommands, ChannelQueries {
     return tx.execute(
         scope.tenantId(),
         () -> {
+          schools.lockTenant(scope.tenantId());
+          var verified = actors.requireResourceScopeInTransaction("CHANNEL");
+          if (!verified.readableSchoolIds().contains(schoolId))
+            throw new AccessDeniedException("无该学校渠道查看权限");
           var rows =
               sql.fetch(
                   "select id,school_id,name,active,version from admissions.channel where school_id=? order by name,id limit ? offset ?",
