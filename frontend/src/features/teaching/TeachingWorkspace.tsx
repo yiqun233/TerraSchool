@@ -13,6 +13,7 @@ import {
   Radio,
   Select,
   Space,
+  Switch,
   Table,
   Tag,
   Typography,
@@ -185,6 +186,12 @@ export function TeachingWorkspace({
           columns={[
             { title: "班级", dataIndex: "name" },
             { title: "课程", dataIndex: "curriculumName" },
+            {
+              title: "类型",
+              dataIndex: "groupTraining",
+              render: (groupTraining: boolean) =>
+                groupTraining ? <Tag color="blue">团培</Tag> : <Tag>普通</Tag>,
+            },
             { title: "在班人数", dataIndex: "memberCount" },
             {
               title: "状态",
@@ -604,6 +611,7 @@ export function ClassCreator({
           curriculumId: values.curriculumId,
           name: values.name,
           classType: values.classType ?? "NORMAL",
+          groupTraining: values.groupTraining ?? false,
         },
       });
       if (!response.ok) {
@@ -640,6 +648,15 @@ export function ClassCreator({
           ]}
         >
           <Input maxLength={100} disabled={busy} />
+        </Form.Item>
+        <Form.Item
+          label="团培班"
+          name="groupTraining"
+          valuePropName="checked"
+          initialValue={false}
+          extra="沿用旧项目的班级属性；报名、课时和账户仍按个人分别记账。"
+        >
+          <Switch disabled={busy} />
         </Form.Item>
         <Form.Item
           label="班型"

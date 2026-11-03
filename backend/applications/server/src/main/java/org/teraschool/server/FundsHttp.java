@@ -88,6 +88,22 @@ class FundsHttp {
     return commands.cancelHoursAndReturnToAccount(id, command);
   }
 
+  @PostMapping(
+      value = "/api/funds/enrollments/{id}/refund-service-fee",
+      consumes = "application/json")
+  ServiceFeeRefundResult refundServiceFee(
+      @PathVariable UUID id, @RequestBody RefundServiceFeeCommand command) {
+    return commands.refundServiceFee(id, command);
+  }
+
+  @PostMapping(
+      value = "/api/funds/enrollments/{id}/service-fee-refunds/reverse",
+      consumes = "application/json")
+  ServiceFeeRefundResult reverseServiceFeeRefund(
+      @PathVariable UUID id, @RequestBody ReverseServiceFeeRefundCommand command) {
+    return commands.reverseServiceFeeRefund(id, command);
+  }
+
   @GetMapping("/api/funds/refunds")
   List<CashRefundView> refunds(@RequestParam UUID enrollmentId) {
     return queries.cashRefunds(enrollmentId);

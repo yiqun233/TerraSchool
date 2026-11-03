@@ -19,6 +19,13 @@ public interface FundsCommands {
   RefundResult cancelHoursAndReturnToAccount(
       UUID enrollmentId, CancelHoursAndReturnCommand command);
 
+  /** 服务费独立退费并重排报名分配，差额留在学员账户。 */
+  ServiceFeeRefundResult refundServiceFee(UUID enrollmentId, RefundServiceFeeCommand command);
+
+  /** 冲正尚未锁月的服务费退费，写补偿记录并重新分配余额。 */
+  ServiceFeeRefundResult reverseServiceFeeRefund(
+      UUID enrollmentId, ReverseServiceFeeRefundCommand command);
+
   /** 准备现金退款并冻结资金：需要 REFUND_PAY。 */
   CashRefundView prepareCashRefund(PrepareCashRefund command);
 

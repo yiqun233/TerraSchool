@@ -15,8 +15,10 @@ import org.springframework.stereotype.Service;
 import org.teraschool.approval.api.ApprovalGate;
 import org.teraschool.archive.api.StudentAccess;
 import org.teraschool.enrollment.api.CancelHours;
+import org.teraschool.enrollment.api.CancelServiceFee;
 import org.teraschool.enrollment.api.EnrollmentAccess;
 import org.teraschool.enrollment.api.EnrollmentCommands;
+import org.teraschool.enrollment.api.ReverseServiceFeeRefund;
 import org.teraschool.finance.api.PeriodGate;
 import org.teraschool.funds.api.*;
 import org.teraschool.identity.api.Actor;
@@ -656,6 +658,165 @@ public class FundsService implements FundsQueries, FundsCommands {
   }
 
   @Override
+  public ServiceFeeRefundResult refundServiceFee(
+      UUID enrollmentId, RefundServiceFeeCommand command) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      return refundServiceFeeWithTrace(enrollmentId, command);
+    }
+  }
+
+  private ServiceFeeRefundResult refundServiceFeeWithTrace(
+      UUID enrollmentId, RefundServiceFeeCommand command) {
+    if (enrollmentId == null || command == null || command.requestId() == null)
+      throw new IllegalArgumentException("需要报名、退费请求身份和金额");
+    var amount = moneyAmount(command.amount(), "服务费退费额");
+    var reason = text(command.reason(), 200, "服务费退费原因");
+    var actor = actors.requireAction("REFUND_APPLY");
+    return tx.execute(
+        actor.tenantId(),
+        () -> {
+          schools.lockTenant(actor.tenantId());
+          var verified = actors.requireActionInTransaction("REFUND_APPLY");
+          var enrollment = enrollments.require(enrollmentId);
+          if (!verified.schools().contains(enrollment.schoolId()))
+            throw new AccessDeniedException("无该学校的服务费退费权限");
+          if (!schools.require(enrollment.schoolId()).active())
+            throw new AccessDeniedException("学校已停用，不能退服务费");
+          if (!"ACTIVE".equals(enrollment.status()))
+            throw new FundsConflict("ENROLLMENT_NOT_ACTIVE");
+          periods.requireOpen(enrollment.schoolId(), LocalDate.now());
+          lockStudent(enrollment.studentId());
+          var digest =
+              fingerprint(
+                  "SERVICE_FEE_REFUND",
+                  enrollmentId.toString(),
+                  amount.toPlainString(),
+                  String.valueOf(command.additionalConsume()),
+                  String.valueOf(reason),
+                  String.valueOf(command.approvalId()));
+          var previous =
+              previousRequest(verified, command.requestId(), digest, "SERVICE_FEE_REFUND");
+          if (previous != null)
+            return serviceFeeRefundResult(enrollmentId, command.requestId(), amount);
+          approvals.consume(
+              "REFUND_HOURS", enrollment.schoolId(), enrollmentId, amount, command.approvalId());
+          enrollmentCommands.cancelServiceFee(
+              enrollmentId,
+              new CancelServiceFee(
+                  command.amount(), command.additionalConsume(), reason, command.requestId()));
+          rebalance(
+              verified,
+              enrollmentId,
+              enrollment.schoolId(),
+              enrollment.studentId(),
+              enrollments.require(enrollmentId).netAmount());
+          rememberRequest(
+              verified, command.requestId(), "SERVICE_FEE_REFUND", enrollmentId, digest);
+          audit(
+              verified,
+              "REFUND_REBALANCED",
+              enrollmentId,
+              enrollment.schoolId(),
+              amount,
+              "service_fee_refund");
+          return serviceFeeRefundResult(enrollmentId, command.requestId(), amount);
+        });
+  }
+
+  @Override
+  public ServiceFeeRefundResult reverseServiceFeeRefund(
+      UUID enrollmentId, ReverseServiceFeeRefundCommand command) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      if (enrollmentId == null
+          || command == null
+          || command.requestId() == null
+          || command.refundId() == null) throw new IllegalArgumentException("需要报名、原退费和冲正请求身份");
+      var reason = text(command.reason(), 200, "冲正原因");
+      var actor = actors.requireAction("REFUND_APPLY");
+      return tx.execute(
+          actor.tenantId(),
+          () -> {
+            schools.lockTenant(actor.tenantId());
+            var verified = actors.requireActionInTransaction("REFUND_APPLY");
+            var enrollment = enrollments.require(enrollmentId);
+            if (!verified.schools().contains(enrollment.schoolId()))
+              throw new AccessDeniedException("无该学校的服务费退费冲正权限");
+            if (!schools.require(enrollment.schoolId()).active())
+              throw new AccessDeniedException("学校已停用，不能冲正服务费退费");
+            periods.requireOpen(enrollment.schoolId(), LocalDate.now());
+            lockStudent(enrollment.studentId());
+            var digest =
+                fingerprint(
+                    "SERVICE_FEE_REVERSAL",
+                    enrollmentId.toString(),
+                    command.refundId().toString(),
+                    String.valueOf(reason),
+                    String.valueOf(command.approvalId()));
+            var previous =
+                previousRequest(verified, command.requestId(), digest, "SERVICE_FEE_REVERSAL");
+            if (previous != null) {
+              var repeated =
+                  enrollmentCommands.reverseServiceFeeRefund(
+                      enrollmentId,
+                      new ReverseServiceFeeRefund(command.requestId(), command.refundId(), reason));
+              return serviceFeeRefundResult(
+                  enrollmentId, command.refundId(), new BigDecimal(repeated.amount()));
+            }
+            var reversed =
+                enrollmentCommands.reverseServiceFeeRefund(
+                    enrollmentId,
+                    new ReverseServiceFeeRefund(command.requestId(), command.refundId(), reason));
+            var correction =
+                new BigDecimal(reversed.amount())
+                    .subtract(new BigDecimal(reversed.additionalConsume()));
+            if (correction.signum() > 0) {
+              if (availableBalance(enrollment.studentId()).compareTo(correction) < 0)
+                throw new FundsConflict("INSUFFICIENT_AVAILABLE_BALANCE_FOR_REVERSAL");
+            }
+            var approvalAmount = correction.abs();
+            if (approvalAmount.signum() == 0) approvalAmount = new BigDecimal(reversed.amount());
+            approvals.consume(
+                "REFUND_HOURS",
+                enrollment.schoolId(),
+                enrollmentId,
+                approvalAmount,
+                command.approvalId());
+            rebalance(
+                verified,
+                enrollmentId,
+                enrollment.schoolId(),
+                enrollment.studentId(),
+                new BigDecimal(reversed.netAmount()));
+            rememberRequest(
+                verified, command.requestId(), "SERVICE_FEE_REVERSAL", enrollmentId, digest);
+            audit(
+                verified,
+                "REFUND_REBALANCED",
+                enrollmentId,
+                enrollment.schoolId(),
+                correction,
+                "service_fee_refund_reversal");
+            return serviceFeeRefundResult(
+                enrollmentId, command.refundId(), new BigDecimal(reversed.amount()));
+          });
+    }
+  }
+
+  private ServiceFeeRefundResult serviceFeeRefundResult(
+      UUID enrollmentId, UUID refundId, BigDecimal amount) {
+    var enrollment = enrollments.require(enrollmentId);
+    return new ServiceFeeRefundResult(
+        enrollmentId,
+        refundId,
+        money(amount),
+        money(enrollment.serviceFeeRefunded()),
+        money(enrollment.netAmount()),
+        money(activeAllocatedByEnrollment(enrollmentId)),
+        money(accountTotal(enrollment.studentId())),
+        money(availableBalance(enrollment.studentId())));
+  }
+
+  @Override
   public CashRefundView prepareCashRefund(PrepareCashRefund command) {
     try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
       return prepareWithTrace(command);
@@ -820,7 +981,7 @@ public class FundsService implements FundsQueries, FundsCommands {
     return new RefundResult(
         enrollmentId,
         hours(enrollment.cancelledHours()),
-        money(enrollment.price().subtract(enrollment.netAmount())),
+        money(refundedAmount(enrollmentId)),
         money(enrollment.netAmount()),
         money(allocated),
         money(accountTotal(enrollment.studentId())),

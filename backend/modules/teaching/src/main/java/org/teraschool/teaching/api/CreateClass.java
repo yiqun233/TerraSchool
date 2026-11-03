@@ -9,8 +9,18 @@ import java.util.UUID;
  * 走平均价格、大班走课程匹配。
  */
 public record CreateClass(
-    UUID requestId, UUID schoolId, UUID curriculumId, String name, String classType) {
+    UUID requestId,
+    UUID schoolId,
+    UUID curriculumId,
+    String name,
+    String classType,
+    boolean groupTraining) {
   public CreateClass(UUID requestId, UUID schoolId, UUID curriculumId, String name) {
-    this(requestId, schoolId, curriculumId, name, "NORMAL");
+    this(requestId, schoolId, curriculumId, name, "NORMAL", false);
+  }
+
+  public CreateClass(
+      UUID requestId, UUID schoolId, UUID curriculumId, String name, String classType) {
+    this(requestId, schoolId, curriculumId, name, classType, false);
   }
 }

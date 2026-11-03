@@ -167,6 +167,7 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
         netAmount(enrollmentId),
         row.get("price", java.math.BigDecimal.class),
         row.get("service_fee", java.math.BigDecimal.class),
+        serviceFeeRefunded(enrollmentId),
         discountAmount(enrollmentId),
         row.get("hours", java.math.BigDecimal.class),
         row.get("settlement_mode", Integer.class),
@@ -540,6 +541,202 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
 
   private String hours(BigDecimal value) {
     return value == null ? null : value.setScale(2, RoundingMode.UNNECESSARY).toPlainString();
+  }
+
+  @Override
+  public ServiceFeeCancellationView cancelServiceFee(UUID id, CancelServiceFee command) {
+    if (id == null || command == null || command.requestId() == null)
+      throw new IllegalArgumentException("需要报名、服务费金额和请求身份");
+    var amount = positiveHours(command.amount());
+    var additionalConsume = nonnegativeMoney(command.additionalConsume(), "额外消费");
+    var reason = text(command.reason(), 200, "服务费退费原因");
+    var actor = actors.requireAction("REFUND_APPLY");
+    return tx.execute(
+        actor.tenantId(),
+        () -> {
+          schools.lockTenant(actor.tenantId());
+          var verified = actors.requireActionInTransaction("REFUND_APPLY");
+          var row = requireEnrollmentForUpdate(id);
+          var schoolId = row.get("school_id", UUID.class);
+          if (!verified.schools().contains(schoolId))
+            throw new AccessDeniedException("无该学校的服务费退费权限");
+          if (!schools.require(schoolId).active()) throw new AccessDeniedException("学校已停用，不能退服务费");
+          if (!"ACTIVE".equals(row.get("status", String.class)))
+            throw new EnrollmentConflict("ENROLLMENT_NOT_ACTIVE");
+          periods.requireOpen(schoolId, LocalDate.now());
+          var digest =
+              fingerprint(
+                  "SERVICE_FEE_REFUND",
+                  id.toString(),
+                  amount.toPlainString(),
+                  additionalConsume.toPlainString(),
+                  String.valueOf(reason));
+          var prior =
+              sql.fetchOne(
+                  "select fingerprint from enrollment.creation_request where tenant_id=? and actor_id=? and request_id=?",
+                  actor.tenantId(),
+                  actor.accountId(),
+                  command.requestId());
+          if (prior != null) {
+            if (!digest.equals(prior.get("fingerprint", String.class)))
+              throw new EnrollmentConflict("IDEMPOTENCY_MISMATCH");
+            var refunded = serviceFeeRefunded(id);
+            return new ServiceFeeCancellationView(
+                id, money(amount), money(additionalConsume), money(refunded), money(netAmount(id)));
+          }
+          var serviceFee = row.get("service_fee", BigDecimal.class);
+          var refunded = serviceFeeRefunded(id);
+          if (refunded.add(amount).compareTo(serviceFee) > 0)
+            throw new EnrollmentConflict("SERVICE_FEE_REFUND_EXCEEDS_REMAINING");
+          var refundId = command.requestId();
+          sql.execute(
+              "insert into enrollment.service_fee_refund(id,tenant_id,enrollment_id,amount,additional_consume,reason) values (?,?,?,?,?,?)",
+              refundId,
+              actor.tenantId(),
+              id,
+              amount,
+              additionalConsume,
+              reason);
+          sql.execute(
+              "insert into enrollment.charge(tenant_id,enrollment_id,kind,amount,reason) values (?,?,'ADJUSTMENT',?,'服务费退费')",
+              actor.tenantId(),
+              id,
+              amount.negate());
+          if (additionalConsume.signum() > 0)
+            sql.execute(
+                "insert into enrollment.charge(tenant_id,enrollment_id,kind,amount,reason) values (?,?,'ADJUSTMENT',?,'服务费退费附带额外消费')",
+                actor.tenantId(),
+                id,
+                additionalConsume);
+          sql.execute(
+              "insert into enrollment.creation_request(tenant_id,actor_id,request_id,kind,resource_id,fingerprint) values (?,?,?,'SERVICE_FEE_REFUND',?,?)",
+              actor.tenantId(),
+              actor.accountId(),
+              command.requestId(),
+              id,
+              digest);
+          audit(actor, "SERVICE_FEE_REFUNDED", id, schoolId, amount.toPlainString());
+          var refundedAfter = refunded.add(amount);
+          return new ServiceFeeCancellationView(
+              id,
+              money(amount),
+              money(additionalConsume),
+              money(refundedAfter),
+              money(netAmount(id)));
+        });
+  }
+
+  @Override
+  public ServiceFeeCancellationView reverseServiceFeeRefund(
+      UUID id, ReverseServiceFeeRefund command) {
+    if (id == null || command == null || command.requestId() == null || command.refundId() == null)
+      throw new IllegalArgumentException("需要报名、原退费和冲正请求身份");
+    var reason = text(command.reason(), 200, "冲正原因");
+    var actor = actors.requireAction("REFUND_APPLY");
+    return tx.execute(
+        actor.tenantId(),
+        () -> {
+          schools.lockTenant(actor.tenantId());
+          var verified = actors.requireActionInTransaction("REFUND_APPLY");
+          var enrollment = requireEnrollmentForUpdate(id);
+          var schoolId = enrollment.get("school_id", UUID.class);
+          if (!verified.schools().contains(schoolId))
+            throw new AccessDeniedException("无该学校的服务费退费冲正权限");
+          if (!schools.require(schoolId).active())
+            throw new AccessDeniedException("学校已停用，不能冲正服务费退费");
+          if (!"ACTIVE".equals(enrollment.get("status", String.class)))
+            throw new EnrollmentConflict("ENROLLMENT_NOT_ACTIVE");
+          periods.requireOpen(schoolId, LocalDate.now());
+          var original =
+              sql.fetchOne(
+                  "select amount,additional_consume,refunded_at::date as refund_date"
+                      + " from enrollment.service_fee_refund"
+                      + " where id=? and enrollment_id=?",
+                  command.refundId(),
+                  id);
+          if (original == null) throw new EnrollmentConflict("SERVICE_FEE_REFUND_NOT_FOUND");
+          var amount = original.get("amount", BigDecimal.class);
+          var additional = original.get("additional_consume", BigDecimal.class);
+          periods.requireOpen(schoolId, original.get("refund_date", LocalDate.class));
+          var digest =
+              fingerprint(
+                  "SERVICE_FEE_REVERSAL",
+                  id.toString(),
+                  command.refundId().toString(),
+                  String.valueOf(reason));
+          var prior =
+              sql.fetchOne(
+                  "select fingerprint from enrollment.creation_request"
+                      + " where tenant_id=? and actor_id=? and request_id=?",
+                  actor.tenantId(),
+                  actor.accountId(),
+                  command.requestId());
+          if (prior != null) {
+            if (!digest.equals(prior.get("fingerprint", String.class)))
+              throw new EnrollmentConflict("IDEMPOTENCY_MISMATCH");
+            return new ServiceFeeCancellationView(
+                id,
+                money(amount),
+                money(additional),
+                money(serviceFeeRefunded(id)),
+                money(netAmount(id)));
+          }
+          var alreadyReversed =
+              sql.fetchOne(
+                  "select refund_id from enrollment.service_fee_refund_reversal where refund_id=?",
+                  command.refundId());
+          if (alreadyReversed != null)
+            throw new EnrollmentConflict("SERVICE_FEE_REFUND_ALREADY_REVERSED");
+          var correction = amount.subtract(additional);
+          sql.execute(
+              "insert into enrollment.charge(tenant_id,enrollment_id,kind,amount,reason)"
+                  + " values (?,?,'ADJUSTMENT',?,'服务费退费冲正')",
+              actor.tenantId(),
+              id,
+              correction);
+          sql.execute(
+              "insert into enrollment.service_fee_refund_reversal"
+                  + "(tenant_id,enrollment_id,refund_id,reason) values (?,?,?,?)",
+              actor.tenantId(),
+              id,
+              command.refundId(),
+              reason);
+          sql.execute(
+              "insert into enrollment.creation_request(tenant_id,actor_id,request_id,kind,resource_id,fingerprint)"
+                  + " values (?,?,?,'SERVICE_FEE_REVERSAL',?,?)",
+              actor.tenantId(),
+              actor.accountId(),
+              command.requestId(),
+              id,
+              digest);
+          audit(actor, "SERVICE_FEE_REFUND_REVERSED", id, schoolId, correction.toPlainString());
+          return new ServiceFeeCancellationView(
+              id,
+              money(amount),
+              money(additional),
+              money(serviceFeeRefunded(id)),
+              money(netAmount(id)));
+        });
+  }
+
+  private BigDecimal serviceFeeRefunded(UUID enrollmentId) {
+    var value =
+        sql.fetchOne(
+                "select coalesce(sum(r.amount),0) as total from enrollment.service_fee_refund r"
+                    + " where r.enrollment_id=? and not exists (select 1 from enrollment.service_fee_refund_reversal v where v.refund_id=r.id)",
+                enrollmentId)
+            .get("total", BigDecimal.class);
+    return value == null ? BigDecimal.ZERO : value;
+  }
+
+  private BigDecimal nonnegativeMoney(String value, String label) {
+    if (value == null || value.isBlank()) return BigDecimal.ZERO.setScale(2);
+    var text = value.strip();
+    if (!DECIMAL.matcher(text).matches())
+      throw new IllegalArgumentException(label + "须为最多两位小数的十进制数");
+    var amount = new BigDecimal(text).setScale(2, RoundingMode.UNNECESSARY);
+    if (amount.signum() < 0) throw new IllegalArgumentException(label + "不能为负数");
+    return amount;
   }
 
   @Override

@@ -96,6 +96,28 @@ class RejectedRequestAudit {
       } catch (IllegalArgumentException invalid) {
         /* 不保存原始路径文本。 */
       }
+    } else if (path.matches("/api/funds/enrollments/[^/]+/refund-service-fee")) {
+      action = FailureAudit.Action.REFUND_HOURS;
+      try {
+        resource =
+            UUID.fromString(
+                path.substring(
+                    "/api/funds/enrollments/".length(),
+                    path.length() - "/refund-service-fee".length()));
+      } catch (IllegalArgumentException invalid) {
+        /* 不保存原始路径文本。 */
+      }
+    } else if (path.matches("/api/funds/enrollments/[^/]+/service-fee-refunds/reverse")) {
+      action = FailureAudit.Action.REFUND_HOURS;
+      try {
+        resource =
+            UUID.fromString(
+                path.substring(
+                    "/api/funds/enrollments/".length(),
+                    path.length() - "/service-fee-refunds/reverse".length()));
+      } catch (IllegalArgumentException invalid) {
+        /* 不保存原始路径文本。 */
+      }
     } else if (path.equals("/api/funds/refunds")) action = FailureAudit.Action.REFUND_PREPARE;
     else if (path.matches("/api/funds/refunds/[^/]+/(confirm|cancel)")) {
       action =

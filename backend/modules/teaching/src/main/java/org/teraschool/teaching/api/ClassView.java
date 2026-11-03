@@ -11,5 +11,6 @@ public record ClassView(
     String curriculumName,
     String name,
     String status,
+    boolean groupTraining,
     int memberCount,
     long version) {}

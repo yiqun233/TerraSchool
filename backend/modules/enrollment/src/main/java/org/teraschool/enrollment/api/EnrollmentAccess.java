@@ -26,6 +26,7 @@ public interface EnrollmentAccess {
       BigDecimal netAmount,
       BigDecimal price,
       BigDecimal serviceFee,
+      BigDecimal serviceFeeRefunded,
       BigDecimal discount,
       BigDecimal hours,
       int settlementMode,

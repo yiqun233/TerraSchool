@@ -14,6 +14,11 @@ public interface EnrollmentCommands {
    */
   CancellationView cancelHours(UUID id, CancelHours command);
 
+  /** 按服务费剩余额退费并生成应收减项。 */
+  ServiceFeeCancellationView cancelServiceFee(UUID id, CancelServiceFee command);
+
+  ServiceFeeCancellationView reverseServiceFeeRefund(UUID id, ReverseServiceFeeRefund command);
+
   /** 登记一次性减免：写一条应收减项并留审计。 */
   EnrollmentView applyDiscount(UUID id, ApplyDiscount command);
 }

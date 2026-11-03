@@ -111,7 +111,7 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
         () -> {
           var schoolName = schools.require(schoolId).name();
           return sql.fetch(
-                  "select c.id,c.school_id,c.curriculum_id,c.name,c.status,c.version,"
+                  "select c.id,c.school_id,c.curriculum_id,c.name,c.status,c.version,c.group_training,"
                       + "cur.name as curriculum_name,"
                       + "(select count(*) from teaching.enrollment_class m where m.class_id=c.id and m.active)"
                       + " as member_count from teaching.class c"
@@ -268,7 +268,13 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
     if (name == null) throw new IllegalArgumentException("班级名称必填");
     var scope = actors.requireResourceScope("TEACHING");
     requireMaintainable(scope, command.schoolId());
-    var fingerprint = fingerprint("CLASS", name, String.valueOf(command.curriculumId()));
+    var fingerprint =
+        fingerprint(
+            "CLASS",
+            name,
+            String.valueOf(command.curriculumId()),
+            classType(command.classType()),
+            Boolean.toString(command.groupTraining()));
     return tx.execute(
         scope.tenantId(),
         () -> {
@@ -286,14 +292,15 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
           var id = UUID.randomUUID();
           try {
             sql.execute(
-                "insert into teaching.class(id,tenant_id,school_id,curriculum_id,name,class_type)"
-                    + " values (?,?,?,?,?,?)",
+                "insert into teaching.class(id,tenant_id,school_id,curriculum_id,name,class_type,group_training)"
+                    + " values (?,?,?,?,?,?,?)",
                 id,
                 scope.tenantId(),
                 command.schoolId(),
                 command.curriculumId(),
                 name,
-                classType(command.classType()));
+                classType(command.classType()),
+                command.groupTraining());
           } catch (RuntimeException error) {
             if (uniqueViolation(error)) throw new TeachingConflict("DUPLICATE_CLASS_NAME");
             throw error;
@@ -696,7 +703,7 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
   private Record requireClass(ResourceScope scope, UUID id) {
     var row =
         sql.fetchOne(
-            "select c.id,c.school_id,c.curriculum_id,c.name,c.status,c.version,"
+            "select c.id,c.school_id,c.curriculum_id,c.name,c.status,c.version,c.group_training,"
                 + "cur.name as curriculum_name,"
                 + "(select count(*) from teaching.enrollment_class m where m.class_id=c.id and m.active)"
                 + " as member_count from teaching.class c"
@@ -748,6 +755,7 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
         row.get("curriculum_name", String.class),
         row.get("name", String.class),
         row.get("status", String.class),
+        row.get("group_training", Boolean.class),
         row.get("member_count", Integer.class),
         row.get("version", Long.class));
   }

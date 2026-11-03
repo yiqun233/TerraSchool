@@ -5,7 +5,10 @@ import static org.teraschool.server.EngineeringTest.update;
 
 import java.util.*;
 import java.util.function.Supplier;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -21,7 +24,7 @@ import org.teraschool.teaching.api.*;
 /**
  * 模式 4/5（退课后实际费用）：自定义退费额后按「剩余费用 ÷ 剩余课时」重算单价，并在课时耗尽时补齐尾差。
  *
- * <p>金标准取自旧系统帮助文本：100 课时 1000 元，退 50 课时退 200 元 → (1000−200)÷(100−50) = 160 元/课时。
+ * <p>参考旧系统帮助文本：100 课时 1000 元，退 50 课时退 200 元 → (1000−200)÷(100−50) = 16 元/课时。
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class SettlementModeActualCostTest {
@@ -38,6 +41,7 @@ class SettlementModeActualCostTest {
   @Autowired TeachingCommands teaching;
   @Autowired TeachingQueries teachingQueries;
   @Autowired FundsCommands funds;
+  @Autowired FundsQueries fundsQueries;
 
   @DynamicPropertySource
   static void config(DynamicPropertyRegistry r) {
@@ -229,6 +233,65 @@ class SettlementModeActualCostTest {
     assertThat(consume(enrollment, "1.00")).isEqualTo("16.00");
   }
 
+  static Stream<org.junit.jupiter.params.provider.Arguments> modeRefundExpectations() {
+    return Stream.of(
+        // reconciliation returns cumulative consumed amount: first and second lessons combined.
+        org.junit.jupiter.params.provider.Arguments.of(0, "10.00", "20.00"),
+        org.junit.jupiter.params.provider.Arguments.of(1, "8.00", "16.00"),
+        org.junit.jupiter.params.provider.Arguments.of(2, "10.00", "20.00"),
+        org.junit.jupiter.params.provider.Arguments.of(3, "10.00", "20.00"),
+        org.junit.jupiter.params.provider.Arguments.of(4, "8.00", "15.78"),
+        org.junit.jupiter.params.provider.Arguments.of(5, "10.00", "20.00"));
+  }
+
+  @ParameterizedTest
+  @MethodSource("modeRefundExpectations")
+  void identicalMultiCourseDiscountAndPartialRefundScenarioMatchesModeCase(
+      int mode, String expectedBeforeRefund, String expectedAfterRefund) throws Exception {
+    lessonSeq = 0;
+    classes.clear();
+    var enrollment = enrollmentWithTwoCourses(mode);
+    asActor(
+        OPS,
+        () ->
+            enrollments.applyDiscount(
+                enrollment.id(), new ApplyDiscount(UUID.randomUUID(), "200.00", "同组模式算例")));
+    var receipt =
+        asActor(
+            OPS,
+            () ->
+                funds.createReceipt(
+                    new CreateReceipt(
+                        UUID.randomUUID(),
+                        SCHOOL,
+                        enrollment.studentId(),
+                        "800.00",
+                        "CASH",
+                        "2026-02-10")));
+    asActor(
+        OPS, () -> funds.allocate(new AllocateReceipt(receipt.id(), enrollment.id(), "800.00")));
+    assertThat(consume(enrollment, "1.00")).isEqualTo(expectedBeforeRefund);
+    var command =
+        new CancelHoursAndReturnCommand(
+            UUID.randomUUID(),
+            "10.00",
+            "同组模式算例部分退课",
+            null,
+            mode == 1 || mode == 4 ? null : CHINESE,
+            null);
+    var refund = asActor(OPS, () -> funds.cancelHoursAndReturnToAccount(enrollment.id(), command));
+    assertThat(refund.amount()).isEqualTo("100.00");
+    assertThat(refund.netAmount()).isEqualTo("700.00");
+    assertThat(refund.hours()).isEqualTo("10.00");
+    assertThat(refund.allocated()).isEqualTo("700.00");
+    assertThat(refund.balanceTotal()).isEqualTo("100.00");
+    assertThat(refund.balanceAvailable()).isEqualTo("100.00");
+    // 报名创建日为 2026-02-10，当前财务日期在 2026-11；同一请求跨月重放不得重复退费。
+    assertThat(asActor(OPS, () -> funds.cancelHoursAndReturnToAccount(enrollment.id(), command)))
+        .isEqualTo(refund);
+    assertThat(consume(enrollment, "1.00")).isEqualTo(expectedAfterRefund);
+  }
+
   @Test
   void modeFourFixesTrailingDifference() throws Exception {
     var enrollment = enrollment(4);
@@ -310,6 +373,47 @@ class SettlementModeActualCostTest {
   }
 
   @Test
+  void combinedDiscountConsumptionRefundAndRetryReconcilesUnderCurrentModeFour() throws Exception {
+    var enrollment = enrollmentWithTwoCourses(4);
+    var discount = new ApplyDiscount(UUID.randomUUID(), "200.00", "组合算例优惠");
+    asActor(OPS, () -> enrollments.applyDiscount(enrollment.id(), discount));
+    asActor(OPS, () -> enrollments.applyDiscount(enrollment.id(), discount));
+    var receipt =
+        asActor(
+            OPS,
+            () ->
+                funds.createReceipt(
+                    new CreateReceipt(
+                        UUID.randomUUID(),
+                        SCHOOL,
+                        enrollment.studentId(),
+                        "800",
+                        "CASH",
+                        "2026-02-10")));
+    asActor(OPS, () -> funds.allocate(new AllocateReceipt(receipt.id(), enrollment.id(), "800")));
+    // 人工预期：800 / 100 = 8；部分退 10 课时、200 元后，600 / 90 = 6.67。
+    assertThat(consume(enrollment, "1.00")).isEqualTo("8.00");
+    var request =
+        new CancelHoursAndReturnCommand(UUID.randomUUID(), "10.00", "组合算例退课", null, null, "200.00");
+    var result = asActor(OPS, () -> funds.cancelHoursAndReturnToAccount(enrollment.id(), request));
+    assertThat(asActor(OPS, () -> funds.cancelHoursAndReturnToAccount(enrollment.id(), request)))
+        .isEqualTo(result);
+    assertThat(result.amount()).isEqualTo("200.00");
+    assertThat(result.netAmount()).isEqualTo("600.00");
+    assertThat(result.allocated()).isEqualTo("600.00");
+    assertThat(consume(enrollment, "1.00")).isEqualTo("14.67");
+    var reconciliation = asActor(OPS, () -> teachingQueries.reconciliation(enrollment.id()));
+    assertThat(reconciliation.consumedHours()).isEqualTo("2.00");
+    assertThat(reconciliation.cancelledHours()).isEqualTo("10.00");
+    assertThat(reconciliation.remainingHours()).isEqualTo("88.00");
+    var balance = asActor(OPS, () -> fundsQueries.balance(enrollment.studentId()));
+    assertThat(balance.total()).isEqualTo("200.00");
+    assertThat(balance.reserved()).isEqualTo("0.00");
+    assertThat(balance.available()).isEqualTo("200.00");
+    assertThat(balance.allocated()).isEqualTo("600.00");
+  }
+
+  @Test
   void modeFiveIgnoresDiscountLikeLegacy() throws Exception {
     // 旧系统模式 5 只减已退费用、不减优惠：语文 500 元 50 课时，优惠 200 后仍是 10.00 元/课时。
     // 这条行为有"消耗可能超过折后应收"的疑点，登记为 Q35；确认前先与旧系统保持一致。
@@ -322,14 +426,105 @@ class SettlementModeActualCostTest {
     assertThat(consume(enrollment, "1.00")).isEqualTo("10.00");
   }
 
+  @Test
+  void serviceFeeRefundReturnsOnlyFeeBalanceAndIsIdempotent() throws Exception {
+    var price =
+        asActor(
+            OPS,
+            () ->
+                catalog.draftPriceVersion(
+                    new DraftPriceVersion(
+                        UUID.randomUUID(),
+                        PRODUCT,
+                        "1000.00",
+                        "100.00",
+                        "100.00",
+                        1,
+                        null,
+                        "2026-01-01",
+                        null)));
+    asActor(
+        OPS, () -> catalog.publishPriceVersion(price.id(), new ExpectedVersion(price.version())));
+    var student = UUID.randomUUID();
+    update(
+        "insert into archive.student(id,tenant_id,student_no,name,sex,school_id) values (?,?,?,?,?,?)",
+        student,
+        TENANT,
+        "SF" + student.toString().replace("-", "").substring(0, 8),
+        "服务费退费学员",
+        "FEMALE",
+        SCHOOL);
+    var draft =
+        asActor(
+            OPS,
+            () ->
+                enrollments.create(
+                    new CreateEnrollment(UUID.randomUUID(), student, price.id(), "2026-02-10")));
+    var enrollment =
+        asActor(OPS, () -> enrollments.approve(draft.id(), new EnrollmentVersion(draft.version())));
+    var receipt =
+        asActor(
+            OPS,
+            () ->
+                funds.createReceipt(
+                    new CreateReceipt(
+                        UUID.randomUUID(), SCHOOL, student, "1100", "CASH", "2026-02-10")));
+    asActor(OPS, () -> funds.allocate(new AllocateReceipt(receipt.id(), enrollment.id(), "1100")));
+
+    var command =
+        new RefundServiceFeeCommand(UUID.randomUUID(), "100.00", "25.00", "服务费退费附带25元额外消费", null);
+    var result = asActor(OPS, () -> funds.refundServiceFee(enrollment.id(), command));
+    assertThat(asActor(OPS, () -> funds.refundServiceFee(enrollment.id(), command)))
+        .isEqualTo(result);
+    assertThat(result.amount()).isEqualTo("100.00");
+    assertThat(result.serviceFeeRefunded()).isEqualTo("100.00");
+    assertThat(result.netAmount()).isEqualTo("1025.00");
+    assertThat(result.allocated()).isEqualTo("1025.00");
+    assertThat(result.balanceTotal()).isEqualTo("75.00");
+    assertThat(result.balanceAvailable()).isEqualTo("75.00");
+    var reversalCommand =
+        new ReverseServiceFeeRefundCommand(UUID.randomUUID(), result.refundId(), "误操作冲正", null);
+    var reversed =
+        asActor(OPS, () -> funds.reverseServiceFeeRefund(enrollment.id(), reversalCommand));
+    assertThat(reversed.serviceFeeRefunded()).isEqualTo("0.00");
+    assertThat(reversed.netAmount()).isEqualTo("1100.00");
+    assertThat(reversed.allocated()).isEqualTo("1100.00");
+    assertThat(reversed.balanceTotal()).isEqualTo("0.00");
+    assertThat(asActor(OPS, () -> funds.reverseServiceFeeRefund(enrollment.id(), reversalCommand)))
+        .isEqualTo(reversed);
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    OPS,
+                    () ->
+                        funds.reverseServiceFeeRefund(
+                            enrollment.id(),
+                            new ReverseServiceFeeRefundCommand(
+                                UUID.randomUUID(), result.refundId(), "再次冲正", null))))
+        .isInstanceOf(EnrollmentConflict.class)
+        .hasMessage("SERVICE_FEE_REFUND_ALREADY_REVERSED");
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    OPS,
+                    () ->
+                        funds.refundServiceFee(
+                            enrollment.id(),
+                            new RefundServiceFeeCommand(
+                                UUID.randomUUID(), "100.01", "超出服务费", null))))
+        .isInstanceOf(EnrollmentConflict.class)
+        .hasMessage("SERVICE_FEE_REFUND_EXCEEDS_REMAINING");
+  }
+
   /** 两门课程的报名：语文 + 数学各 50 课时 500 元。 */
   EnrollmentView enrollmentWithTwoCourses(int mode) throws Exception {
     var math = UUID.randomUUID();
     update(
-        "insert into product.curriculum(id,tenant_id,school_id,name) values (?,?,?,'数学')",
+        "insert into product.curriculum(id,tenant_id,school_id,name) values (?,?,?,?)",
         math,
         TENANT,
-        SCHOOL);
+        SCHOOL,
+        "数学" + math.toString().substring(0, 8));
     var price =
         asActor(
             OPS,
