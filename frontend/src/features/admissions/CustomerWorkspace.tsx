@@ -12,6 +12,7 @@ import {
 } from "antd";
 import { api, csrf } from "../../shared/http";
 import type { components } from "../../shared/generated/api";
+import { CustomerFollowups } from "./CustomerFollowups";
 
 type Customer = components["schemas"]["Customer"];
 type Pending = {
@@ -83,6 +84,7 @@ export function CustomerWorkspace({
   const [duplicate, setDuplicate] = useState<{ token: string } | null>(null);
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  const [followupTarget, setFollowupTarget] = useState<string | null>(null);
   const [phoneDetail, setPhoneDetail] = useState<string | null>(null);
   const guard = useRef(false);
   const schools = useQuery({
@@ -144,8 +146,10 @@ export function CustomerWorkspace({
   const visibleChannels = channels.error ? null : channels.data;
   const channelUnavailable = !!channelId && !visibleChannels;
   useEffect(() => {
-    if (!currentSchool?.phoneReadable || schools.error || rows.error)
+    if (!currentSchool?.phoneReadable || schools.error || rows.error) {
       setPhoneDetail(null);
+      setFollowupTarget(null);
+    }
   }, [currentSchool?.phoneReadable, schools.error, rows.error]);
   function editName(value: string) {
     setName(value);
@@ -430,6 +434,7 @@ export function CustomerWorkspace({
             setChannelPage(0);
             setChannelId(undefined);
             setPhoneDetail(null);
+            setFollowupTarget(null);
             setDuplicate(null);
           }}
         />
@@ -540,9 +545,17 @@ export function CustomerWorkspace({
               !rows.error &&
               !schools.error &&
               row.id ? (
-                <Button disabled={busy} onClick={() => void reveal(row.id!)}>
-                  查看完整电话
-                </Button>
+                <Space>
+                  <Button disabled={busy} onClick={() => void reveal(row.id!)}>
+                    查看完整电话
+                  </Button>
+                  <Button
+                    disabled={busy}
+                    onClick={() => setFollowupTarget(row.id!)}
+                  >
+                    跟进记录
+                  </Button>
+                </Space>
               ) : null,
           },
         ]}
@@ -570,6 +583,19 @@ export function CustomerWorkspace({
           下一页
         </Button>
       </Space>
+      {followupTarget &&
+      currentSchool?.phoneReadable &&
+      !schools.error &&
+      !rows.error ? (
+        <CustomerFollowups
+          key={followupTarget}
+          customerId={followupTarget}
+          accountKey={accountKey}
+          canEdit={canEdit}
+          onClose={() => setFollowupTarget(null)}
+          onUnauthorized={onUnauthorized}
+        />
+      ) : null}
       <Modal
         title="完整联系电话"
         open={

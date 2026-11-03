@@ -25,6 +25,8 @@ class CustomerTest {
       LIMITED = UUID.randomUUID();
   @Autowired CustomerCommands commands;
   @Autowired CustomerQueries queries;
+  @Autowired CustomerFollowupCommands followupCommands;
+  @Autowired CustomerFollowupQueries followupQueries;
   @Autowired ChannelCommands channels;
   @Autowired org.teraschool.platform.api.TenantTransactions tx;
 
@@ -93,6 +95,67 @@ class CustomerTest {
     var result = as(user, () -> commands.create(command));
     assertThat(result.status()).isEqualTo("CREATED");
     return result.customer();
+  }
+
+  @Test
+  void followupsAreOwnerOnlyIdempotentAndAuditedWithoutContent() throws Exception {
+    var customer = created(A, input("跟进测试", "13900001234"));
+    var command =
+        new CustomerFollowupCommands.FollowupCreate(
+            UUID.randomUUID(), "电话沟通：敏感内容", "2026-11-01", "2026-11-10");
+    var first = as(A, () -> followupCommands.create(customer.id(), command));
+    assertThat(as(A, () -> followupCommands.create(customer.id(), command))).isEqualTo(first);
+    assertThat(as(A, () -> followupQueries.list(customer.id(), 0, 20)).items())
+        .containsExactly(first);
+    assertThat(
+            count(
+                "select count(*) from audit.customer_event where tenant_id=? and customer_id=? and action='FOLLOWUP_VIEWED'",
+                TENANT,
+                customer.id()))
+        .isEqualTo(1);
+    assertThatThrownBy(
+            () -> as(A, () -> tx.execute(TENANT, () -> followupQueries.list(customer.id(), 0, 20))))
+        .isInstanceOf(CustomerConflict.class)
+        .hasMessage("CUSTOMER_FOLLOWUP_REQUIRES_INDEPENDENT_TRANSACTION");
+    assertThatThrownBy(() -> as(B, () -> followupQueries.list(customer.id(), 0, 20)))
+        .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
+    assertThatThrownBy(() -> as(LIMITED, () -> followupQueries.list(customer.id(), 0, 20)))
+        .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
+    assertThat(
+            count(
+                "select count(*) from audit.operation_failure where tenant_id=? and actor_id=? and action='CUSTOMER_FOLLOWUP_READ' and code='ACCESS_DENIED'",
+                TENANT,
+                B))
+        .isGreaterThanOrEqualTo(1);
+    var response =
+        as(
+            A,
+            () ->
+                new CustomerHttp(queries, commands, followupQueries, followupCommands)
+                    .followups(customer.id(), 0, 20));
+    assertThat(response.getHeaders().getCacheControl()).contains("no-store");
+    var changed =
+        new CustomerFollowupCommands.FollowupCreate(
+            command.requestId(), "不同内容", command.occurredOn(), command.nextContactOn());
+    assertThatThrownBy(() -> as(A, () -> followupCommands.create(customer.id(), changed)))
+        .isInstanceOf(CustomerConflict.class)
+        .hasMessage("IDEMPOTENCY_MISMATCH");
+    assertThatThrownBy(
+            () ->
+                as(
+                    A,
+                    () ->
+                        followupCommands.create(
+                            customer.id(),
+                            new CustomerFollowupCommands.FollowupCreate(
+                                UUID.randomUUID(), "内容", "2026-02-30", null))))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThat(
+            count(
+                "select count(*) from audit.customer_event where tenant_id=? and customer_id=? and action='FOLLOWUP_ADDED'",
+                TENANT,
+                customer.id()))
+        .isEqualTo(1);
   }
 
   @Test
@@ -215,7 +278,12 @@ class CustomerTest {
     assertThatThrownBy(() -> as(A, () -> tx.execute(TENANT, () -> commands.revealPhone(own.id()))))
         .isInstanceOf(CustomerConflict.class)
         .hasMessage("CUSTOMER_PHONE_REQUIRES_INDEPENDENT_TRANSACTION");
-    var response = as(A, () -> new CustomerHttp(queries, commands).phone(own.id()));
+    var response =
+        as(
+            A,
+            () ->
+                new CustomerHttp(queries, commands, followupQueries, followupCommands)
+                    .phone(own.id()));
     assertThat(response.getBody().phone()).isEqualTo("13800001004");
     assertThat(response.getHeaders().getCacheControl()).contains("no-store");
     assertThat(

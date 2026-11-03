@@ -15,19 +15,26 @@ import org.teraschool.platform.api.*;
 /** 完整命令的失败审计独立于业务事务；嵌套调用外层回滚也须留痕。 */
 @Service
 @Primary
-class AuditedChannelCommands implements ChannelCommands, CustomerCommands {
+class AuditedChannelCommands
+    implements ChannelCommands,
+        CustomerCommands,
+        CustomerFollowupCommands,
+        CustomerFollowupQueries {
   private final ChannelService target;
   private final CustomerService customers;
+  private final CustomerFollowupService followups;
   private final CurrentActor actors;
   private final FailureAudit failures;
 
   AuditedChannelCommands(
       ChannelService target,
       CustomerService customers,
+      CustomerFollowupService followups,
       CurrentActor actors,
       FailureAudit failures) {
     this.target = target;
     this.customers = customers;
+    this.followups = followups;
     this.actors = actors;
     this.failures = failures;
   }
@@ -55,6 +62,22 @@ class AuditedChannelCommands implements ChannelCommands, CustomerCommands {
   @Override
   public CustomerPhone revealPhone(UUID id) {
     return invoke(FailureAudit.Action.CUSTOMER_PHONE_VIEW, id, () -> customers.revealPhone(id));
+  }
+
+  @Override
+  public CustomerFollowupQueries.Followup create(UUID customerId, FollowupCreate command) {
+    return invoke(
+        FailureAudit.Action.CUSTOMER_FOLLOWUP_CREATE,
+        customerId,
+        () -> followups.create(customerId, command));
+  }
+
+  @Override
+  public CustomerFollowupQueries.FollowupPage list(UUID customerId, int page, int size) {
+    return invoke(
+        FailureAudit.Action.CUSTOMER_FOLLOWUP_READ,
+        customerId,
+        () -> followups.list(customerId, page, size));
   }
 
   private <T> T invoke(FailureAudit.Action action, UUID resource, Supplier<T> work) {

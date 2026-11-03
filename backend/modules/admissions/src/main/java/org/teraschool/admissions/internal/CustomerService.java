@@ -317,7 +317,7 @@ class CustomerService implements CustomerQueries, CustomerCommands {
     }
   }
 
-  private Record ownCustomer(ResourceScope scope, UUID id) {
+  Record ownCustomer(ResourceScope scope, UUID id) {
     var row =
         sql.fetchOne(
             "select id,school_id,name,phone,normalized_phone,channel_id from admissions.customer where id=? and creator_id=?",
@@ -394,7 +394,7 @@ class CustomerService implements CustomerQueries, CustomerCommands {
     }
   }
 
-  private static String fingerprint(String... values) {
+  static String fingerprint(String... values) {
     try {
       var digest = MessageDigest.getInstance("SHA-256");
       for (var value : values) {

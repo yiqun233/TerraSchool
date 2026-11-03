@@ -23,7 +23,9 @@ class RejectedRequestAudit {
             && (request
                     .getServletPath()
                     .matches("/api/organization/employees/[^/]+/attachments/[^/]+")
-                || request.getServletPath().matches("/api/archive/students/[^/]+")))) return;
+                || request.getServletPath().matches("/api/archive/students/[^/]+")
+                || request.getServletPath().matches("/api/admissions/customers/[^/]+/followups"))))
+      return;
     String path = request.getServletPath();
     UUID resource = null;
     FailureAudit.Action action;
@@ -32,6 +34,16 @@ class RejectedRequestAudit {
       action = FailureAudit.Action.CUSTOMER_CANCEL;
     else if (path.matches("/api/admissions/customers/[^/]+/phone")) {
       action = FailureAudit.Action.CUSTOMER_PHONE_VIEW;
+      try {
+        resource = UUID.fromString(path.split("/")[4]);
+      } catch (IllegalArgumentException invalid) {
+        /* 不记录原路径 */
+      }
+    } else if (path.matches("/api/admissions/customers/[^/]+/followups")) {
+      action =
+          request.getMethod().equals("GET")
+              ? FailureAudit.Action.CUSTOMER_FOLLOWUP_READ
+              : FailureAudit.Action.CUSTOMER_FOLLOWUP_CREATE;
       try {
         resource = UUID.fromString(path.split("/")[4]);
       } catch (IllegalArgumentException invalid) {

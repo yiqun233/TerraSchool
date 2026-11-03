@@ -11,10 +11,18 @@ import org.teraschool.admissions.api.*;
 class CustomerHttp {
   private final CustomerQueries queries;
   private final CustomerCommands commands;
+  private final CustomerFollowupQueries followupQueries;
+  private final CustomerFollowupCommands followupCommands;
 
-  CustomerHttp(CustomerQueries queries, CustomerCommands commands) {
+  CustomerHttp(
+      CustomerQueries queries,
+      CustomerCommands commands,
+      CustomerFollowupQueries followupQueries,
+      CustomerFollowupCommands followupCommands) {
     this.queries = queries;
     this.commands = commands;
+    this.followupQueries = followupQueries;
+    this.followupCommands = followupCommands;
   }
 
   @GetMapping("/capabilities")
@@ -45,6 +53,20 @@ class CustomerHttp {
   @PostMapping("/{id}/phone")
   ResponseEntity<CustomerCommands.CustomerPhone> phone(@PathVariable UUID id) {
     return noStore(commands.revealPhone(id));
+  }
+
+  @GetMapping("/{id}/followups")
+  ResponseEntity<CustomerFollowupQueries.FollowupPage> followups(
+      @PathVariable UUID id,
+      @RequestParam(defaultValue = "0") int page,
+      @RequestParam(defaultValue = "20") int size) {
+    return noStore(followupQueries.list(id, page, size));
+  }
+
+  @PostMapping(value = "/{id}/followups", consumes = "application/json")
+  ResponseEntity<CustomerFollowupQueries.Followup> addFollowup(
+      @PathVariable UUID id, @RequestBody CustomerFollowupCommands.FollowupCreate command) {
+    return noStore(followupCommands.create(id, command));
   }
 
   private static <T> ResponseEntity<T> noStore(T body) {
