@@ -25,6 +25,8 @@ public interface EnrollmentAccess {
       String status,
       BigDecimal netAmount,
       BigDecimal price,
+      BigDecimal serviceFee,
+      BigDecimal discount,
       BigDecimal hours,
       int settlementMode,
       BigDecimal cancelledHours,

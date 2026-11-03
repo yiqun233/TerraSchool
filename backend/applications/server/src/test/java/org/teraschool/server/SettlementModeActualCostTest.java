@@ -263,4 +263,107 @@ class SettlementModeActualCostTest {
         .isInstanceOf(EnrollmentConflict.class)
         .hasMessage("AMOUNT_EXCEED_REMAINING");
   }
+
+  @Test
+  void modeFourDeductsDiscountBeforeUnitPrice() throws Exception {
+    var enrollment = enrollment(4);
+    // 1000 元 100 课时，先优惠 200 元：应收 800 元，100 课时 → 8.00 元/课时。
+    var discounted =
+        asActor(
+            OPS,
+            () ->
+                enrollments.applyDiscount(
+                    enrollment.id(), new ApplyDiscount(UUID.randomUUID(), "200.00", "开业优惠")));
+    assertThat(discounted.netAmount()).isEqualTo("800.00");
+    assertThat(consume(enrollment, "1.00")).isEqualTo("8.00");
+  }
+
+  @Test
+  void modeFourDeductsDiscountAndRefundTogether() throws Exception {
+    var enrollment = enrollment(4);
+    asActor(
+        OPS,
+        () ->
+            enrollments.applyDiscount(
+                enrollment.id(), new ApplyDiscount(UUID.randomUUID(), "200.00", "开业优惠")));
+    // 优惠后 800 元 100 课时，再退 50 课时退 200 元 → 剩余 600 元 / 50 课时 = 12.00。
+    refund(enrollment, "50.00", "200.00");
+    assertThat(consume(enrollment, "1.00")).isEqualTo("12.00");
+  }
+
+  @Test
+  void modeFourTrailingAmountMatchesNetAfterDiscount() throws Exception {
+    var enrollment = enrollment(4);
+    asActor(
+        OPS,
+        () ->
+            enrollments.applyDiscount(
+                enrollment.id(), new ApplyDiscount(UUID.randomUUID(), "300.00", "开业优惠")));
+    // 700 元 / 100 课时，最后一段一次上完必须正好补齐到 700.00。
+    assertThat(consume(enrollment, "100.00")).isEqualTo("700.00");
+  }
+
+  @Test
+  void modeFiveProratesDiscountAcrossCourses() throws Exception {
+    // 两门课各 500 元 50 课时（合计等于价格快照 1000 元 100 课时），优惠 200 元按金额比例各摊 100 元。
+    var enrollment = enrollmentWithTwoCourses(5);
+    asActor(
+        OPS,
+        () ->
+            enrollments.applyDiscount(
+                enrollment.id(), new ApplyDiscount(UUID.randomUUID(), "200.00", "开业优惠")));
+    // 语文摊 100 元：400 元 / 50 课时 = 8.00 元/课时。
+    assertThat(consume(enrollment, "1.00")).isEqualTo("8.00");
+  }
+
+  /** 两门课程的报名：语文 + 数学各 50 课时 500 元。 */
+  EnrollmentView enrollmentWithTwoCourses(int mode) throws Exception {
+    var math = UUID.randomUUID();
+    update(
+        "insert into product.curriculum(id,tenant_id,school_id,name) values (?,?,?,'数学')",
+        math,
+        TENANT,
+        SCHOOL);
+    var price =
+        asActor(
+            OPS,
+            () ->
+                catalog.draftPriceVersion(
+                    new DraftPriceVersion(
+                        UUID.randomUUID(),
+                        PRODUCT,
+                        "1000.00",
+                        "100.00",
+                        "0.00",
+                        mode,
+                        null,
+                        "2026-01-01",
+                        null)));
+    asActor(
+        OPS, () -> catalog.publishPriceVersion(price.id(), new ExpectedVersion(price.version())));
+    var student = UUID.randomUUID();
+    update(
+        "insert into archive.student(id,tenant_id,student_no,name,sex,school_id) values (?,?,?,?,?,?)",
+        student,
+        TENANT,
+        "S9" + student.toString().replace("-", "").substring(0, 6),
+        "双课学员",
+        "FEMALE",
+        SCHOOL);
+    var created =
+        asActor(
+            OPS,
+            () ->
+                enrollments.create(
+                    new CreateEnrollment(
+                        UUID.randomUUID(),
+                        student,
+                        price.id(),
+                        "2026-02-10",
+                        List.of(
+                            new CourseLine(CHINESE, "50.00", "500.00"),
+                            new CourseLine(math, "50.00", "500.00")))));
+    return asActor(
+        OPS, () -> enrollments.approve(created.id(), new EnrollmentVersion(created.version())));
+  }
 }

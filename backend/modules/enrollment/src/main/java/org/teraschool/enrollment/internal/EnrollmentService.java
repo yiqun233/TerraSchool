@@ -149,7 +149,7 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
     if (enrollmentId == null) throw new IllegalArgumentException("需要报名");
     var row =
         sql.fetchOne(
-            "select id,school_id,student_id,status,price,hours,settlement_mode"
+            "select id,school_id,student_id,status,price,service_fee,hours,settlement_mode"
                 + " from enrollment.enrollment where id=?",
             enrollmentId);
     if (row == null) throw new AccessDeniedException("报名不存在或不可访问");
@@ -160,6 +160,8 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
         row.get("status", String.class),
         netAmount(enrollmentId),
         row.get("price", java.math.BigDecimal.class),
+        row.get("service_fee", java.math.BigDecimal.class),
+        discountAmount(enrollmentId),
         row.get("hours", java.math.BigDecimal.class),
         row.get("settlement_mode", Integer.class),
         cancelledHours(enrollmentId),
@@ -695,6 +697,17 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
             id);
     if (row == null) throw new AccessDeniedException("报名不存在或不可访问");
     return row;
+  }
+
+  /** 报名累计优惠（只要 ADJUSTMENT 里"优惠减免"那部分；冲减退课时不在内）。 */
+  private BigDecimal discountAmount(UUID enrollmentId) {
+    var value =
+        sql.fetchOne(
+                "select coalesce(sum(amount),0) as total from enrollment.discount"
+                    + " where enrollment_id=?",
+                enrollmentId)
+            .get("total", java.math.BigDecimal.class);
+    return value == null ? java.math.BigDecimal.ZERO : value;
   }
 
   private BigDecimal netAmount(UUID enrollmentId) {

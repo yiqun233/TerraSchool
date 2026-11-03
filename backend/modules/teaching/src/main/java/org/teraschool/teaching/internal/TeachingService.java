@@ -551,17 +551,22 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
               feeHours = line.hours();
             }
             // 模式 4/5 是"退课后实际费用"变体：先扣掉已退费用与已退课时，再算单价。
+            // 模式 4/5 是"退课后实际费用"变体：先扣优惠，再扣已退费用与已退课时。
+            // 优惠只减少应收，不摊进服务费（服务费按既有口径不摊销）。
             if (mode == 4) {
-              fee = fee.subtract(cancelledAmount(enrollmentId));
+              fee = fee.subtract(discountTotal(enrollment)).subtract(cancelledAmount(enrollmentId));
               feeHours = feeHours.subtract(enrollment.cancelledHours());
             } else if (mode == 5 && consumedCurriculum != null) {
+              var lineDiscount = courseDiscount(enrollment, consumedCurriculum);
               for (var course : enrollment.courses())
                 if (course.curriculumId().equals(consumedCurriculum)) {
-                  fee = fee.subtract(course.cancelledAmount());
+                  fee = fee.subtract(lineDiscount).subtract(course.cancelledAmount());
                   feeHours = feeHours.subtract(course.cancelledHours());
                   break;
                 }
             }
+            // 优惠可能把应收压到 0（甚至因数据问题变负）：不能算出负数单价。
+            if (fee.signum() < 0) fee = BigDecimal.ZERO;
             if (feeHours.signum() <= 0) continue;
             var totalConsumed = consumedHours(enrollmentId);
             var courseConsumed = consumedHours(enrollmentId, consumedCurriculum);
@@ -908,6 +913,40 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
     var amount = new BigDecimal(text).setScale(2, RoundingMode.UNNECESSARY);
     if (amount.signum() < 0) throw new IllegalArgumentException("金额不能为负");
     return amount;
+  }
+
+  /** 报名累计优惠。不能用"价格 + 服务费 − 净应收"推：净应收里还混着退课减项。 */
+  private BigDecimal discountTotal(EnrollmentAccess.EnrollmentRef enrollment) {
+    var discount = enrollment.discount();
+    return discount == null || discount.signum() < 0 ? BigDecimal.ZERO : discount;
+  }
+
+  /**
+   * 把报名级优惠按课程金额比例摊到某一门课程（模式 5 按课程计价）。
+   *
+   * <p>前 n−1 门按比例向下取整，余数全部落到最后一门，保证各门摊分之和恰好等于优惠总额。
+   */
+  private BigDecimal courseDiscount(EnrollmentAccess.EnrollmentRef enrollment, UUID curriculumId) {
+    var total = discountTotal(enrollment);
+    if (total.signum() == 0) return BigDecimal.ZERO;
+    var lines = enrollment.courses();
+    var amountSum =
+        lines.stream()
+            .map(EnrollmentAccess.CourseRef::amount)
+            .reduce(BigDecimal.ZERO, BigDecimal::add);
+    if (amountSum.signum() <= 0) return BigDecimal.ZERO;
+    var allocated = BigDecimal.ZERO;
+    for (var index = 0; index < lines.size(); index++) {
+      var line = lines.get(index);
+      var share =
+          index == lines.size() - 1
+              ? total.subtract(allocated)
+              : total.multiply(line.amount()).divide(amountSum, 2, RoundingMode.DOWN);
+      allocated = allocated.add(share);
+      if (line.curriculumId().equals(curriculumId))
+        return share.signum() < 0 ? BigDecimal.ZERO : share;
+    }
+    return BigDecimal.ZERO;
   }
 
   private BigDecimal positiveHours(String value, String label) {
