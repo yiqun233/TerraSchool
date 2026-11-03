@@ -50,7 +50,7 @@ class RejectedRequestAudit {
         /* 不记录原路径 */
       }
     } else if (path.equals("/api/admissions/channels")) action = FailureAudit.Action.CHANNEL_CREATE;
-    else if (path.matches("/api/admissions/channels/[^/]+/update")) {
+    else if (path.matches("/api/admissions/channels/[^/]+/(update|address)")) {
       action = FailureAudit.Action.CHANNEL_UPDATE;
       try {
         resource = UUID.fromString(path.split("/")[4]);

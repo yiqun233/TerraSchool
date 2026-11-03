@@ -157,6 +157,63 @@ class ChannelService implements ChannelCommands, ChannelQueries {
     }
   }
 
+  @Override
+  public ChannelAddress address(UUID id) {
+    if (id == null) throw new IllegalArgumentException("需要渠道");
+    var scope = actors.requireResourceScope("CHANNEL");
+    return tx.execute(
+        scope.tenantId(),
+        () -> {
+          schools.lockTenant(scope.tenantId());
+          var verified = actors.requireResourceScopeInTransaction("CHANNEL");
+          var row =
+              sql.fetchOne(
+                  "select id,school_id,address,version from admissions.channel where id=?", id);
+          if (row == null
+              || !verified.readableSchoolIds().contains(row.get("school_id", UUID.class)))
+            throw new AccessDeniedException("渠道不存在或不可访问");
+          return new ChannelAddress(
+              id, row.get("address", String.class), row.get("version", Long.class));
+        });
+  }
+
+  @Override
+  public ChannelAddress updateAddress(UUID id, ChannelAddressUpdate command) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      if (id == null || command == null || command.expectedVersion() == null)
+        throw new IllegalArgumentException("需要渠道和版本");
+      var address = command.address() == null ? "" : command.address().strip();
+      if (address.length() > 50 || address.codePoints().anyMatch(Character::isISOControl))
+        throw new IllegalArgumentException("渠道地址不得超过 50 字");
+      var scope = actors.requireResourceScope("CHANNEL");
+      return tx.execute(
+          scope.tenantId(),
+          () -> {
+            schools.lockTenant(scope.tenantId());
+            var verified = actors.requireResourceScopeInTransaction("CHANNEL");
+            var row =
+                sql.fetchOne(
+                    "select school_id,address,version from admissions.channel where id=?", id);
+            if (row == null) throw new AccessDeniedException("渠道不存在或不可访问");
+            var school = row.get("school_id", UUID.class);
+            requireWrite(verified, school);
+            var version = row.get("version", Long.class);
+            if (!version.equals(command.expectedVersion()))
+              throw new ChannelConflict("VERSION_CONFLICT");
+            if (address.equals(row.get("address", String.class)))
+              return new ChannelAddress(id, address, version);
+            if (sql.execute(
+                    "update admissions.channel set address=?,version=version+1 where id=? and version=?",
+                    address,
+                    id,
+                    version)
+                != 1) throw new ChannelConflict("VERSION_CONFLICT");
+            audit(verified, school, id, "UPDATED", "address");
+            return new ChannelAddress(id, address, version + 1);
+          });
+    }
+  }
+
   private void requireWrite(ResourceScope scope, UUID schoolId) {
     if (!scope.maintainableSchoolIds().contains(schoolId) || !schools.require(schoolId).active())
       throw new AccessDeniedException("无该学校渠道维护权限或学校已停用");

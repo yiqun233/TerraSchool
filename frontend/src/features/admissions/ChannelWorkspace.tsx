@@ -13,6 +13,7 @@ import {
 } from "antd";
 import { api, csrf } from "../../shared/http";
 import type { components } from "../../shared/generated/api";
+import { ChannelAddress } from "./ChannelAddress";
 
 type Channel = components["schemas"]["Channel"];
 type Draft = { id: string; name: string; active: boolean; version: number };
@@ -29,6 +30,7 @@ export function ChannelWorkspace({
   const [schoolId, setSchoolId] = useState<string>();
   const [page, setPage] = useState(0);
   const [name, setName] = useState("");
+  const [addressId, setAddressId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
@@ -243,6 +245,7 @@ export function ChannelWorkspace({
           }))}
           onChange={(value) => {
             setSchoolId(value);
+            setAddressId(null);
             setPage(0);
           }}
         />
@@ -283,20 +286,30 @@ export function ChannelWorkspace({
           {
             title: "操作",
             render: (_, row) =>
-              canEdit && row.id && row.version != null ? (
-                <Button
-                  disabled={busy || !!pending}
-                  onClick={() =>
-                    setDraft({
-                      id: row.id!,
-                      name: row.name ?? "",
-                      active: !!row.active,
-                      version: row.version!,
-                    })
-                  }
-                >
-                  编辑
-                </Button>
+              row.id && !rows.error && !schools.error ? (
+                <Space>
+                  <Button
+                    disabled={busy || !!pending}
+                    onClick={() => setAddressId(row.id!)}
+                  >
+                    地址
+                  </Button>
+                  {canEdit && row.version != null ? (
+                    <Button
+                      disabled={busy || !!pending}
+                      onClick={() =>
+                        setDraft({
+                          id: row.id!,
+                          name: row.name ?? "",
+                          active: !!row.active,
+                          version: row.version!,
+                        })
+                      }
+                    >
+                      编辑
+                    </Button>
+                  ) : null}
+                </Space>
               ) : null,
           },
         ]}
@@ -322,6 +335,16 @@ export function ChannelWorkspace({
           下一页
         </Button>
       </Space>
+      {addressId && current && !schools.error && !rows.error ? (
+        <ChannelAddress
+          key={addressId}
+          id={addressId}
+          schoolId={current}
+          canEdit={canEdit}
+          onClose={() => setAddressId(null)}
+          onUnauthorized={onUnauthorized}
+        />
+      ) : null}
       <Modal
         title="编辑渠道"
         open={!!draft}

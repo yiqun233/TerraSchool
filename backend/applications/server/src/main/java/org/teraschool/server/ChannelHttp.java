@@ -33,6 +33,22 @@ class ChannelHttp {
     return commands.create(command);
   }
 
+  @GetMapping("/{id}/address")
+  org.springframework.http.ResponseEntity<ChannelQueries.ChannelAddress> address(
+      @PathVariable UUID id) {
+    return org.springframework.http.ResponseEntity.ok()
+        .cacheControl(org.springframework.http.CacheControl.noStore())
+        .body(queries.address(id));
+  }
+
+  @PostMapping(value = "/{id}/address", consumes = "application/json")
+  org.springframework.http.ResponseEntity<ChannelQueries.ChannelAddress> updateAddress(
+      @PathVariable UUID id, @RequestBody ChannelCommands.ChannelAddressUpdate command) {
+    return org.springframework.http.ResponseEntity.ok()
+        .cacheControl(org.springframework.http.CacheControl.noStore())
+        .body(commands.updateAddress(id, command));
+  }
+
   @PostMapping(value = "/{id}/update", consumes = "application/json")
   Channel update(@PathVariable UUID id, @RequestBody ChannelCommands.ChannelUpdate command) {
     return commands.update(id, command);

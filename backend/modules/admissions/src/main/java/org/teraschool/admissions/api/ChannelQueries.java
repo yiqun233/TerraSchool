@@ -10,6 +10,10 @@ public interface ChannelQueries {
 
   record ChannelPage(List<Channel> items, int page, int size, boolean hasMore) {}
 
+  record ChannelAddress(UUID id, String address, long version) {}
+
+  ChannelAddress address(UUID id);
+
   ChannelCapabilities capabilities();
 
   ChannelPage list(UUID schoolId, int page, int size);

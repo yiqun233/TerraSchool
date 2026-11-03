@@ -45,6 +45,11 @@ class AuditedChannelCommands
   }
 
   @Override
+  public ChannelQueries.ChannelAddress updateAddress(UUID id, ChannelAddressUpdate command) {
+    return invoke(FailureAudit.Action.CHANNEL_UPDATE, id, () -> target.updateAddress(id, command));
+  }
+
+  @Override
   public Channel update(UUID id, ChannelUpdate command) {
     return invoke(FailureAudit.Action.CHANNEL_UPDATE, id, () -> target.update(id, command));
   }

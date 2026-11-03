@@ -74,6 +74,77 @@ class ChannelTest {
   }
 
   @Test
+  void addressRespectsSchoolPermissionsAndSharedVersion() throws Exception {
+    var channel =
+        asActor(
+            OPS,
+            () ->
+                commands.create(
+                    new ChannelCommands.ChannelCreate(UUID.randomUUID(), SCHOOL, "地址渠道")));
+    assertThat(asActor(READER, () -> queries.address(channel.id())).address()).isEmpty();
+    var saved =
+        asActor(
+            OPS,
+            () ->
+                commands.updateAddress(
+                    channel.id(), new ChannelCommands.ChannelAddressUpdate("  上海市示例路  ", 0L)));
+    assertThat(saved.address()).isEqualTo("上海市示例路");
+    assertThat(saved.version()).isEqualTo(1);
+    assertThat(asActor(READER, () -> queries.address(channel.id()))).isEqualTo(saved);
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    READER,
+                    () ->
+                        commands.updateAddress(
+                            channel.id(), new ChannelCommands.ChannelAddressUpdate("其他地址", 1L))))
+        .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    OPS,
+                    () ->
+                        commands.update(
+                            channel.id(), new ChannelCommands.ChannelUpdate("新名称", true, 0L))))
+        .isInstanceOf(ChannelConflict.class)
+        .hasMessage("VERSION_CONFLICT");
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    OPS,
+                    () ->
+                        commands.updateAddress(
+                            channel.id(), new ChannelCommands.ChannelAddressUpdate("过期地址", 0L))))
+        .isInstanceOf(ChannelConflict.class)
+        .hasMessage("VERSION_CONFLICT");
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    OPS,
+                    () ->
+                        commands.updateAddress(
+                            channel.id(),
+                            new ChannelCommands.ChannelAddressUpdate("x".repeat(51), 1L))))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThat(
+            count(
+                "select count(*) from audit.channel_event where tenant_id=? and channel_id=? and action='UPDATED' and changed_fields='address'",
+                TENANT,
+                channel.id()))
+        .isEqualTo(1);
+    var other = UUID.randomUUID();
+    update(
+        "insert into admissions.channel(id,tenant_id,school_id,name) values (?,?,?,'其他学校渠道')",
+        other,
+        TENANT,
+        OTHER);
+    assertThatThrownBy(() -> asActor(OPS, () -> queries.address(other)))
+        .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
+    var response = asActor(READER, () -> new ChannelHttp(queries, commands).address(channel.id()));
+    assertThat(response.getHeaders().getCacheControl()).contains("no-store");
+  }
+
+  @Test
   void createIsIdempotentAndConflictingReplayIsRejected() {
     var request = new ChannelCommands.ChannelCreate(UUID.randomUUID(), SCHOOL, "口碑推荐");
     var created = asActor(OPS, () -> commands.create(request));
