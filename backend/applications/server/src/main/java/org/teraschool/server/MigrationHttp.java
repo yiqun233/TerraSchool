@@ -41,6 +41,12 @@ class MigrationHttp {
     return migration.dryRun(schoolId);
   }
 
+  @PostMapping(value = "/preflight", consumes = "application/json")
+  LegacyPreflight.PreflightReport preflight(
+      @RequestParam UUID schoolId, @RequestBody LegacyPreflight.PreflightRequest request) {
+    return migration.previewLegacyLoad(schoolId, request);
+  }
+
   /** 兼容保留旧入口；服务端返回停用冲突，不写业务数据。 */
   @PostMapping("/commit")
   MigrationReport commit(@RequestParam UUID schoolId) {

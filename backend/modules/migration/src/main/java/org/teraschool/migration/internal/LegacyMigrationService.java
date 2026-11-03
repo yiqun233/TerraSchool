@@ -36,6 +36,7 @@ public class LegacyMigrationService implements LegacyMigration {
   private final org.teraschool.funds.api.FundsCommands funds;
   private final org.teraschool.teaching.api.TeachingCommands teaching;
   private final org.teraschool.finance.api.PeriodGate periods;
+  private final LegacyPreflightService preflight;
 
   public LegacyMigrationService(
       CurrentActor actors,
@@ -45,7 +46,8 @@ public class LegacyMigrationService implements LegacyMigration {
       StudentAccess students,
       org.teraschool.funds.api.FundsCommands funds,
       org.teraschool.teaching.api.TeachingCommands teaching,
-      org.teraschool.finance.api.PeriodGate periods) {
+      org.teraschool.finance.api.PeriodGate periods,
+      LegacyPreflightService preflight) {
     this.actors = actors;
     this.tx = tx;
     this.sql = sql;
@@ -54,6 +56,15 @@ public class LegacyMigrationService implements LegacyMigration {
     this.funds = funds;
     this.teaching = teaching;
     this.periods = periods;
+    this.preflight = preflight;
+  }
+
+  @Override
+  public LegacyPreflight.PreflightReport previewLegacyLoad(
+      UUID schoolId, LegacyPreflight.PreflightRequest request) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      return preflight.preview(schoolId, request);
+    }
   }
 
   @Override

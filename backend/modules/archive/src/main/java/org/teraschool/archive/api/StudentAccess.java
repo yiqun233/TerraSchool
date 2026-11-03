@@ -2,6 +2,7 @@ package org.teraschool.archive.api;
 
 import java.util.Collection;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -15,4 +16,7 @@ public interface StudentAccess {
   StudentRef require(UUID studentId);
 
   Map<UUID, String> names(Collection<UUID> studentIds);
+
+  /** 调用方须在当前租户事务中验证学校档案读取权限；仅返回已存在的学员号。 */
+  Set<String> existingNumbers(UUID schoolId, Collection<String> studentNumbers);
 }

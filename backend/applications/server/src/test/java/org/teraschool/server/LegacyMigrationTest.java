@@ -50,6 +50,13 @@ class LegacyMigrationTest {
         TENANT,
         OPS,
         SCHOOL);
+    for (var action : List.of("STUDENT_READ", "PERIOD_READ"))
+      update(
+          "insert into identity.account_permission(tenant_id,account_id,school_id,action,effect) values (?,?,?,?,'ALLOW')",
+          TENANT,
+          OPS,
+          SCHOOL,
+          action);
   }
 
   /** 每个用例从空的暂存区与台账开始，避免相互累计。 */
@@ -106,6 +113,180 @@ class LegacyMigrationTest {
         new StageReceipt("L-R-2", "L0001", "500.00", "CASH", "2026-02-10"),
         // 学员号在暂存里不存在：干跑要报出来，确认时跳过。
         new StageReceipt("L-R-3", "L9999", "300.00", "CASH", "2026-03-10"));
+  }
+
+  @Test
+  void preflightIsReadOnlyAndNeverAuthorizesCommit() {
+    var input =
+        new LegacyPreflight.PreflightRequest(
+            "legacy-a",
+            "snapshot-1",
+            "mapping-1",
+            List.of(
+                new StageStudent(
+                    "1", "L-P1", "合成学员", "FEMALE", "2014-05-06", null, null, null, null)),
+            List.of(new StageReceipt("R1", "L-P1", "100.00", "CASH", "2026-01-10")));
+    var before = studentCount();
+    var first = asActor(OPS, () -> migration.previewLegacyLoad(SCHOOL, input));
+    var again = asActor(OPS, () -> migration.previewLegacyLoad(SCHOOL, input));
+    assertThat(first.issues()).isEmpty();
+    assertThat(first.canCommit()).isFalse();
+    assertThat(first.unchecked())
+        .contains(
+            "SOURCE_AUTHENTICITY",
+            "CROSS_BATCH_DEDUPLICATION",
+            "TARGET_OTHER_SCHOOLS_NUMBER_CONFLICT",
+            "TARGET_SNAPSHOT_CONSISTENCY");
+    assertThat(first.inputDigest()).hasSize(64).isEqualTo(again.inputDigest());
+    assertThat(studentCount()).isEqualTo(before);
+    assertThat(asActor(OPS, () -> migration.dryRun(SCHOOL)).studentsStaged()).isZero();
+    var changed =
+        new LegacyPreflight.PreflightRequest(
+            "legacy-a", "snapshot-2", "mapping-1", input.students(), input.receipts());
+    assertThat(asActor(OPS, () -> migration.previewLegacyLoad(SCHOOL, changed)).inputDigest())
+        .isNotEqualTo(first.inputDigest());
+    assertThatThrownBy(() -> asActor(OPS, () -> migration.commit(SCHOOL)))
+        .isInstanceOf(MigrationConflict.class)
+        .hasMessage("LEGACY_COMMIT_DISABLED");
+  }
+
+  @Test
+  void preflightReportsDuplicatesMissingLinksCollisionsAndLockedPeriods() throws Exception {
+    update(
+        "insert into archive.student(id,tenant_id,student_no,name,sex,school_id) values (?,?,?,'已有学员','FEMALE',?)",
+        UUID.randomUUID(),
+        TENANT,
+        "L-P2",
+        SCHOOL);
+    update(
+        "insert into finance.period(tenant_id,school_id,period,status) values (?,?,'2026-06','LOCKED')",
+        TENANT,
+        SCHOOL);
+    var person = new StageStudent("same", "L-P2", "合成", "FEMALE", null, "1234", null, null, null);
+    var receipt = new StageReceipt("receipt", "MISSING", "1E9999999", "CASH", "2026-06-12");
+    var input =
+        new LegacyPreflight.PreflightRequest(
+            "legacy-a",
+            "snapshot-3",
+            "mapping-1",
+            List.of(person, person),
+            List.of(receipt, receipt));
+    var result = asActor(OPS, () -> migration.previewLegacyLoad(SCHOOL, input));
+    assertThat(result.issues())
+        .extracting(LegacyPreflight.Issue::code)
+        .contains(
+            "DUPLICATE_SOURCE_KEY",
+            "DUPLICATE_STUDENT_NUMBER",
+            "TARGET_SAME_SCHOOL_STUDENT_NUMBER_EXISTS",
+            "CERTIFICATE_TYPE_UNCONFIRMED",
+            "SOURCE_STUDENT_NOT_IN_INPUT",
+            "AMOUNT_INVALID",
+            "PERIOD_LOCKED");
+    assertThat(result.canCommit()).isFalse();
+    assertThat(asActor(OPS, () -> migration.dryRun(SCHOOL)).studentsStaged()).isZero();
+  }
+
+  @Test
+  void preflightChecksManyDistinctMonthsInChunks() throws Exception {
+    update(
+        "insert into finance.period(tenant_id,school_id,period,status) values (?,?,'2082-01','LOCKED')",
+        TENANT,
+        SCHOOL);
+    var rows = new ArrayList<StageReceipt>();
+    for (int i = 0; i < 605; i++) {
+      var day = java.time.YearMonth.of(2040, 1).plusMonths(i).atDay(1).toString();
+      rows.add(new StageReceipt("R" + i, "L-P3", "1.00", "CASH", day));
+    }
+    var input =
+        new LegacyPreflight.PreflightRequest(
+            "legacy-a",
+            "snapshot-many",
+            "mapping-1",
+            List.of(new StageStudent("s", "L-P3", "合成学员", "FEMALE", null, null, null, null, null)),
+            rows);
+    var result = asActor(OPS, () -> migration.previewLegacyLoad(SCHOOL, input));
+    assertThat(result.receiptCount()).isEqualTo(605);
+    assertThat(result.issues())
+        .filteredOn(issue -> "PERIOD_LOCKED".equals(issue.code()))
+        .singleElement()
+        .satisfies(issue -> assertThat(issue.rowNumber()).isEqualTo(505));
+  }
+
+  @Test
+  void preflightDoesNotRevealOtherSchoolsStudentNumbers() throws Exception {
+    var otherSchool = UUID.randomUUID();
+    update(
+        "insert into organization.unit(id,tenant_id,school_id,kind,name) values (?,?,?,'SCHOOL','另一学校')",
+        otherSchool,
+        TENANT,
+        otherSchool);
+    update(
+        "insert into archive.student(id,tenant_id,student_no,name,sex,school_id) values (?,?,?,'另一学校学员','FEMALE',?)",
+        UUID.randomUUID(),
+        TENANT,
+        "L-PRIVATE",
+        otherSchool);
+    var input =
+        new LegacyPreflight.PreflightRequest(
+            "legacy",
+            "snapshot-private",
+            "mapping",
+            List.of(
+                new StageStudent("1", "L-PRIVATE", "合成学员", "FEMALE", null, null, null, null, null)),
+            List.of());
+    var report = asActor(OPS, () -> migration.previewLegacyLoad(SCHOOL, input));
+    assertThat(report.issues())
+        .extracting(LegacyPreflight.Issue::code)
+        .doesNotContain("TARGET_SAME_SCHOOL_STUDENT_NUMBER_EXISTS");
+    assertThat(report.unchecked()).contains("TARGET_OTHER_SCHOOLS_NUMBER_CONFLICT");
+    assertThat(report.canCommit()).isFalse();
+  }
+
+  @Test
+  void preflightRejectsDatesOutsideFourDigitGregorianYears() {
+    var input =
+        new LegacyPreflight.PreflightRequest(
+            "legacy",
+            "snapshot-dates",
+            "mapping",
+            List.of(
+                new StageStudent(
+                    "1", "L-DATE", "学员", "FEMALE", "0000-01-01", null, null, null, null)),
+            List.of(new StageReceipt("1", "L-DATE", "1.00", "CASH", "+10000-01-01")));
+    var report = asActor(OPS, () -> migration.previewLegacyLoad(SCHOOL, input));
+    assertThat(report.issues())
+        .extracting(LegacyPreflight.Issue::code)
+        .contains("BIRTHDAY_INVALID", "DATE_INVALID");
+  }
+
+  @Test
+  void preflightRequiresTargetReadPermissions() throws Exception {
+    var limited = UUID.randomUUID();
+    update(
+        "insert into identity.account(id,tenant_id,login,password_hash) values (?,?,?,?)",
+        limited,
+        TENANT,
+        "preflight-limited",
+        "x");
+    update(
+        "insert into identity.account_permission(tenant_id,account_id,school_id,action,effect) values (?,?,?,'MIGRATION_MANAGE','ALLOW')",
+        TENANT,
+        limited,
+        SCHOOL);
+    var input =
+        new LegacyPreflight.PreflightRequest("source", "snapshot", "v1", students(), List.of());
+    assertThatThrownBy(() -> asActor(limited, () -> migration.previewLegacyLoad(SCHOOL, input)))
+        .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
+    update(
+        "insert into identity.account_permission(tenant_id,account_id,school_id,action,effect) values (?,?,?,'STUDENT_READ','ALLOW')",
+        TENANT,
+        limited,
+        SCHOOL);
+    var withReceipts =
+        new LegacyPreflight.PreflightRequest("source", "snapshot", "v1", students(), receipts());
+    assertThatThrownBy(
+            () -> asActor(limited, () -> migration.previewLegacyLoad(SCHOOL, withReceipts)))
+        .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
   }
 
   @Test

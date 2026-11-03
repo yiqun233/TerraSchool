@@ -1,6 +1,9 @@
 package org.teraschool.finance.api;
 
 import java.time.LocalDate;
+import java.time.YearMonth;
+import java.util.Collection;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -10,4 +13,7 @@ import java.util.UUID;
  */
 public interface PeriodGate {
   void requireOpen(UUID schoolId, LocalDate businessDate);
+
+  /** 批量读取锁定月份；调用方须在租户事务中自行校验对应学校的期间读取权限。 */
+  Set<YearMonth> lockedMonths(UUID schoolId, Collection<YearMonth> months);
 }

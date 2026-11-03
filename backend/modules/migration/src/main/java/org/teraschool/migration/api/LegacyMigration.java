@@ -11,6 +11,10 @@ public interface LegacyMigration {
 
   MigrationReport commit(UUID schoolId);
 
+  /** 不写暂存或业务事实，且不能作为提交授权。 */
+  LegacyPreflight.PreflightReport previewLegacyLoad(
+      UUID schoolId, LegacyPreflight.PreflightRequest request);
+
   /** 批量导入期初余额与期初课时；逐行返回结果，按 batchId 幂等。 */
   OpeningImport.Report importOpenings(UUID schoolId, OpeningImport request);
 

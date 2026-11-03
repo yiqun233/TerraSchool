@@ -1,8 +1,11 @@
 package org.teraschool.archive.internal;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import org.jooq.DSLContext;
 import org.springframework.security.access.AccessDeniedException;
@@ -43,5 +46,27 @@ public class StudentAccessView implements StudentAccess {
             studentIds.toArray()))
       result.put(row.get("id", UUID.class), row.get("name", String.class));
     return result;
+  }
+
+  @Override
+  public Set<String> existingNumbers(UUID schoolId, Collection<String> studentNumbers) {
+    if (schoolId == null) throw new IllegalArgumentException("需要学校");
+    if (studentNumbers == null || studentNumbers.isEmpty()) return Set.of();
+    var numbers = new ArrayList<>(studentNumbers);
+    var found = new HashSet<String>();
+    for (int offset = 0; offset < numbers.size(); offset += 500) {
+      var part = numbers.subList(offset, Math.min(offset + 500, numbers.size()));
+      var args = new ArrayList<Object>();
+      args.add(schoolId);
+      args.addAll(part);
+      var marks = String.join(",", java.util.Collections.nCopies(part.size(), "?"));
+      for (var row :
+          sql.fetch(
+              "select student_no from archive.student where school_id=? and student_no in ("
+                  + marks
+                  + ")",
+              args.toArray())) found.add(row.get("student_no", String.class));
+    }
+    return Set.copyOf(found);
   }
 }

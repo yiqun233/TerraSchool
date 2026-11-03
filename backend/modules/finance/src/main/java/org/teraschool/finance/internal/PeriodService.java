@@ -31,6 +31,28 @@ public class PeriodService implements PeriodQueries, PeriodCommands, PeriodGate 
   private final DSLContext sql;
   private final SchoolAccess schools;
 
+  @Override
+  public Set<YearMonth> lockedMonths(UUID schoolId, Collection<YearMonth> months) {
+    if (schoolId == null) throw new IllegalArgumentException("需要学校");
+    if (months == null || months.isEmpty()) return Set.of();
+    var values = months.stream().distinct().map(YearMonth::toString).toList();
+    var result = new HashSet<YearMonth>();
+    for (int offset = 0; offset < values.size(); offset += 500) {
+      var part = values.subList(offset, Math.min(offset + 500, values.size()));
+      var marks = String.join(",", Collections.nCopies(part.size(), "?"));
+      var args = new ArrayList<Object>();
+      args.add(schoolId);
+      args.addAll(part);
+      for (var row :
+          sql.fetch(
+              "select period from finance.period where school_id=? and status='LOCKED' and period in ("
+                  + marks
+                  + ")",
+              args.toArray())) result.add(YearMonth.parse(row.get("period", String.class)));
+    }
+    return Set.copyOf(result);
+  }
+
   public PeriodService(
       CurrentActor actors, TenantTransactions tx, DSLContext sql, SchoolAccess schools) {
     this.actors = actors;
