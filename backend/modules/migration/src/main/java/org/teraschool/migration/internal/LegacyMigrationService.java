@@ -19,12 +19,9 @@ import org.teraschool.platform.api.RequestTrace;
 import org.teraschool.platform.api.TenantTransactions;
 
 /**
- * 旧库迁移：暂存 → 干跑 → 确认。
+ * 旧库暂存、预检及期初批量导入。
  *
- * <p>只做两类实体（学员与收款）：它们决定"人"和"钱"能不能对上，也是旧库最直接可核对的表。
- * 导入按旧主键记账（`migration.import_log`），因此重复确认是幂等的；学员已存在时按学员号跳过并记一条问题。
- *
- * <p>旧库只有结构、没有数据快照，本实现以暂存区为入口：拿到 FULL/OPENING 快照后灌进暂存区即可跑同一套对账。
+ * <p>旧主体确认导入已停用，须完成领域契约及真实样本验证后才能开放；期初批次另行保存清单和事实。
  */
 @Service
 public class LegacyMigrationService implements LegacyMigration {
@@ -38,6 +35,7 @@ public class LegacyMigrationService implements LegacyMigration {
   private final StudentAccess students;
   private final org.teraschool.funds.api.FundsCommands funds;
   private final org.teraschool.teaching.api.TeachingCommands teaching;
+  private final org.teraschool.finance.api.PeriodGate periods;
 
   public LegacyMigrationService(
       CurrentActor actors,
@@ -46,7 +44,8 @@ public class LegacyMigrationService implements LegacyMigration {
       SchoolAccess schools,
       StudentAccess students,
       org.teraschool.funds.api.FundsCommands funds,
-      org.teraschool.teaching.api.TeachingCommands teaching) {
+      org.teraschool.teaching.api.TeachingCommands teaching,
+      org.teraschool.finance.api.PeriodGate periods) {
     this.actors = actors;
     this.tx = tx;
     this.sql = sql;
@@ -54,6 +53,7 @@ public class LegacyMigrationService implements LegacyMigration {
     this.students = students;
     this.funds = funds;
     this.teaching = teaching;
+    this.periods = periods;
   }
 
   @Override
@@ -64,45 +64,53 @@ public class LegacyMigrationService implements LegacyMigration {
       return tx.execute(
           actor.tenantId(),
           () -> {
-            requireSchool(actor, schoolId);
+            schools.lockTenant(actor.tenantId());
+            var verified = actors.requireActionInTransaction("MIGRATION_MANAGE");
+            requireSchool(verified, schoolId);
             for (var row : students == null ? List.<StageStudent>of() : students) {
-              sql.execute(
-                  "insert into migration.legacy_student(tenant_id,school_id,legacy_id,student_no,"
-                      + "name,sex,birthday,cert_code,phone,contact_name,contact_phone)"
-                      + " values (?,?,?,?,?,?,?,?,?,?,?)"
-                      + " on conflict (tenant_id,legacy_id) do update set"
-                      + " student_no=excluded.student_no,name=excluded.name,sex=excluded.sex,"
-                      + " birthday=excluded.birthday,cert_code=excluded.cert_code,"
-                      + " phone=excluded.phone,contact_name=excluded.contact_name,"
-                      + " contact_phone=excluded.contact_phone",
-                  actor.tenantId(),
-                  schoolId,
-                  text(row.legacyId(), 64, "旧主键"),
-                  text(row.studentNo(), 20, "学员号"),
-                  text(row.name(), 50, "姓名"),
-                  sex(row.sex()),
-                  date(row.birthday()),
-                  text(row.certCode(), 40, "证件号"),
-                  text(row.phone(), 30, "电话"),
-                  text(row.contactName(), 50, "联系人"),
-                  text(row.contactPhone(), 30, "联系人电话"));
+              var changed =
+                  sql.execute(
+                      "insert into migration.legacy_student(tenant_id,school_id,legacy_id,student_no,"
+                          + "name,sex,birthday,cert_code,phone,contact_name,contact_phone)"
+                          + " values (?,?,?,?,?,?,?,?,?,?,?)"
+                          + " on conflict (tenant_id,legacy_id) do update set"
+                          + " student_no=excluded.student_no,name=excluded.name,sex=excluded.sex,"
+                          + " birthday=excluded.birthday,cert_code=excluded.cert_code,"
+                          + " phone=excluded.phone,contact_name=excluded.contact_name,"
+                          + " contact_phone=excluded.contact_phone"
+                          + " where migration.legacy_student.school_id=excluded.school_id",
+                      actor.tenantId(),
+                      schoolId,
+                      text(row.legacyId(), 64, "旧主键"),
+                      text(row.studentNo(), 20, "学员号"),
+                      text(row.name(), 50, "姓名"),
+                      sex(row.sex()),
+                      date(row.birthday()),
+                      text(row.certCode(), 40, "证件号"),
+                      text(row.phone(), 30, "电话"),
+                      text(row.contactName(), 50, "联系人"),
+                      text(row.contactPhone(), 30, "联系人电话"));
+              if (changed != 1) throw new MigrationConflict("LEGACY_SOURCE_SCHOOL_CONFLICT");
             }
             for (var row : receipts == null ? List.<StageReceipt>of() : receipts) {
-              sql.execute(
-                  "insert into migration.legacy_receipt(tenant_id,school_id,legacy_id,student_no,"
-                      + "amount,method,occurred_on) values (?,?,?,?,?,?,?)"
-                      + " on conflict (tenant_id,legacy_id) do update set"
-                      + " student_no=excluded.student_no,amount=excluded.amount,"
-                      + " method=excluded.method,occurred_on=excluded.occurred_on",
-                  actor.tenantId(),
-                  schoolId,
-                  text(row.legacyId(), 64, "旧主键"),
-                  text(row.studentNo(), 20, "学员号"),
-                  amount(row.amount()),
-                  text(row.method(), 16, "收款方式"),
-                  date(row.occurredOn()));
+              var changed =
+                  sql.execute(
+                      "insert into migration.legacy_receipt(tenant_id,school_id,legacy_id,student_no,"
+                          + "amount,method,occurred_on) values (?,?,?,?,?,?,?)"
+                          + " on conflict (tenant_id,legacy_id) do update set"
+                          + " student_no=excluded.student_no,amount=excluded.amount,"
+                          + " method=excluded.method,occurred_on=excluded.occurred_on"
+                          + " where migration.legacy_receipt.school_id=excluded.school_id",
+                      actor.tenantId(),
+                      schoolId,
+                      text(row.legacyId(), 64, "旧主键"),
+                      text(row.studentNo(), 20, "学员号"),
+                      amount(row.amount()),
+                      text(row.method(), 16, "收款方式"),
+                      date(row.occurredOn()));
+              if (changed != 1) throw new MigrationConflict("LEGACY_SOURCE_SCHOOL_CONFLICT");
             }
-            return report(actor, schoolId, "DRY_RUN");
+            return report(verified, schoolId, "DRY_RUN");
           });
     }
   }
@@ -111,7 +119,13 @@ public class LegacyMigrationService implements LegacyMigration {
   public MigrationReport dryRun(UUID schoolId) {
     try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
       var actor = actors.requireAction("MIGRATION_MANAGE");
-      return tx.execute(actor.tenantId(), () -> report(actor, schoolId, "DRY_RUN"));
+      return tx.execute(
+          actor.tenantId(),
+          () -> {
+            schools.lockTenant(actor.tenantId());
+            return report(
+                actors.requireActionInTransaction("MIGRATION_MANAGE"), schoolId, "DRY_RUN");
+          });
     }
   }
 
@@ -123,128 +137,9 @@ public class LegacyMigrationService implements LegacyMigration {
           actor.tenantId(),
           () -> {
             schools.lockTenant(actor.tenantId());
-            requireSchool(actor, schoolId);
-            var importedStudents = 0;
-            var importedReceipts = 0;
-            for (var row :
-                sql.fetch(
-                    "select legacy_id,student_no,name,sex,birthday,cert_code,phone,contact_name,"
-                        + "contact_phone from migration.legacy_student where school_id=?"
-                        + " order by legacy_id",
-                    schoolId)) {
-              var legacyId = row.get("legacy_id", String.class);
-              if (already(actor.tenantId(), "STUDENT", legacyId)) continue;
-              var studentNo = row.get("student_no", String.class);
-              var existing =
-                  sql.fetchOne(
-                      "select id from archive.student where school_id=? and student_no=?",
-                      schoolId,
-                      studentNo);
-              if (existing != null) {
-                // 已存在的学员只记台账，不覆盖：档案以新系统为准。
-                sql.execute(
-                    "insert into migration.import_log(tenant_id,kind,legacy_id,target_id)"
-                        + " values (?,'STUDENT',?,?)",
-                    actor.tenantId(),
-                    legacyId,
-                    existing.get("id", UUID.class));
-                continue;
-              }
-              var id = UUID.randomUUID();
-              // 旧库证件号没有稳定的类型字段，统一按身份证导入；无证件号则为空。
-              var certCode = row.get("cert_code", String.class);
-              sql.execute(
-                  "insert into archive.student(id,tenant_id,student_no,name,sex,birthday,cert_type,"
-                      + "cert_code,phone,school_id) values (?,?,?,?,?,?,?,?,?,?)",
-                  id,
-                  actor.tenantId(),
-                  studentNo,
-                  row.get("name", String.class),
-                  row.get("sex", String.class),
-                  row.get("birthday", LocalDate.class),
-                  certCode == null ? null : "ID_CARD",
-                  certCode,
-                  row.get("phone", String.class),
-                  schoolId);
-              var contactName = row.get("contact_name", String.class);
-              var contactPhone = row.get("contact_phone", String.class);
-              // 联系人至少要有一种联系方式（库约束）；只有姓名没有电话时跳过联系人，记入问题。
-              if (contactName != null && contactPhone != null) {
-                var contactId = UUID.randomUUID();
-                sql.execute(
-                    "insert into archive.contact(id,tenant_id,name,phone) values (?,?,?,?)",
-                    contactId,
-                    actor.tenantId(),
-                    contactName,
-                    contactPhone);
-                sql.execute(
-                    "insert into archive.student_contact(tenant_id,student_id,contact_id,relation,"
-                        + "is_primary,position) values (?,?,?,'GUARDIAN',true,0)",
-                    actor.tenantId(),
-                    id,
-                    contactId);
-              }
-              sql.execute(
-                  "insert into migration.import_log(tenant_id,kind,legacy_id,target_id)"
-                      + " values (?,'STUDENT',?,?)",
-                  actor.tenantId(),
-                  legacyId,
-                  id);
-              importedStudents++;
-            }
-            for (var row :
-                sql.fetch(
-                    "select legacy_id,student_no,amount,method,occurred_on"
-                        + " from migration.legacy_receipt where school_id=? order by legacy_id",
-                    schoolId)) {
-              var legacyId = row.get("legacy_id", String.class);
-              if (already(actor.tenantId(), "RECEIPT", legacyId)) continue;
-              var student =
-                  sql.fetchOne(
-                      "select id from archive.student where school_id=? and student_no=?",
-                      schoolId,
-                      row.get("student_no", String.class));
-              if (student == null) continue; // 学员缺失已在 dryRun 报出，确认时跳过
-              var studentId = student.get("id", UUID.class);
-              var id = UUID.randomUUID();
-              sql.execute(
-                  "insert into funds.receipt(id,tenant_id,school_id,student_id,amount,method,"
-                      + "occurred_on) values (?,?,?,?,?,?,?)",
-                  id,
-                  actor.tenantId(),
-                  schoolId,
-                  studentId,
-                  row.get("amount", BigDecimal.class),
-                  row.get("method", String.class),
-                  row.get("occurred_on", LocalDate.class));
-              sql.execute(
-                  "insert into funds.account_entry(tenant_id,student_id,kind,amount,source_id)"
-                      + " values (?,?,'RECEIPT',?,?)",
-                  actor.tenantId(),
-                  studentId,
-                  row.get("amount", BigDecimal.class),
-                  id);
-              sql.execute(
-                  "insert into migration.import_log(tenant_id,kind,legacy_id,target_id)"
-                      + " values (?,'RECEIPT',?,?)",
-                  actor.tenantId(),
-                  legacyId,
-                  id);
-              importedReceipts++;
-            }
-            var result = report(actor, schoolId, "COMMIT");
-            sql.execute(
-                "insert into migration.run(tenant_id,school_id,mode,actor_id,students_staged,"
-                    + "students_imported,receipts_staged,receipts_imported)"
-                    + " values (?,?,'COMMIT',?,?,?,?,?)",
-                actor.tenantId(),
-                schoolId,
-                actor.accountId(),
-                result.studentsStaged(),
-                importedStudents,
-                result.studentsStaged(),
-                importedReceipts);
-            return result;
+            requireSchool(actors.requireActionInTransaction("MIGRATION_MANAGE"), schoolId);
+            // 原实现绕过领域写入和锁账校验；受控契约及真实样本验收前禁止提交。
+            throw new MigrationConflict("LEGACY_COMMIT_DISABLED");
           });
     }
   }
@@ -253,152 +148,356 @@ public class LegacyMigrationService implements LegacyMigration {
   public OpeningImport.Report importOpenings(UUID schoolId, OpeningImport request) {
     try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
       var actor = actors.requireAction("MIGRATION_MANAGE");
-      if (request == null || request.rows() == null || request.rows().isEmpty())
-        throw new IllegalArgumentException("期初导入至少需要一行");
-      if (request.batchId() == null || request.batchId().isBlank())
-        throw new IllegalArgumentException("期初导入需要批次号");
-      var occurredOn =
-          request.occurredOn() == null || request.occurredOn().isBlank()
-              ? LocalDate.now().toString()
-              : date(request.occurredOn()).toString();
+      if (schoolId == null || request == null || request.rows() == null || request.rows().isEmpty())
+        throw new IllegalArgumentException("需要学校和期初导入行");
+      if (request.rows().size() > 5000) throw new IllegalArgumentException("单批最多 5000 行");
+      for (var row : request.rows()) {
+        if (row != null
+            && java.util.stream.Stream.of(
+                    row.studentNo(), row.amount(), row.hours(), row.consumedAmount())
+                .anyMatch(value -> value != null && value.length() > 200))
+          throw new IllegalArgumentException("期初行字段过长");
+      }
+      var batch = text(request.batchId(), 64, "批次号");
+      if (batch == null) throw new IllegalArgumentException("需要批次号");
+      var occurredOn = date(request.occurredOn());
+      if (occurredOn == null) throw new IllegalArgumentException("需要明确的期初日期，重试时须保持一致");
       var reason = text(request.reason(), 200, "期初原因");
-      // 学校校验与学员查询都在租户上下文里：organization.unit 启用了 FORCE RLS。
-      tx.execute(
-          actor.tenantId(),
-          () -> {
-            requireSchool(actor, schoolId);
-            return null;
-          });
+      prepareOpeningBatch(
+          actor, schoolId, batch, occurredOn, reason, request.rows(), request.dryRun());
       var results = new ArrayList<OpeningImport.RowResult>();
+      var seen = new HashSet<String>();
       var ok = 0;
       var skipped = 0;
       var failed = 0;
       var totalAmount = BigDecimal.ZERO;
       var totalHours = BigDecimal.ZERO;
+      int rowNo = 0;
       for (var row : request.rows()) {
-        if (row == null || row.studentNo() == null || row.studentNo().isBlank()) {
-          results.add(new OpeningImport.RowResult("", "FAILED", "缺少学员号"));
+        final int position = ++rowNo;
+        String studentNo;
+        try {
+          studentNo = row == null ? null : text(row.studentNo(), 20, "学员号");
+        } catch (IllegalArgumentException invalid) {
+          results.add(new OpeningImport.RowResult("", "FAILED", invalid.getMessage()));
+          if (!request.dryRun())
+            recordOpeningFailure(actor, schoolId, batch, position, invalid.getMessage());
           failed++;
           continue;
         }
-        var studentNo = row.studentNo().strip();
-        var studentId = studentIdOf(actor, schoolId, studentNo);
-        if (studentId == null) {
-          recordOpeningRow(
-              actor,
-              schoolId,
-              request.batchId(),
-              studentNo,
-              blankToZero(row.amount()),
-              blankToZero(row.hours()),
-              "FAILED",
-              "新库没有该学员");
-          results.add(new OpeningImport.RowResult(studentNo, "FAILED", "新库没有该学员"));
+        if (studentNo == null || !seen.add(studentNo)) {
+          results.add(
+              new OpeningImport.RowResult(
+                  studentNo == null ? "" : studentNo, "FAILED", "学员号为空或批次内重复"));
+          if (!request.dryRun())
+            recordOpeningFailure(actor, schoolId, batch, position, "学员号为空或批次内重复");
           failed++;
           continue;
         }
-        if (request.dryRun()) {
+        try {
+          var amount = openingNumber(row.amount(), true, "期初金额");
+          var hours = openingNumber(row.hours(), false, "期初课时");
+          var consumedAmount = openingNumber(row.consumedAmount(), false, "已消耗金额");
+          if (hours.signum() == 0 && consumedAmount.signum() != 0)
+            throw new IllegalArgumentException("无期初课时时不能导入消费金额");
+          java.util.function.Supplier<String> work =
+              () -> {
+                var result =
+                    openingRow(
+                        actor,
+                        schoolId,
+                        batch,
+                        studentNo,
+                        amount,
+                        hours,
+                        consumedAmount,
+                        occurredOn,
+                        reason);
+                if (!request.dryRun())
+                  sql.execute(
+                      "update migration.opening_batch_row set status='OK',detail=null where school_id=? and batch_id=? and row_no=?",
+                      schoolId,
+                      batch,
+                      position);
+                return result;
+              };
+          var outcome =
+              request.dryRun()
+                  ? tx.preview(actor.tenantId(), work)
+                  : tx.execute(actor.tenantId(), work);
+          var status = request.dryRun() ? "READY" : outcome;
           results.add(
               new OpeningImport.RowResult(
                   studentNo,
-                  "READY",
-                  "可导入：金额 " + blankToZero(row.amount()) + "，课时 " + blankToZero(row.hours())));
-          ok++;
-          totalAmount = totalAmount.add(new BigDecimal(blankToZero(row.amount())));
-          totalHours = totalHours.add(new BigDecimal(blankToZero(row.hours())));
-          continue;
-        }
-        // 每行独立事务：单行失败不影响其他行，也不会把整批标记为回滚。
-        var notes = new ArrayList<String>();
-        try {
-          var amount = new BigDecimal(blankToZero(row.amount()));
-          if (amount.signum() != 0) {
-            funds.openBalance(
-                new org.teraschool.funds.api.OpenBalance(
-                    rowRequestId(request.batchId(), studentNo, "AMOUNT"),
-                    schoolId,
-                    studentId,
-                    amount.toPlainString(),
-                    occurredOn,
-                    reason == null ? "旧库余额迁移" : reason));
-            notes.add("余额 " + amount.toPlainString());
-            totalAmount = totalAmount.add(amount);
-          }
-          var hours = new BigDecimal(blankToZero(row.hours()));
-          if (hours.signum() > 0) {
-            var enrollmentId = activeEnrollmentOf(actor, schoolId, studentId);
-            if (enrollmentId == null) {
-              notes.add("没有在读报名，课时未带入");
-            } else {
-              try {
-                teaching.openingConsumption(
-                    enrollmentId,
-                    new org.teraschool.teaching.api.OpeningConsumption(
-                        hours.toPlainString(),
-                        new BigDecimal(blankToZero(row.consumedAmount())).toPlainString(),
-                        reason == null ? "旧库已消耗迁移" : reason));
-                notes.add("已消耗课时 " + hours.toPlainString());
-                totalHours = totalHours.add(hours);
-              } catch (org.teraschool.teaching.api.TeachingConflict conflict) {
-                if (!"OPENING_ALREADY_RECORDED".equals(conflict.getMessage())) throw conflict;
-                notes.add("课时已存在，跳过");
-              }
-            }
-          }
-          var status = notes.isEmpty() ? "SKIPPED" : "OK";
-          recordOpeningRow(
-              actor,
-              schoolId,
-              request.batchId(),
-              studentNo,
-              blankToZero(row.amount()),
-              blankToZero(row.hours()),
-              status,
-              String.join("；", notes));
-          results.add(new OpeningImport.RowResult(studentNo, status, String.join("；", notes)));
-          if (notes.isEmpty()) skipped++;
+                  status,
+                  "期初金额 " + amount.toPlainString() + "，课时 " + hours.toPlainString()));
+          if ("SKIPPED".equals(status)) skipped++;
           else ok++;
+          totalAmount = totalAmount.add(amount);
+          totalHours = totalHours.add(hours);
         } catch (RuntimeException error) {
-          results.add(
-              new OpeningImport.RowResult(
-                  studentNo, "FAILED", error.getMessage() == null ? "导入失败" : error.getMessage()));
+          var detail =
+              error instanceof IllegalArgumentException
+                  ? error.getMessage()
+                  : "期初导入被拒绝，请核对权限、期间、已有记录和课时";
+          results.add(new OpeningImport.RowResult(studentNo, "FAILED", detail));
+          if (!request.dryRun()) recordOpeningFailure(actor, schoolId, batch, position, detail);
           failed++;
         }
       }
-      var report =
-          new OpeningImport.Report(
-              request.batchId(),
-              request.dryRun() ? "DRY_RUN" : "COMMIT",
-              ok,
-              skipped,
-              failed,
-              money(totalAmount),
-              hoursView(totalHours),
-              results);
-      // lambda 里只能用 effectively final 的值，先复制到局部变量。
-      final var runOk = ok;
-      final var runFailed = failed;
-      final var runMode = request.dryRun() ? "DRY_RUN" : "COMMIT";
-      tx.execute(
-          actor.tenantId(),
-          () -> {
+      return new OpeningImport.Report(
+          batch,
+          request.dryRun() ? "DRY_RUN" : "COMMIT",
+          ok,
+          skipped,
+          failed,
+          money(totalAmount),
+          hoursView(totalHours),
+          results);
+    }
+  }
+
+  /** 清单及各行原始内容一次落库；同批次只允许重试完全相同的输入。 */
+  private void prepareOpeningBatch(
+      Actor actor,
+      UUID schoolId,
+      String batch,
+      LocalDate date,
+      String reason,
+      List<OpeningImport.Row> rows,
+      boolean preview) {
+    java.util.function.Supplier<Void> work =
+        () -> {
+          schools.lockTenant(actor.tenantId());
+          requireSchool(actors.requireActionInTransaction("MIGRATION_MANAGE"), schoolId);
+          var existing =
+              sql.fetchOne(
+                  "select occurred_on,reason,row_count from migration.opening_batch where school_id=? and batch_id=?",
+                  schoolId,
+                  batch);
+          if (existing == null) {
+            if (sql.fetchExists(
+                    sql.selectOne()
+                        .from("migration.opening_fact")
+                        .where("school_id=? and batch_id=?", schoolId, batch))
+                || sql.fetchExists(
+                    sql.selectOne()
+                        .from("migration.opening_row")
+                        .where("school_id=? and batch_id=?", schoolId, batch)))
+              throw new MigrationConflict("OPENING_LEGACY_BATCH_UNVERIFIED");
             sql.execute(
-                "insert into migration.run(tenant_id,school_id,mode,actor_id,students_staged,"
-                    + "students_imported,receipts_staged,receipts_imported,issues)"
-                    + " values (?,?,?,?,?,?,?,?,?::jsonb)",
+                "insert into migration.opening_batch(tenant_id,school_id,batch_id,occurred_on,reason,row_count) values (?,?,?,?,?,?)",
                 actor.tenantId(),
                 schoolId,
-                runMode,
-                actor.accountId(),
-                runOk,
-                runFailed,
-                0,
-                0,
-                "[]");
-            return null;
-          });
-      return report;
+                batch,
+                date,
+                reason,
+                rows.size());
+            for (int i = 0; i < rows.size(); i++) {
+              var row = rows.get(i);
+              sql.execute(
+                  "insert into migration.opening_batch_row(tenant_id,school_id,batch_id,row_no,row_is_null,student_no,amount,hours,consumed_amount,status) values (?,?,?,?,?,?,?,?,?,'PENDING')",
+                  actor.tenantId(),
+                  schoolId,
+                  batch,
+                  i + 1,
+                  row == null,
+                  row == null ? null : row.studentNo(),
+                  row == null ? null : row.amount(),
+                  row == null ? null : row.hours(),
+                  row == null ? null : row.consumedAmount());
+            }
+          } else {
+            var stored =
+                sql.fetch(
+                    "select * from migration.opening_batch_row where school_id=? and batch_id=? order by row_no",
+                    schoolId,
+                    batch);
+            if (!date.equals(existing.get("occurred_on", LocalDate.class))
+                || !Objects.equals(reason, existing.get("reason", String.class))
+                || existing.get("row_count", Integer.class) != rows.size()
+                || stored.size() != rows.size())
+              throw new MigrationConflict("OPENING_BATCH_MISMATCH");
+            for (int i = 0; i < rows.size(); i++) {
+              var row = rows.get(i);
+              var saved = stored.get(i);
+              if (saved.get("row_no", Integer.class) != i + 1
+                  || saved.get("row_is_null", Boolean.class) != (row == null)
+                  || !Objects.equals(
+                      saved.get("student_no", String.class), row == null ? null : row.studentNo())
+                  || !Objects.equals(
+                      saved.get("amount", String.class), row == null ? null : row.amount())
+                  || !Objects.equals(
+                      saved.get("hours", String.class), row == null ? null : row.hours())
+                  || !Objects.equals(
+                      saved.get("consumed_amount", String.class),
+                      row == null ? null : row.consumedAmount()))
+                throw new MigrationConflict("OPENING_BATCH_MISMATCH");
+            }
+          }
+          return null;
+        };
+    if (preview) tx.preview(actor.tenantId(), work);
+    else tx.execute(actor.tenantId(), work);
+  }
+
+  /** 失败单独记账；并发重试已成功时不能覆盖成功状态。 */
+  private void recordOpeningFailure(
+      Actor actor, UUID schoolId, String batch, int rowNo, String detail) {
+    tx.execute(
+        actor.tenantId(),
+        () -> {
+          schools.lockTenant(actor.tenantId());
+          requireSchool(actors.requireActionInTransaction("MIGRATION_MANAGE"), schoolId);
+          sql.execute(
+              "update migration.opening_batch_row set status='FAILED',detail=? where school_id=? and batch_id=? and row_no=? and status<>'OK'",
+              detail,
+              schoolId,
+              batch,
+              rowNo);
+          return null;
+        });
+  }
+
+  private BigDecimal openingNumber(String value, boolean negativeAllowed, String label) {
+    try {
+      var result = new BigDecimal(blankToZero(value)).setScale(2, RoundingMode.UNNECESSARY);
+      if ((!negativeAllowed && result.signum() < 0) || result.precision() > 14)
+        throw new IllegalArgumentException(label + "超出范围");
+      return result;
+    } catch (NumberFormatException | ArithmeticException invalid) {
+      throw new IllegalArgumentException(label + "须为最多两位小数的数值");
     }
+  }
+
+  /** 每行一个外层事务；所有事实、来源和成功结果一起提交，失败整体回滚。 */
+  private String openingRow(
+      Actor actor,
+      UUID schoolId,
+      String batch,
+      String studentNo,
+      BigDecimal amount,
+      BigDecimal hours,
+      BigDecimal consumedAmount,
+      LocalDate occurredOn,
+      String reason) {
+    schools.lockTenant(actor.tenantId());
+    var verified = actors.requireActionInTransaction("MIGRATION_MANAGE");
+    requireSchool(verified, schoolId);
+    var studentId = studentIdOf(verified, schoolId, studentNo);
+    if (studentId == null) throw new IllegalArgumentException("新库没有该学员");
+    var old =
+        sql.fetchOne(
+            "select * from migration.opening_fact where school_id=? and batch_id=? and student_no=?",
+            schoolId,
+            batch,
+            studentNo);
+    if (old != null) {
+      var enrollmentId = old.get("enrollment_id", UUID.class);
+      if (amount.signum() != 0
+          && !actors
+              .requireResourceScopeInTransaction("FUNDS")
+              .readableSchoolIds()
+              .contains(schoolId)) throw new AccessDeniedException("无该学校的资金读取权限");
+      if (hours.signum() > 0
+          && !actors.requireActionInTransaction("TEACHING_MAINTAIN").schools().contains(schoolId))
+        throw new AccessDeniedException("无该学校的期初课时权限");
+      if (!studentId.equals(old.get("student_id", UUID.class))
+          || !Objects.equals(enrollmentId, old.get("enrollment_id", UUID.class))
+          || amount.compareTo(old.get("amount", BigDecimal.class)) != 0
+          || hours.compareTo(old.get("hours", BigDecimal.class)) != 0
+          || consumedAmount.compareTo(old.get("consumed_amount", BigDecimal.class)) != 0
+          || !occurredOn.equals(old.get("occurred_on", LocalDate.class))
+          || !Objects.equals(reason, old.get("reason", String.class)))
+        throw new IllegalArgumentException("批次行与原请求不一致");
+      var accountId = old.get("account_entry_id", UUID.class);
+      var consumptionId = old.get("consumption_id", UUID.class);
+      if (amount.signum() != 0
+          && (accountId == null
+              || !sql.fetchExists(
+                  sql.selectOne()
+                      .from("funds.account_entry")
+                      .where(
+                          "id=? and student_id=? and kind='OPENING' and amount=?",
+                          accountId,
+                          studentId,
+                          amount)))) throw new IllegalArgumentException("原期初金额事实缺失或不一致");
+      if (hours.signum() > 0
+          && (consumptionId == null
+              || !sql.fetchExists(
+                  sql.selectOne()
+                      .from("teaching.consumption")
+                      .where(
+                          "id=? and enrollment_id=? and source='OPENING' and hours=? and amount=? and opening_occurred_on=?",
+                          consumptionId,
+                          enrollmentId,
+                          hours,
+                          consumedAmount,
+                          occurredOn)))) throw new IllegalArgumentException("原期初消费事实缺失或不一致");
+      return "SKIPPED";
+    }
+    var enrollmentId =
+        hours.signum() > 0 ? activeEnrollmentOf(verified, schoolId, studentId) : null;
+    if (hours.signum() > 0 && enrollmentId == null) throw new IllegalArgumentException("没有在读报名");
+    // 旧台账没有可靠事实映射：不推测其来源，阻止自动重放造成重复记账。
+    if (sql.fetchExists(
+        sql.selectOne()
+            .from("migration.opening_row")
+            .where("batch_id=? and student_no=?", batch, studentNo)))
+      throw new IllegalArgumentException("历史批次行缺少事实映射，请人工核验");
+    periods.requireOpen(schoolId, occurredOn);
+    UUID accountEntryId = null;
+    UUID consumptionId = null;
+    if (amount.signum() != 0) {
+      var requestId = rowRequestId(schoolId + "|" + batch, studentNo, "AMOUNT");
+      funds.openBalance(
+          new org.teraschool.funds.api.OpenBalance(
+              requestId,
+              schoolId,
+              studentId,
+              amount.toPlainString(),
+              occurredOn.toString(),
+              reason == null ? "旧库余额迁移" : reason));
+      var entry =
+          sql.fetchOne(
+              "select resource_id from funds.creation_request where tenant_id=? and actor_id=? and request_id=? and kind='OPENING'",
+              actor.tenantId(),
+              actor.accountId(),
+              requestId);
+      if (entry == null) throw new IllegalStateException("期初分录来源不可核验");
+      accountEntryId = entry.get("resource_id", UUID.class);
+    }
+    if (hours.signum() > 0) {
+      teaching.openingConsumption(
+          enrollmentId,
+          new org.teraschool.teaching.api.OpeningConsumption(
+              hours.toPlainString(),
+              consumedAmount.toPlainString(),
+              reason == null ? "旧库已消耗迁移" : reason,
+              occurredOn.toString()));
+      var consumption =
+          sql.fetchOne(
+              "select id from teaching.consumption where enrollment_id=? and source='OPENING'",
+              enrollmentId);
+      if (consumption == null) throw new IllegalStateException("期初消费来源不可核验");
+      consumptionId = consumption.get("id", UUID.class);
+    }
+    sql.execute(
+        "insert into migration.opening_fact(tenant_id,school_id,batch_id,student_no,student_id,enrollment_id,amount,hours,consumed_amount,occurred_on,reason,account_entry_id,consumption_id) values (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        actor.tenantId(),
+        schoolId,
+        batch,
+        studentNo,
+        studentId,
+        enrollmentId,
+        amount,
+        hours,
+        consumedAmount,
+        occurredOn,
+        reason,
+        accountEntryId,
+        consumptionId);
+    return "OK";
   }
 
   private UUID studentIdOf(Actor actor, UUID schoolId, String studentNo) {
@@ -418,13 +517,14 @@ public class LegacyMigrationService implements LegacyMigration {
     return tx.execute(
         actor.tenantId(),
         () -> {
-          var row =
-              sql.fetchOne(
+          var rows =
+              sql.fetch(
                   "select id from enrollment.enrollment where school_id=? and student_id=?"
-                      + " and status='ACTIVE' order by created_at desc limit 1",
+                      + " and status='ACTIVE' order by created_at desc limit 2",
                   schoolId,
                   studentId);
-          return row == null ? null : row.get("id", UUID.class);
+          if (rows.size() > 1) throw new IllegalArgumentException("存在多条在读报名，不能自动选择期初课时归属");
+          return rows.isEmpty() ? null : rows.get(0).get("id", UUID.class);
         });
   }
 
@@ -463,17 +563,37 @@ public class LegacyMigrationService implements LegacyMigration {
   public OpeningReconciliation reconcileOpenings(UUID schoolId, String batchId) {
     try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
       var actor = actors.requireAction("MIGRATION_MANAGE");
-      if (batchId == null || batchId.isBlank()) throw new IllegalArgumentException("需要批次号");
+      var batch = text(batchId, 64, "批次号");
+      if (batch == null) throw new IllegalArgumentException("需要批次号");
       return tx.execute(
           actor.tenantId(),
           () -> {
-            requireSchool(actor, schoolId);
-            var rows =
+            schools.lockTenant(actor.tenantId());
+            var verified = actors.requireActionInTransaction("MIGRATION_MANAGE");
+            requireSchool(verified, schoolId);
+            if (!actors
+                    .requireResourceScopeInTransaction("FUNDS")
+                    .readableSchoolIds()
+                    .contains(schoolId)
+                || !actors
+                    .requireActionInTransaction("TEACHING_MAINTAIN")
+                    .schools()
+                    .contains(schoolId)) throw new AccessDeniedException("对账需要该学校的资金读取和教务维护权限");
+            var facts =
                 sql.fetch(
-                    "select student_no,expected_amount,expected_hours,status from migration.opening_row"
-                        + " where school_id=? and batch_id=? order by student_no",
+                    "select * from migration.opening_fact where school_id=? and batch_id=? order by student_no",
                     schoolId,
-                    batchId);
+                    batch);
+            var manifest =
+                sql.fetchOne(
+                    "select row_count from migration.opening_batch where school_id=? and batch_id=?",
+                    schoolId,
+                    batch);
+            var manifestRows =
+                sql.fetch(
+                    "select * from migration.opening_batch_row where school_id=? and batch_id=? order by row_no",
+                    schoolId,
+                    batch);
             var details = new ArrayList<OpeningReconciliation.Row>();
             var matched = 0;
             var mismatched = 0;
@@ -481,39 +601,83 @@ public class LegacyMigrationService implements LegacyMigration {
             var actualAmount = BigDecimal.ZERO;
             var expectedHours = BigDecimal.ZERO;
             var actualHours = BigDecimal.ZERO;
-            for (var row : rows) {
-              var studentNo = row.get("student_no", String.class);
-              var expectedA = row.get("expected_amount", BigDecimal.class);
-              var expectedH = row.get("expected_hours", BigDecimal.class);
-              var student =
-                  sql.fetchOne(
-                      "select id from archive.student where school_id=? and student_no=?",
-                      schoolId,
-                      studentNo);
-              var actualA = BigDecimal.ZERO;
-              var actualH = BigDecimal.ZERO;
-              if (student != null) {
-                var studentId = student.get("id", UUID.class);
-                actualA =
-                    sql.fetchOne(
-                            "select coalesce(sum(amount),0) as total from funds.account_entry"
-                                + " where student_id=? and kind='OPENING'",
-                            studentId)
-                        .get("total", BigDecimal.class);
-                actualH =
-                    sql.fetchOne(
-                            "select coalesce(sum(hours),0) as total from teaching.consumption"
-                                + " where enrollment_id in (select id from enrollment.enrollment"
-                                + " where student_id=? and school_id=?) and source='OPENING'",
-                            studentId,
-                            schoolId)
-                        .get("total", BigDecimal.class);
-              }
-              var amountDiff = actualA.subtract(expectedA);
-              var hoursDiff = actualH.subtract(expectedH);
-              // 旧库该行本来就该是 0（例如只有金额）时，差额也应为 0 才算对上。
-              var matched_row = amountDiff.signum() == 0 && hoursDiff.signum() == 0;
-              if (matched_row) matched++;
+            for (var fact : facts) {
+              var number = fact.get("student_no", String.class);
+              var sourceRow =
+                  manifestRows.stream()
+                      .filter(
+                          r ->
+                              "OK".equals(r.get("status", String.class))
+                                  && r.get("student_no", String.class) != null
+                                  && number.equals(r.get("student_no", String.class).strip()))
+                      .findFirst()
+                      .orElse(null);
+              var expectedA = fact.get("amount", BigDecimal.class);
+              var expectedH = fact.get("hours", BigDecimal.class);
+              var expectedC = fact.get("consumed_amount", BigDecimal.class);
+              var studentId = fact.get("student_id", UUID.class);
+              var enrollmentId = fact.get("enrollment_id", UUID.class);
+              var entryId = fact.get("account_entry_id", UUID.class);
+              var consumptionId = fact.get("consumption_id", UUID.class);
+              var entry =
+                  entryId == null
+                      ? null
+                      : sql.fetchOne(
+                          "select student_id,kind,amount from funds.account_entry where id=?",
+                          entryId);
+              var consumption =
+                  consumptionId == null
+                      ? null
+                      : sql.fetchOne(
+                          "select enrollment_id,source,hours,amount,opening_occurred_on from teaching.consumption where id=?",
+                          consumptionId);
+              var actualA = entry == null ? BigDecimal.ZERO : entry.get("amount", BigDecimal.class);
+              var actualH =
+                  consumption == null
+                      ? BigDecimal.ZERO
+                      : consumption.get("hours", BigDecimal.class);
+              var actualC =
+                  consumption == null
+                      ? BigDecimal.ZERO
+                      : consumption.get("amount", BigDecimal.class);
+              boolean correct =
+                  (expectedA.signum() == 0
+                          ? entryId == null
+                          : entry != null
+                              && studentId.equals(entry.get("student_id", UUID.class))
+                              && "OPENING".equals(entry.get("kind", String.class)))
+                      && (expectedH.signum() == 0
+                          ? consumptionId == null
+                          : consumption != null
+                              && Objects.equals(
+                                  enrollmentId, consumption.get("enrollment_id", UUID.class))
+                              && "OPENING".equals(consumption.get("source", String.class))
+                              && Objects.equals(
+                                  fact.get("occurred_on", LocalDate.class),
+                                  consumption.get("opening_occurred_on", LocalDate.class)))
+                      && actualA.compareTo(expectedA) == 0
+                      && actualH.compareTo(expectedH) == 0
+                      && actualC.compareTo(expectedC) == 0;
+              // 没有任何批次来源的额外期初事实单独标出，不能归入本批实际值。
+              var unassigned =
+                  sql.fetchExists(
+                      sql.selectOne()
+                          .from("funds.account_entry a")
+                          .where(
+                              "a.student_id=? and a.kind='OPENING' and not exists (select 1 from migration.opening_fact x where x.tenant_id=a.tenant_id and x.account_entry_id=a.id)",
+                              studentId));
+              unassigned =
+                  unassigned
+                      || sql.fetchExists(
+                          sql.selectOne()
+                              .from("teaching.consumption c")
+                              .join("enrollment.enrollment e")
+                              .on("e.id=c.enrollment_id and e.tenant_id=c.tenant_id")
+                              .where(
+                                  "e.student_id=? and c.source='OPENING' and not exists (select 1 from migration.opening_fact x where x.tenant_id=c.tenant_id and x.consumption_id=c.id)",
+                                  studentId));
+              var status = !correct ? "MISMATCHED" : unassigned ? "UNATTRIBUTED" : "MATCHED";
+              if ("MATCHED".equals(status)) matched++;
               else mismatched++;
               expectedAmount = expectedAmount.add(expectedA);
               actualAmount = actualAmount.add(actualA);
@@ -521,23 +685,100 @@ public class LegacyMigrationService implements LegacyMigration {
               actualHours = actualHours.add(actualH);
               details.add(
                   new OpeningReconciliation.Row(
-                      studentNo,
+                      number,
                       money(expectedA),
                       hoursView(expectedH),
                       money(actualA),
                       hoursView(actualH),
-                      money(amountDiff),
-                      hoursView(hoursDiff),
-                      matched_row ? "MATCHED" : "MISMATCHED"));
+                      money(actualA.subtract(expectedA)),
+                      hoursView(actualH.subtract(expectedH)),
+                      enrollmentId == null ? null : enrollmentId.toString(),
+                      money(expectedC),
+                      money(actualC),
+                      money(actualC.subtract(expectedC)),
+                      status,
+                      sourceRow == null ? null : sourceRow.get("row_no", Integer.class),
+                      null));
             }
+            for (var row : manifestRows) {
+              var number = row.get("student_no", String.class);
+              var state = row.get("status", String.class);
+              boolean hasFact =
+                  number != null
+                      && facts.stream()
+                          .anyMatch(f -> number.strip().equals(f.get("student_no", String.class)));
+              if ("OK".equals(state) && hasFact) continue;
+              mismatched++;
+              details.add(
+                  new OpeningReconciliation.Row(
+                      number,
+                      row.get("amount", String.class),
+                      row.get("hours", String.class),
+                      null,
+                      null,
+                      null,
+                      null,
+                      null,
+                      row.get("consumed_amount", String.class),
+                      null,
+                      null,
+                      "OK".equals(state) ? "MISMATCHED" : state,
+                      row.get("row_no", Integer.class),
+                      row.get("detail", String.class)));
+            }
+            // V32 历史行没有目标事实映射，保留并明确标识，绝不推测为已对平。
+            for (var row :
+                sql.fetch(
+                    "select student_no,expected_amount,expected_hours from migration.opening_row where school_id=? and batch_id=? order by student_no",
+                    schoolId,
+                    batch)) {
+              var number = row.get("student_no", String.class);
+              if (facts.stream().anyMatch(f -> number.equals(f.get("student_no", String.class))))
+                continue;
+              var a = row.get("expected_amount", BigDecimal.class);
+              var h = row.get("expected_hours", BigDecimal.class);
+              expectedAmount = expectedAmount.add(a);
+              expectedHours = expectedHours.add(h);
+              mismatched++;
+              details.add(
+                  new OpeningReconciliation.Row(
+                      number,
+                      money(a),
+                      hoursView(h),
+                      null,
+                      null,
+                      null,
+                      null,
+                      null,
+                      null,
+                      null,
+                      null,
+                      "UNVERIFIED",
+                      null,
+                      "历史记录缺少可靠来源"));
+            }
+            if (details.isEmpty()) throw new IllegalArgumentException("该批次没有可核验的期初记录");
+            var completeness =
+                manifest == null
+                        || manifest.get("row_count", Integer.class) != manifestRows.size()
+                        || facts.size()
+                            != manifestRows.stream()
+                                .filter(r -> "OK".equals(r.get("status", String.class)))
+                                .count()
+                    ? "UNVERIFIED"
+                    : manifestRows.stream()
+                            .anyMatch(r -> !"OK".equals(r.get("status", String.class)))
+                        ? "INCOMPLETE"
+                        : "COMPLETE";
             return new OpeningReconciliation(
-                batchId,
+                batch,
+                completeness,
                 details.size(),
                 matched,
                 mismatched,
-                money(expectedAmount),
+                "INCOMPLETE".equals(completeness) ? null : money(expectedAmount),
                 money(actualAmount),
-                hoursView(expectedHours),
+                "INCOMPLETE".equals(completeness) ? null : hoursView(expectedHours),
                 hoursView(actualHours),
                 details);
           });

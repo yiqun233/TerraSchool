@@ -28,7 +28,7 @@ import org.teraschool.teaching.api.*;
  * <p>预览不写库；确认只把可用时段写成 DRAFT 课次，发布与确认仍走既有状态机；重复确认是幂等的。
  */
 @Service
-public class SchedulingService {
+public class SchedulingService implements org.teraschool.teaching.api.SchedulingOperations {
   private static final Pattern TIME = Pattern.compile("([01]\\d|2[0-3]):[0-5]\\d");
   private static final Pattern DAY = Pattern.compile("\\d{4}-\\d{2}-\\d{2}");
   private static final int MAX_DAYS = 180;

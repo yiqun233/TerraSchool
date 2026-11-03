@@ -18,7 +18,7 @@ import org.teraschool.platform.api.TenantTransactions;
 /**
  * 审批策略与审批单。
  *
- * <p>退费类动作在策略要求时必须持有已批准且金额匹配的审批单，审批单只能被消耗一次；申请人不能审批自己的 单据。未配置策略时视为免审批，这是首版默认，生产环境应显式配置策略。
+ * <p>退费类动作在策略要求时必须持有已批准且金额匹配的审批单，审批单只能被消耗一次；申请人不能审批自己的单据。缺少或停用策略时拒绝执行，由学校明确配置规则。
  */
 @Service
 public class ApprovalService implements ApprovalQueries, ApprovalCommands, ApprovalGate {
@@ -295,8 +295,9 @@ public class ApprovalService implements ApprovalQueries, ApprovalCommands, Appro
             "select free_below,active from approval.policy where school_id=? and action=?",
             schoolId,
             action);
-    // 未配置策略视为免审批（首版默认），配置后按阈值执行。
-    if (policy == null || !policy.get("active", Boolean.class)) return;
+    // 不将漏配或停用误解释为免审批；显式配置阈值后才允许免批或审批执行。
+    if (policy == null || !policy.get("active", Boolean.class))
+      throw new ApprovalConflict("APPROVAL_POLICY_NOT_CONFIGURED");
     if (amount.compareTo(policy.get("free_below", BigDecimal.class)) < 0) return;
     if (approvalId == null) throw new ApprovalConflict("APPROVAL_REQUIRED");
     var row = requireRequestForUpdate(approvalId);

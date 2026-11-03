@@ -232,11 +232,24 @@ class ApprovalWorkflowTest {
   }
 
   @Test
-  void withoutPolicyRefundNeedsNoApproval() throws Exception {
-    // 其他用例会配置策略；本用例先移除该校的退课时策略，验证「未配置即免审批」。
+  void withoutPolicyRefundIsRejected() throws Exception {
     update("delete from approval.policy where school_id=? and action='REFUND_HOURS'", SCHOOL);
     var enrollment = paidEnrollment(freshStudent());
-    assertThat(refund(enrollment, "2.00", null).amount()).isEqualTo("200.00");
+    assertThatThrownBy(() -> refund(enrollment, "2.00", null))
+        .isInstanceOf(ApprovalConflict.class)
+        .hasMessage("APPROVAL_POLICY_NOT_CONFIGURED");
+  }
+
+  @Test
+  void disabledPolicyDoesNotGrantApprovalExemption() throws Exception {
+    var enrollment = paidEnrollment(freshStudent());
+    policy("REFUND_HOURS", "1000");
+    update(
+        "update approval.policy set active=false where school_id=? and action='REFUND_HOURS'",
+        SCHOOL);
+    assertThatThrownBy(() -> refund(enrollment, "2.00", null))
+        .isInstanceOf(ApprovalConflict.class)
+        .hasMessage("APPROVAL_POLICY_NOT_CONFIGURED");
   }
 
   @Test

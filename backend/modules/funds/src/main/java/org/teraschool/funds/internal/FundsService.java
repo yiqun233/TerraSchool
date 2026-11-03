@@ -96,13 +96,16 @@ public class FundsService implements FundsQueries, FundsCommands {
     var occurredOn = businessDate(command.occurredOn(), "期初日期");
     var reason = text(command.reason(), 200, "期初原因");
     var scope = actors.requireResourceScope("FUNDS");
+    actors.requireAction("MIGRATION_MANAGE");
     return tx.execute(
         scope.tenantId(),
         () -> {
           schools.lockTenant(scope.tenantId());
           var verified = actors.requireResourceScopeInTransaction("FUNDS");
+          var migrationScope = actors.requireActionInTransaction("MIGRATION_MANAGE");
           var student = students.require(command.studentId());
-          if (!verified.readableSchoolIds().contains(command.schoolId()))
+          if (!verified.readableSchoolIds().contains(command.schoolId())
+              || !migrationScope.schools().contains(command.schoolId()))
             throw new AccessDeniedException("无该学校的资金权限");
           if (!command.schoolId().equals(student.schoolId()))
             throw new FundsConflict("STUDENT_NOT_IN_SCHOOL");
@@ -933,10 +936,11 @@ public class FundsService implements FundsQueries, FundsCommands {
                         + "r.status from funds.receipt r"
                         + " join archive.student s on s.id=r.student_id and s.tenant_id=r.tenant_id"
                         + " where r.school_id=? and r.occurred_on between ? and ?"
-                        + " order by r.occurred_on, r.id limit 5000",
+                        + " order by r.occurred_on, r.id limit 5001",
                     schoolId,
                     start,
                     end);
+            org.teraschool.platform.api.CsvExport.requireComplete(rows.size());
             var csv = new StringBuilder();
             csv.append("学员号,学员姓名,金额,方式,收款日期,状态").append(NEWLINE);
             for (var row : rows) {
@@ -962,11 +966,7 @@ public class FundsService implements FundsQueries, FundsCommands {
   private static final char NEWLINE = (char) 10;
 
   private String cell(String value) {
-    if (value == null) return "";
-    var text = value.replace("\"", "\"\"");
-    return text.indexOf(',') >= 0 || text.indexOf('"') >= 0 || text.indexOf(NEWLINE) >= 0
-        ? "\"" + text + "\""
-        : text;
+    return org.teraschool.platform.api.CsvExport.cell(value);
   }
 
   private String hours(BigDecimal value) {

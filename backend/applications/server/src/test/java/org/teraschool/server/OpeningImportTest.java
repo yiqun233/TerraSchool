@@ -223,6 +223,8 @@ class OpeningImportTest {
     assertThat(report.mode()).isEqualTo("DRY_RUN");
     assertThat(report.ok()).isEqualTo(1);
     assertThat(report.totalAmount()).isEqualTo("999.00");
+    assertThatThrownBy(() -> asActor(OPS, () -> migration.reconcileOpenings(SCHOOL, "B4")))
+        .isInstanceOf(IllegalArgumentException.class);
   }
 
   @Test
@@ -235,6 +237,7 @@ class OpeningImportTest {
                 SCHOOL,
                 request("B5", false, new OpeningImport.Row(no, "700.00", "3.00", "300.00"))));
     var report = asActor(OPS, () -> migration.reconcileOpenings(SCHOOL, "B5"));
+    assertThat(report.completeness()).isEqualTo("COMPLETE");
     assertThat(report.rows()).isEqualTo(1);
     assertThat(report.matched()).isEqualTo(1);
     assertThat(report.mismatched()).isZero();
@@ -263,14 +266,206 @@ class OpeningImportTest {
     assertThat(report.matched()).isZero();
     assertThat(report.mismatched()).isEqualTo(1);
     assertThat(report.expectedAmount()).isEqualTo("200.00");
-    assertThat(report.actualAmount()).isEqualTo("350.00");
+    assertThat(report.actualAmount()).isEqualTo("200.00");
     assertThat(report.details())
         .singleElement()
         .satisfies(
             row -> {
-              assertThat(row.amountDiff()).isEqualTo("150.00");
-              assertThat(row.status()).isEqualTo("MISMATCHED");
+              assertThat(row.amountDiff()).isEqualTo("0.00");
+              assertThat(row.status()).isEqualTo("UNATTRIBUTED");
             });
+  }
+
+  @Test
+  void failedHoursRollBackBalanceAndDoNotPoisonOtherRows() throws Exception {
+    var invalid = studentWithEnrollment("007");
+    var valid = studentWithEnrollment("008");
+    var result =
+        asActor(
+            OPS,
+            () ->
+                migration.importOpenings(
+                    SCHOOL,
+                    request(
+                        "atomic",
+                        false,
+                        new OpeningImport.Row(invalid, "100.00", "11.00", "20.00"),
+                        new OpeningImport.Row(valid, "50.00", "1.00", "30.00"))));
+    assertThat(result.failed()).isEqualTo(1);
+    assertThat(result.ok()).isEqualTo(1);
+    assertThat(result.totalAmount()).isEqualTo("50.00");
+    var invalidStudent = studentIdOf(invalid);
+    assertThat(asActor(OPS, () -> fundsQueries.balance(invalidStudent)).total()).isEqualTo("0.00");
+  }
+
+  @Test
+  void replayCannotChangeConsumptionAndIndependentBatchesDoNotPolluteReconciliation()
+      throws Exception {
+    var no = studentWithEnrollment("009");
+    var first = request("batch-a", false, new OpeningImport.Row(no, "100.00", "1.00", "80.00"));
+    assertThat(asActor(OPS, () -> migration.importOpenings(SCHOOL, first)).ok()).isEqualTo(1);
+    assertThat(asActor(OPS, () -> migration.importOpenings(SCHOOL, first)).skipped()).isEqualTo(1);
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    OPS,
+                    () ->
+                        migration.importOpenings(
+                            SCHOOL,
+                            request(
+                                "batch-a",
+                                false,
+                                new OpeningImport.Row(no, "100.00", "1.00", "90.00")))))
+        .isInstanceOf(org.teraschool.migration.api.MigrationConflict.class)
+        .hasMessage("OPENING_BATCH_MISMATCH");
+    assertThat(
+            asActor(
+                    OPS,
+                    () ->
+                        migration.importOpenings(
+                            SCHOOL,
+                            request(
+                                "batch-b", false, new OpeningImport.Row(no, "50.00", "0", "0"))))
+                .ok())
+        .isEqualTo(1);
+    var report = asActor(OPS, () -> migration.reconcileOpenings(SCHOOL, "batch-a"));
+    assertThat(report.matched()).isEqualTo(1);
+    assertThat(report.actualAmount()).isEqualTo("100.00");
+    assertThat(report.details().get(0).actualConsumedAmount()).isEqualTo("80.00");
+  }
+
+  @Test
+  void openingDateMustBeExplicit() {
+    var input =
+        new OpeningImport(
+            "missing-date", "", "旧库迁移", List.of(new OpeningImport.Row("X", "1", "0", "0")), false);
+    assertThatThrownBy(() -> asActor(OPS, () -> migration.importOpenings(SCHOOL, input)))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("期初日期");
+  }
+
+  @Test
+  void failedRowsPersistAndIdenticalRetryCompletesManifest() throws Exception {
+    var existing = studentWithEnrollment("011");
+    var absent = "I-MISSING-011";
+    var input =
+        request(
+            "manifest-retry",
+            false,
+            new OpeningImport.Row(existing, "25.00", "0", "0"),
+            new OpeningImport.Row(absent, "40.00", "0", "0"));
+    var first = asActor(OPS, () -> migration.importOpenings(SCHOOL, input));
+    assertThat(first.ok()).isEqualTo(1);
+    assertThat(first.failed()).isEqualTo(1);
+    var incomplete = asActor(OPS, () -> migration.reconcileOpenings(SCHOOL, "manifest-retry"));
+    assertThat(incomplete.completeness()).isEqualTo("INCOMPLETE");
+    assertThat(incomplete.rows()).isEqualTo(2);
+    assertThat(incomplete.expectedAmount()).isNull();
+    assertThat(incomplete.details())
+        .anySatisfy(
+            row -> {
+              assertThat(row.rowNumber()).isEqualTo(2);
+              assertThat(row.status()).isEqualTo("FAILED");
+              assertThat(row.detail()).contains("没有该学员");
+            });
+    update(
+        "insert into archive.student(id,tenant_id,student_no,name,sex,school_id) values (?,?,?,'补齐学员','FEMALE',?)",
+        UUID.randomUUID(),
+        TENANT,
+        absent,
+        SCHOOL);
+    var retry = asActor(OPS, () -> migration.importOpenings(SCHOOL, input));
+    assertThat(retry.skipped()).isEqualTo(1);
+    assertThat(retry.ok()).isEqualTo(1);
+    var complete = asActor(OPS, () -> migration.reconcileOpenings(SCHOOL, "manifest-retry"));
+    assertThat(complete.completeness()).isEqualTo("COMPLETE");
+    assertThat(complete.rows()).isEqualTo(2);
+    assertThat(complete.matched()).isEqualTo(2);
+    assertThat(complete.expectedAmount()).isEqualTo("65.00");
+  }
+
+  @Test
+  void interruptedPendingManifestIsVisibleAndCanResume() throws Exception {
+    var no = studentWithEnrollment("013");
+    update(
+        "insert into migration.opening_batch(tenant_id,school_id,batch_id,occurred_on,reason,row_count) values (?,?,'manifest-pending','2026-02-10','旧库迁移',1)",
+        TENANT,
+        SCHOOL);
+    update(
+        "insert into migration.opening_batch_row(tenant_id,school_id,batch_id,row_no,row_is_null,student_no,amount,hours,consumed_amount,status) values (?,?,'manifest-pending',1,false,?,'30.00','0','0','PENDING')",
+        TENANT,
+        SCHOOL,
+        no);
+    var before = asActor(OPS, () -> migration.reconcileOpenings(SCHOOL, "manifest-pending"));
+    assertThat(before.completeness()).isEqualTo("INCOMPLETE");
+    assertThat(before.details())
+        .singleElement()
+        .satisfies(row -> assertThat(row.status()).isEqualTo("PENDING"));
+    var input = request("manifest-pending", false, new OpeningImport.Row(no, "30.00", "0", "0"));
+    assertThat(asActor(OPS, () -> migration.importOpenings(SCHOOL, input)).ok()).isEqualTo(1);
+    assertThat(
+            asActor(OPS, () -> migration.reconcileOpenings(SCHOOL, "manifest-pending"))
+                .completeness())
+        .isEqualTo("COMPLETE");
+  }
+
+  @Test
+  void duplicateSourceRowsRemainVisibleAndCannotBeRemovedFromRetry() throws Exception {
+    var no = studentWithEnrollment("012");
+    var row = new OpeningImport.Row(no, "20.00", "0", "0");
+    var input = request("manifest-duplicate", false, row, row);
+    var report = asActor(OPS, () -> migration.importOpenings(SCHOOL, input));
+    assertThat(report.failed()).isEqualTo(1);
+    var reconcile = asActor(OPS, () -> migration.reconcileOpenings(SCHOOL, "manifest-duplicate"));
+    assertThat(reconcile.completeness()).isEqualTo("INCOMPLETE");
+    assertThat(reconcile.details())
+        .anySatisfy(
+            detail -> {
+              assertThat(detail.rowNumber()).isEqualTo(2);
+              assertThat(detail.status()).isEqualTo("FAILED");
+            });
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    OPS,
+                    () ->
+                        migration.importOpenings(
+                            SCHOOL, request("manifest-duplicate", false, row))))
+        .isInstanceOf(org.teraschool.migration.api.MigrationConflict.class)
+        .hasMessage("OPENING_BATCH_MISMATCH");
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    OPS,
+                    () ->
+                        migration.importOpenings(SCHOOL, request("manifest-duplicate", true, row))))
+        .isInstanceOf(org.teraschool.migration.api.MigrationConflict.class)
+        .hasMessage("OPENING_BATCH_MISMATCH");
+  }
+
+  @Test
+  void anotherAuthorizedOperatorCannotDuplicateSameBatchRow() throws Exception {
+    var no = studentWithEnrollment("010");
+    var other = UUID.randomUUID();
+    update(
+        "insert into identity.account(id,tenant_id,login,password_hash) values (?,?,?,?)",
+        other,
+        TENANT,
+        "opening-other",
+        "{noop}unused");
+    for (var action : new String[] {"MIGRATION_MANAGE", "FUNDS_READ", "TEACHING_MAINTAIN"})
+      update(
+          "insert into identity.account_permission(tenant_id,account_id,school_id,action,effect) values (?,?,?,?,'ALLOW')",
+          TENANT,
+          other,
+          SCHOOL,
+          action);
+    var input = request("same-row", false, new OpeningImport.Row(no, "200.00", "1.00", "50.00"));
+    assertThat(asActor(OPS, () -> migration.importOpenings(SCHOOL, input)).ok()).isEqualTo(1);
+    assertThat(asActor(other, () -> migration.importOpenings(SCHOOL, input)).skipped())
+        .isEqualTo(1);
+    var student = studentIdOf(no);
+    assertThat(asActor(OPS, () -> fundsQueries.balance(student)).total()).isEqualTo("200.00");
   }
 
   private UUID studentIdOf(String studentNo) throws Exception {

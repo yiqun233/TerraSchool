@@ -539,6 +539,8 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
             UUID consumedCurriculum = null;
             BigDecimal fee = enrollment.price();
             BigDecimal feeHours = enrollment.hours();
+            BigDecimal capHours = enrollment.hours().subtract(enrollment.cancelledHours());
+            BigDecimal courseRefund = BigDecimal.ZERO;
             if (perCourse) {
               var line =
                   enrollment.courses().stream()
@@ -549,6 +551,8 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
               consumedCurriculum = line.curriculumId();
               fee = line.amount();
               feeHours = line.hours();
+              courseRefund = line.cancelledAmount();
+              if (mode == 3 || mode == 5) capHours = line.hours().subtract(line.cancelledHours());
             }
             // 模式 4/5 是"退课后实际费用"变体：先扣掉已退费用与已退课时，再算单价。
             // 模式 1（平均价格）在旧系统里就是"总价 − 优惠"再除以总课时
@@ -580,14 +584,27 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
             // 封顶：模式 3/5 按（净）课程课时，模式 1/2/4 按（净）总课时。
             var byCourse = mode == 3 || mode == 5;
             var consumed = byCourse ? courseConsumed : totalConsumed;
-            if (consumed.compareTo(feeHours) >= 0) continue;
+            // 计价分母与封顶上限分别表达：模式 2 取课程单价，仍按报名净总课时封顶。
+            var totalRemaining =
+                enrollment.hours().subtract(enrollment.cancelledHours()).subtract(totalConsumed);
+            var remaining = capHours.subtract(consumed).min(totalRemaining);
+            if (remaining.signum() <= 0) continue;
+            // 拼接/截断规则未确认前明确拒绝跨界，整个关课事务回滚，不能整节超耗。
+            if (lessonHours.compareTo(remaining) > 0)
+              throw new TeachingConflict("LESSON_HOURS_EXCEED_REMAINING");
             var unit = fee.divide(feeHours, 6, RoundingMode.HALF_UP);
             var amount = unit.multiply(lessonHours).setScale(2, RoundingMode.HALF_UP);
             // 尾差修正：最后一段课时消耗时补齐到该范围内的应收总额。
-            if (byCourse && courseConsumed.add(lessonHours).compareTo(feeHours) == 0)
-              amount = fee.subtract(consumedAmount(enrollmentId, consumedCurriculum));
-            else if (!byCourse && totalConsumed.add(lessonHours).compareTo(feeHours) == 0)
-              amount = fee.subtract(consumedAmount(enrollmentId, null));
+            var trailingFee =
+                mode == 1
+                    ? fee.subtract(cancelledAmount(enrollmentId))
+                    : mode == 3 ? fee.subtract(courseRefund) : fee;
+            if (byCourse && courseConsumed.add(lessonHours).compareTo(capHours) == 0)
+              amount = trailingFee.subtract(consumedAmount(enrollmentId, consumedCurriculum));
+            else if (mode != 2
+                && !byCourse
+                && totalConsumed.add(lessonHours).compareTo(capHours) == 0)
+              amount = trailingFee.subtract(consumedAmount(enrollmentId, null));
             if (amount.signum() < 0) amount = BigDecimal.ZERO;
             sql.execute(
                 "insert into teaching.consumption(tenant_id,enrollment_id,lesson_id,hours,amount,"
@@ -788,10 +805,11 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
                         + " join teaching.class c on c.id=l.class_id"
                         + " left join teaching.class cl on cl.id=l.class_id"
                         + " where c.school_id=? and l.lesson_date between ? and ?"
-                        + " order by l.lesson_date, l.starts_at limit 5000",
+                        + " order by l.lesson_date, l.starts_at limit 5001",
                     schoolId,
                     start,
                     end);
+            org.teraschool.platform.api.CsvExport.requireComplete(rows.size());
             var csv = new StringBuilder();
             csv.append("班级,日期,开始,结束,教师,教室,课时,状态").append(NEWLINE);
             for (var row : rows) {
@@ -833,27 +851,28 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
   private static final char NEWLINE = (char) 10;
 
   private String cell(String value) {
-    if (value == null) return "";
-    var text = value.replace("\"", "\"\"");
-    return text.indexOf(',') >= 0 || text.indexOf('"') >= 0 || text.indexOf(NEWLINE) >= 0
-        ? "\"" + text + "\""
-        : text;
+    return org.teraschool.platform.api.CsvExport.cell(value);
   }
 
   @Override
   public void openingConsumption(UUID enrollmentId, OpeningConsumption command) {
     try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
       var scope = actors.requireAction("TEACHING_MAINTAIN");
+      actors.requireAction("MIGRATION_MANAGE");
       tx.execute(
           scope.tenantId(),
           () -> {
             schools.lockTenant(scope.tenantId());
             var verified = actors.requireActionInTransaction("TEACHING_MAINTAIN");
+            var migrationScope = actors.requireActionInTransaction("MIGRATION_MANAGE");
             if (enrollmentId == null || command == null)
               throw new IllegalArgumentException("需要报名与期初消耗");
             var enrollment = enrollments.require(enrollmentId);
-            if (!verified.schools().contains(enrollment.schoolId()))
+            if (!verified.schools().contains(enrollment.schoolId())
+                || !migrationScope.schools().contains(enrollment.schoolId()))
               throw new AccessDeniedException("无该学校的课次维护权限");
+            var occurredOn = businessDate(command.occurredOn(), "期初日期");
+            periods.requireOpen(enrollment.schoolId(), occurredOn);
             var hours = positiveHours(command.hours(), "期初消耗课时");
             // 旧库可能只有课时没有金额：允许 0，但不接受负数。
             var amount = nonNegativeAmount(command.amount());
@@ -863,19 +882,22 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
                     enrollmentId);
             if (existing != null) throw new TeachingConflict("OPENING_ALREADY_RECORDED");
             var consumed = consumedHours(enrollmentId);
-            if (consumed.add(hours).compareTo(enrollment.hours()) > 0)
-              throw new TeachingConflict("HOURS_EXCEED_PURCHASED");
+            if (consumed
+                    .add(hours)
+                    .compareTo(enrollment.hours().subtract(enrollment.cancelledHours()))
+                > 0) throw new TeachingConflict("HOURS_EXCEED_PURCHASED");
             sql.execute(
                 "insert into teaching.consumption(tenant_id,enrollment_id,lesson_id,hours,amount,"
-                    + "settlement_mode,price_snapshot,hours_snapshot,source)"
-                    + " values (?,?,null,?,?,?,?,?,'OPENING')",
+                    + "settlement_mode,price_snapshot,hours_snapshot,source,opening_occurred_on)"
+                    + " values (?,?,null,?,?,?,?,?,'OPENING',?)",
                 scope.tenantId(),
                 enrollmentId,
                 hours,
                 amount,
                 enrollment.settlementMode(),
                 enrollment.price(),
-                enrollment.hours());
+                enrollment.hours(),
+                occurredOn);
             audit(
                 verified,
                 "OPENING_CONSUMPTION_POSTED",
@@ -926,34 +948,6 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
   private BigDecimal discountTotal(EnrollmentAccess.EnrollmentRef enrollment) {
     var discount = enrollment.discount();
     return discount == null || discount.signum() < 0 ? BigDecimal.ZERO : discount;
-  }
-
-  /**
-   * 把报名级优惠按课程金额比例摊到某一门课程（模式 5 按课程计价）。
-   *
-   * <p>前 n−1 门按比例向下取整，余数全部落到最后一门，保证各门摊分之和恰好等于优惠总额。
-   */
-  private BigDecimal courseDiscount(EnrollmentAccess.EnrollmentRef enrollment, UUID curriculumId) {
-    var total = discountTotal(enrollment);
-    if (total.signum() == 0) return BigDecimal.ZERO;
-    var lines = enrollment.courses();
-    var amountSum =
-        lines.stream()
-            .map(EnrollmentAccess.CourseRef::amount)
-            .reduce(BigDecimal.ZERO, BigDecimal::add);
-    if (amountSum.signum() <= 0) return BigDecimal.ZERO;
-    var allocated = BigDecimal.ZERO;
-    for (var index = 0; index < lines.size(); index++) {
-      var line = lines.get(index);
-      var share =
-          index == lines.size() - 1
-              ? total.subtract(allocated)
-              : total.multiply(line.amount()).divide(amountSum, 2, RoundingMode.DOWN);
-      allocated = allocated.add(share);
-      if (line.curriculumId().equals(curriculumId))
-        return share.signum() < 0 ? BigDecimal.ZERO : share;
-    }
-    return BigDecimal.ZERO;
   }
 
   private BigDecimal positiveHours(String value, String label) {

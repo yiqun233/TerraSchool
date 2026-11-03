@@ -5,7 +5,7 @@ import java.util.UUID;
 import org.springframework.web.bind.annotation.*;
 import org.teraschool.migration.api.*;
 
-/** 旧库迁移的 HTTP 适配：装载暂存 → 干跑 → 确认；授权与对账都在应用服务内完成。 */
+/** 旧库迁移 HTTP 适配；旧主体确认导入暂时停用，授权与对账由应用服务执行。 */
 @RestController
 @RequestMapping(value = "/api/migration", produces = "application/json")
 class MigrationHttp {
@@ -41,7 +41,7 @@ class MigrationHttp {
     return migration.dryRun(schoolId);
   }
 
-  /** 确认导入：按旧主键记账，重复确认幂等。 */
+  /** 兼容保留旧入口；服务端返回停用冲突，不写业务数据。 */
   @PostMapping("/commit")
   MigrationReport commit(@RequestParam UUID schoolId) {
     return migration.commit(schoolId);

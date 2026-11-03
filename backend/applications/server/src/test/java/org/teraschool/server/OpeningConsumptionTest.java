@@ -66,8 +66,15 @@ class OpeningConsumptionTest {
         encoder.encode(UUID.randomUUID().toString()));
     for (var action :
         new String[] {
-          "PRODUCT_READ", "PRODUCT_MAINTAIN", "PRICE_PUBLISH", "ENROLLMENT_READ",
-          "ENROLLMENT_MAINTAIN", "ENROLLMENT_APPROVE", "TEACHING_READ", "TEACHING_MAINTAIN"
+          "PRODUCT_READ",
+          "PRODUCT_MAINTAIN",
+          "PRICE_PUBLISH",
+          "ENROLLMENT_READ",
+          "ENROLLMENT_MAINTAIN",
+          "ENROLLMENT_APPROVE",
+          "TEACHING_READ",
+          "TEACHING_MAINTAIN",
+          "MIGRATION_MANAGE"
         })
       update(
           "insert into identity.account_permission(tenant_id,account_id,school_id,action,effect)"
@@ -90,6 +97,34 @@ class OpeningConsumptionTest {
     } finally {
       SecurityContextHolder.setContext(old);
     }
+  }
+
+  @Test
+  void teachingMaintenanceAloneCannotPostOpening() throws Exception {
+    var reader = UUID.randomUUID();
+    update(
+        "insert into identity.account(id,tenant_id,login,password_hash) values (?,?,?,?)",
+        reader,
+        TENANT,
+        "opening-teacher",
+        "unused");
+    update(
+        "insert into identity.account_permission(tenant_id,account_id,school_id,action,effect) values (?,?,?,'TEACHING_MAINTAIN','ALLOW')",
+        TENANT,
+        reader,
+        SCHOOL);
+    var enrollment = enrollment();
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    reader,
+                    () -> {
+                      teaching.openingConsumption(
+                          enrollment.id(),
+                          new OpeningConsumption("1.00", "100.00", "旧库迁移", "2026-02-10"));
+                      return null;
+                    }))
+        .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
   }
 
   EnrollmentView enrollment() throws Exception {
@@ -136,7 +171,7 @@ class OpeningConsumptionTest {
         OPS,
         () -> {
           teaching.openingConsumption(
-              enrollment.id(), new OpeningConsumption("3.50", "350.00", "旧库已消耗"));
+              enrollment.id(), new OpeningConsumption("3.50", "350.00", "旧库已消耗", "2026-02-10"));
           return null;
         });
     var reconciliation = asActor(OPS, () -> teachingQueries.reconciliation(enrollment.id()));
@@ -152,7 +187,7 @@ class OpeningConsumptionTest {
         OPS,
         () -> {
           teaching.openingConsumption(
-              enrollment.id(), new OpeningConsumption("2.00", "200.00", "第一次"));
+              enrollment.id(), new OpeningConsumption("2.00", "200.00", "第一次", "2026-02-10"));
           return null;
         });
     assertThatThrownBy(
@@ -161,7 +196,8 @@ class OpeningConsumptionTest {
                     OPS,
                     () -> {
                       teaching.openingConsumption(
-                          enrollment.id(), new OpeningConsumption("1.00", "100.00", "第二次"));
+                          enrollment.id(),
+                          new OpeningConsumption("1.00", "100.00", "第二次", "2026-02-10"));
                       return null;
                     }))
         .isInstanceOf(TeachingConflict.class)
@@ -177,11 +213,35 @@ class OpeningConsumptionTest {
                     OPS,
                     () -> {
                       teaching.openingConsumption(
-                          enrollment.id(), new OpeningConsumption("11.00", "1100.00", "超量"));
+                          enrollment.id(),
+                          new OpeningConsumption("11.00", "1100.00", "超量", "2026-02-10"));
                       return null;
                     }))
         .isInstanceOf(TeachingConflict.class)
         .hasMessage("HOURS_EXCEED_PURCHASED");
+  }
+
+  @Test
+  void openingConsumptionCannotBypassLockedPeriod() throws Exception {
+    var enrollment = enrollment();
+    update(
+        "insert into finance.period(tenant_id,school_id,period,status) values (?,?,'2026-04','LOCKED')",
+        TENANT,
+        SCHOOL);
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    OPS,
+                    () -> {
+                      teaching.openingConsumption(
+                          enrollment.id(),
+                          new OpeningConsumption("1.00", "100.00", "旧库", "2026-04-10"));
+                      return null;
+                    }))
+        .isInstanceOf(org.teraschool.finance.api.PeriodConflict.class)
+        .hasMessage("PERIOD_LOCKED");
+    assertThat(asActor(OPS, () -> teachingQueries.reconciliation(enrollment.id())).consumedHours())
+        .isEqualTo("0.00");
   }
 
   @Test
@@ -191,7 +251,7 @@ class OpeningConsumptionTest {
         OPS,
         () -> {
           teaching.openingConsumption(
-              enrollment.id(), new OpeningConsumption("2.00", "0", "旧库只有课时"));
+              enrollment.id(), new OpeningConsumption("2.00", "0", "旧库只有课时", "2026-02-10"));
           return null;
         });
     var reconciliation = asActor(OPS, () -> teachingQueries.reconciliation(enrollment.id()));

@@ -125,39 +125,16 @@ class LegacyMigrationTest {
   }
 
   @Test
-  void commitImportsOnceAndIsIdempotent() {
+  void commitIsBlockedWithoutWritingBusinessData() {
     asActor(OPS, () -> migration.stage(SCHOOL, students(), receipts()));
-    var first = asActor(OPS, () -> migration.commit(SCHOOL));
-    assertThat(first.mode()).isEqualTo("COMMIT");
-    assertThat(first.studentsImported()).isEqualTo(2);
-    assertThat(first.importedReceiptTotal()).isEqualTo("1500.00");
-    assertThat(asActor(OPS, () -> migration.dryRun(SCHOOL)).studentsStaged()).isEqualTo(2);
-
-    var countBefore = studentCount();
-    var again = asActor(OPS, () -> migration.commit(SCHOOL));
-    assertThat(studentCount()).isEqualTo(countBefore);
-    assertThat(again.studentsPending()).isZero();
-  }
-
-  @Test
-  void importedStudentsCarryGuardianContact() throws Exception {
-    asActor(OPS, () -> migration.stage(SCHOOL, students(), List.of()));
-    asActor(OPS, () -> migration.commit(SCHOOL));
-    // 直接查询要用管理员连接：应用连接受 RLS 约束，事务外没有 app.tenant_id 会看不到行。
-    var contacts = new java.util.ArrayList<String>();
-    try (var connection = EngineeringTest.admin();
-        var statement =
-            connection.prepareStatement(
-                "select c.name from archive.student s"
-                    + " join archive.student_contact sc on sc.student_id=s.id"
-                    + " join archive.contact c on c.id=sc.contact_id"
-                    + " where s.student_no='L0001'")) {
-      var rows = statement.executeQuery();
-      while (rows.next()) contacts.add(rows.getString(1));
-    } catch (Exception error) {
-      throw new IllegalStateException(error);
-    }
-    assertThat(contacts).containsExactly("甲妈妈");
+    var before = studentCount();
+    assertThatThrownBy(() -> asActor(OPS, () -> migration.commit(SCHOOL)))
+        .isInstanceOf(MigrationConflict.class)
+        .hasMessage("LEGACY_COMMIT_DISABLED");
+    assertThat(studentCount()).isEqualTo(before);
+    var report = asActor(OPS, () -> migration.dryRun(SCHOOL));
+    assertThat(report.studentsImported()).isZero();
+    assertThat(report.importedReceiptTotal()).isEqualTo("0.00");
   }
 
   @Test
@@ -176,6 +153,50 @@ class LegacyMigrationTest {
     var report = asActor(OPS, () -> migration.dryRun(SCHOOL));
     assertThat(report.issues())
         .anySatisfy(issue -> assertThat(issue.detail()).contains("同一学员号出现多次"));
+  }
+
+  @Test
+  void stagingCannotOverwriteAnotherSchoolWithSameLegacyId() throws Exception {
+    var otherSchool = UUID.randomUUID();
+    update(
+        "insert into organization.unit(id,tenant_id,school_id,kind,name) values (?,?,?,'SCHOOL','另一学校')",
+        otherSchool,
+        TENANT,
+        otherSchool);
+    update(
+        "insert into identity.account_permission(tenant_id,account_id,school_id,action,effect) values (?,?,?,'MIGRATION_MANAGE','ALLOW')",
+        TENANT,
+        OPS,
+        otherSchool);
+    asActor(OPS, () -> migration.stage(SCHOOL, students(), receipts()));
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    OPS,
+                    () ->
+                        migration.stage(
+                            otherSchool,
+                            List.of(
+                                new StageStudent(
+                                    "L-S-1", "X01", "篡改", "MALE", null, null, null, null, null)),
+                            List.of())))
+        .isInstanceOf(MigrationConflict.class)
+        .hasMessage("LEGACY_SOURCE_SCHOOL_CONFLICT");
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    OPS,
+                    () ->
+                        migration.stage(
+                            otherSchool,
+                            List.of(),
+                            List.of(
+                                new StageReceipt(
+                                    "L-R-1", "X01", "9999.00", "CASH", "2026-01-10")))))
+        .isInstanceOf(MigrationConflict.class)
+        .hasMessage("LEGACY_SOURCE_SCHOOL_CONFLICT");
+    assertThat(asActor(OPS, () -> migration.dryRun(SCHOOL)).stagedReceiptTotal())
+        .isEqualTo("1800.00");
   }
 
   @Test

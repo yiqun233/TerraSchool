@@ -47,8 +47,22 @@ export async function downloadCsv(
   path: string,
   filename: string,
 ): Promise<boolean> {
-  const response = await fetch(path, { credentials: "include" });
-  if (!response.ok) return false;
+  let response: Response;
+  try {
+    response = await fetch(path, { credentials: "include" });
+  } catch {
+    window.alert("导出失败，请检查网络后重试。");
+    return false;
+  }
+  if (!response.ok) {
+    const detail = await response.json().catch(() => null);
+    window.alert(
+      detail?.code === "EXPORT_LIMIT_EXCEEDED"
+        ? "导出超过 5000 条，请缩小范围后重试。"
+        : "导出失败，请检查权限或稍后重试。",
+    );
+    return false;
+  }
   const blob = await response.blob();
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");

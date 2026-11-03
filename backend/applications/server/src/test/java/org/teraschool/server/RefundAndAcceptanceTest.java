@@ -65,6 +65,7 @@ class RefundAndAcceptanceTest {
           TENANT,
           id,
           id.equals(SCHOOL) ? "退款学校甲" : "退款学校乙");
+    EngineeringTest.seedExplicitApprovalPolicy(TENANT, SCHOOL);
     update(
         "insert into product.curriculum(id,tenant_id,school_id,name) values (?,?,?,'退款课程')",
         CURRICULUM,

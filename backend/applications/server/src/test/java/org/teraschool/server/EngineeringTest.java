@@ -66,6 +66,16 @@ class EngineeringTest {
     }
   }
 
+  /** 合成业务用例明确配置免批阈值，避免依赖生产环境缺省策略。 */
+  static void seedExplicitApprovalPolicy(UUID tenant, UUID school) throws Exception {
+    for (var action : List.of("REFUND_HOURS", "CASH_REFUND"))
+      update(
+          "insert into approval.policy(tenant_id,school_id,action,free_below,active) values (?,?,?,999999999999.99,true)",
+          tenant,
+          school,
+          action);
+  }
+
   static String principal(UUID account) {
     try (var c = admin();
         var s = c.prepareStatement("select credential_version from identity.account where id=?")) {

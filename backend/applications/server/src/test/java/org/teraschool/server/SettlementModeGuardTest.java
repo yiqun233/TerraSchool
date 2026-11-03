@@ -42,6 +42,7 @@ class SettlementModeGuardTest {
         SCHOOL,
         TENANT,
         SCHOOL);
+    EngineeringTest.seedExplicitApprovalPolicy(TENANT, SCHOOL);
     update(
         "insert into product.curriculum(id,tenant_id,school_id,name) values (?,?,?,'模式课程')",
         CURRICULUM,

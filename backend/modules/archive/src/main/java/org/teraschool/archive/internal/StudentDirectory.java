@@ -829,8 +829,9 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
             var rows =
                 sql.fetch(
                     "select student_no,name,sex,birthday,cert_code,phone,email from archive.student"
-                        + " where school_id=? order by student_no limit 5000",
+                        + " where school_id=? order by student_no limit 5001",
                     schoolId);
+            org.teraschool.platform.api.CsvExport.requireComplete(rows.size());
             var csv = new StringBuilder();
             csv.append("学员号,姓名,性别,出生日期,证件号,电话,邮箱").append(NEWLINE);
             for (var row : rows) {
@@ -866,11 +867,7 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
   private static final char NEWLINE = (char) 10;
 
   private String cell(String value) {
-    if (value == null) return "";
-    var text = value.replace("\"", "\"\"");
-    return text.indexOf(',') >= 0 || text.indexOf('"') >= 0 || text.indexOf(NEWLINE) >= 0
-        ? "\"" + text + "\""
-        : text;
+    return org.teraschool.platform.api.CsvExport.cell(value);
   }
 
   private void audit(ResourceScope scope, String action, UUID student, UUID school, String fields) {

@@ -7,6 +7,7 @@ stages:
 
 variables:
   MAVEN_OPTS: "-Dmaven.repo.local=.m2/repository"
+  TS_POSTGRES_IMAGE: "postgres@sha256:979bccfde35445db618c65107d27d08c6c21339d8dc3ad4c830c6633947be0e4"
   # JDK 25 是工程硬要求；镜像已自带 Maven 3.9。
   TS_JDBC_URL: "jdbc:postgresql://postgres:5432/teraschool_test"
 
@@ -24,6 +25,7 @@ backend:
     paths:
       - .m2/repository
   before_script:
+    - apt-get update && apt-get install -y postgresql-client python3 docker.io
     - mkdir -p .m2/repository
     - |
       for i in $(seq 1 40); do
@@ -43,7 +45,9 @@ backend:
       CREATE ROLE ts_audit LOGIN PASSWORD 'ci-audit' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
       SQL
     - export TS_APP_PASSWORD=ci-app TS_IDENTITY_PASSWORD=ci-identity TS_SESSION_PASSWORD=ci-session TS_AUDIT_PASSWORD=ci-audit
+    - export TS_ADMIN_PASSWORD="$POSTGRES_PASSWORD"
   script:
+    - python3 tools/migration/extract_legacy.py --self-check
     - cd backend
     - ./mvnw -B -ntp -s .mvn/settings.xml -gs .mvn/settings.xml flyway:migrate
     - ./mvnw -B -ntp -s .mvn/settings.xml -gs .mvn/settings.xml -N jooq-codegen:generate
@@ -54,10 +58,14 @@ backend:
     expire_in: 1 week
     paths:
       - backend/**/target/surefire-reports/
+      - backend/applications/server/target/openapi.json
 
 frontend:
   stage: frontend
-  image: node:22
+  image: node:24
+  needs:
+    - job: backend
+      artifacts: true
   cache:
     key: pnpm-$CI_COMMIT_REF_SLUG
     paths:
@@ -68,7 +76,7 @@ frontend:
     - pnpm config set store-dir ../.pnpm-store
     - pnpm install --frozen-lockfile --ignore-scripts
   script:
-    # 契约由后端导出；流水线里用已提交的生成结果做类型检查（后端 job 会重新生成并校验一致性）。
+    - pnpm run generate
     - pnpm run typecheck
     - pnpm run lint
     - pnpm run format:check

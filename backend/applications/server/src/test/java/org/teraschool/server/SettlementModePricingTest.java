@@ -55,6 +55,7 @@ class SettlementModePricingTest {
         SCHOOL,
         TENANT,
         SCHOOL);
+    EngineeringTest.seedExplicitApprovalPolicy(TENANT, SCHOOL);
     for (var entry : Map.of(CHINESE, "语文", MATH, "数学").entrySet())
       update(
           "insert into product.curriculum(id,tenant_id,school_id,name) values (?,?,?,?)",
@@ -225,6 +226,81 @@ class SettlementModePricingTest {
     var enrollment = multiCourse(2);
     assertThat(consume(enrollment, CHINESE, "1.00")).isEqualTo("200.00");
     assertThat(consume(enrollment, MATH, "1.00")).isEqualTo("800.00");
+  }
+
+  @Test
+  void modeTwoUsesEnrollmentTotalAsCap() throws Exception {
+    var enrollment = multiCourse(2);
+    assertThat(consume(enrollment, CHINESE, "1.00")).isEqualTo("200.00");
+    assertThat(consume(enrollment, CHINESE, "1.00")).isEqualTo("400.00");
+  }
+
+  @Test
+  void lessonCrossingRemainingHoursIsRejected() throws Exception {
+    var enrollment = multiCourse(1);
+    assertThatThrownBy(() -> consume(enrollment, CHINESE, "4.50"))
+        .isInstanceOf(TeachingConflict.class)
+        .hasMessage("LESSON_HOURS_EXCEED_REMAINING");
+    assertThat(asActor(OPS, () -> teachingQueries.reconciliation(enrollment.id())).consumedHours())
+        .isEqualTo("0.00");
+  }
+
+  @Test
+  void discountReplayIsIdempotentAndChangedParametersAreRejected() throws Exception {
+    var enrollment = multiCourse(1);
+    var id = UUID.randomUUID();
+    var discount = new ApplyDiscount(id, "400.00", "优惠");
+    asActor(OPS, () -> enrollments.applyDiscount(enrollment.id(), discount));
+    var replay = asActor(OPS, () -> enrollments.applyDiscount(enrollment.id(), discount));
+    assertThat(replay.netAmount()).isEqualTo("1600.00");
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    OPS,
+                    () ->
+                        enrollments.applyDiscount(
+                            enrollment.id(), new ApplyDiscount(id, "500.00", "优惠"))))
+        .isInstanceOf(EnrollmentConflict.class)
+        .hasMessage("IDEMPOTENCY_MISMATCH");
+    assertThat(consume(enrollment, CHINESE, "1.00")).isEqualTo("400.00");
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    OPS,
+                    () ->
+                        enrollments.applyDiscount(
+                            enrollment.id(), new ApplyDiscount(UUID.randomUUID(), "100.00", "优惠"))))
+        .isInstanceOf(EnrollmentConflict.class)
+        .hasMessage("DISCOUNT_AFTER_CONSUMPTION");
+  }
+
+  @Test
+  void discountCannotReduceReceivableBelowActiveAllocations() throws Exception {
+    var enrollment = multiCourse(1);
+    var receipt =
+        asActor(
+            OPS,
+            () ->
+                funds.createReceipt(
+                    new CreateReceipt(
+                        UUID.randomUUID(),
+                        SCHOOL,
+                        enrollment.studentId(),
+                        "2000",
+                        "CASH",
+                        "2026-02-10")));
+    asActor(OPS, () -> funds.allocate(new AllocateReceipt(receipt.id(), enrollment.id(), "2000")));
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    OPS,
+                    () ->
+                        enrollments.applyDiscount(
+                            enrollment.id(), new ApplyDiscount(UUID.randomUUID(), "400.00", "优惠"))))
+        .isInstanceOf(EnrollmentConflict.class)
+        .hasMessage("DISCOUNT_REQUIRES_ALLOCATION_RELEASE");
+    assertThat(asActor(OPS, () -> enrollmentQueries.detail(enrollment.id())).netAmount())
+        .isEqualTo("2000.00");
   }
 
   @Test

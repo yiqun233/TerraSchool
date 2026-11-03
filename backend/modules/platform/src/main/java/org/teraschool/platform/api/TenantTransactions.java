@@ -19,6 +19,15 @@ public class TenantTransactions {
   }
 
   public <T> T execute(UUID tenant, Supplier<T> work) {
+    return run(tenant, work, false);
+  }
+
+  /** 在与正式操作相同的事务中预检，最终显式回滚所有写入及审计。 */
+  public <T> T preview(UUID tenant, Supplier<T> work) {
+    return run(tenant, work, true);
+  }
+
+  private <T> T run(UUID tenant, Supplier<T> work, boolean rollback) {
     if (tenant == null) throw new IllegalArgumentException("缺少租户");
     return tx.execute(
         status -> {
@@ -27,7 +36,9 @@ public class TenantTransactions {
           if (current != null && !current.isBlank() && !current.equals(tenant.toString()))
             throw new IllegalStateException("事务内禁止切换租户");
           sql.fetch("select set_config('app.tenant_id',?,true)", tenant.toString());
-          return work.get();
+          T result = work.get();
+          if (rollback) status.setRollbackOnly();
+          return result;
         });
   }
 }

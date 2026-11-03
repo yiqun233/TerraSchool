@@ -29,7 +29,7 @@ class LessonResourceTest {
 
   @Autowired TeachingCommands teaching;
   @Autowired TeachingQueries teachingQueries;
-  @Autowired org.teraschool.teaching.internal.SchedulingService scheduling;
+  @Autowired org.teraschool.teaching.api.SchedulingOperations scheduling;
 
   @DynamicPropertySource
   static void config(DynamicPropertyRegistry r) {

@@ -30,7 +30,7 @@ class SchedulingTest {
   @LocalServerPort int port;
   @Autowired TeachingCommands teaching;
   @Autowired TeachingQueries teachingQueries;
-  @Autowired org.teraschool.teaching.internal.SchedulingService scheduling;
+  @Autowired org.teraschool.teaching.api.SchedulingOperations scheduling;
   @Autowired org.jooq.DSLContext sql;
   @Autowired TenantTransactions tx;
 

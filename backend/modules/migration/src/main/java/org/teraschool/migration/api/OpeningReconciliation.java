@@ -9,6 +9,7 @@ import java.util.List;
  */
 public record OpeningReconciliation(
     String batchId,
+    String completeness,
     int rows,
     int matched,
     int mismatched,
@@ -26,7 +27,13 @@ public record OpeningReconciliation(
       String actualHours,
       String amountDiff,
       String hoursDiff,
-      String status) {}
+      String enrollmentId,
+      String expectedConsumedAmount,
+      String actualConsumedAmount,
+      String consumedAmountDiff,
+      String status,
+      Integer rowNumber,
+      String detail) {}
 
   public OpeningReconciliation {
     details = details == null ? List.of() : List.copyOf(details);

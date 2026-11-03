@@ -9,14 +9,14 @@ import org.teraschool.teaching.api.*;
 @RestController
 @RequestMapping(produces = "application/json")
 class TeachingHttp {
-  private final org.teraschool.teaching.internal.SchedulingService scheduling;
+  private final org.teraschool.teaching.api.SchedulingOperations scheduling;
   private final TeachingQueries queries;
   private final TeachingCommands commands;
 
   TeachingHttp(
       TeachingQueries queries,
       TeachingCommands commands,
-      org.teraschool.teaching.internal.SchedulingService scheduling) {
+      org.teraschool.teaching.api.SchedulingOperations scheduling) {
     this.queries = queries;
     this.commands = commands;
     this.scheduling = scheduling;

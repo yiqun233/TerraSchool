@@ -4,7 +4,7 @@
 
 用法（本机 WSL PostgreSQL）：
 
-    python tools/ops/backup_restore_drill.py --source teraschool_dev --target teraschool_restore_drill
+    python tools/ops/backup_restore_drill.py --source teraschool_dev
 
 会依次执行：
 
@@ -21,6 +21,8 @@ import json
 import subprocess
 import sys
 import time
+import re
+import uuid
 from pathlib import Path
 
 # 只核对业务表，迁移/审计表单独看条数即可。
@@ -79,7 +81,8 @@ class WslRunner:
 
     def pg_dump(self, database: str, target: Path) -> float:
         # 先 dump 到 WSL 内的临时文件，再拷出来，避免 Windows/WSL 路径混用。
-        inner = "/tmp/teraschool-drill.dump"
+        inner = "/tmp/teraschool-drill-" + uuid.uuid4().hex + ".dump"
+        self.dump_path = inner
         started = time.perf_counter()
         command = [
             "wsl",
@@ -178,18 +181,29 @@ def rls_enabled(runner: WslRunner, database: str, table: str) -> bool:
 def main() -> int:
     parser = argparse.ArgumentParser(description="备份恢复演练：dump → restore → 核对")
     parser.add_argument("--source", default="teraschool_dev", help="源库名")
-    parser.add_argument("--target", default="teraschool_restore_drill", help="演练目标库名")
+    parser.add_argument("--target", help="目标库名；默认生成唯一的 teraschool_drill_ 前缀名称")
     parser.add_argument("--distro", default="Ubuntu", help="WSL 发行版")
     parser.add_argument("--port", type=int, default=5432)
     parser.add_argument("--out-dir", type=Path, default=Path(".local/ops"))
     parser.add_argument("--keep", action="store_true", help="演练后保留目标库（默认删除）")
     args = parser.parse_args()
 
+    args.target = args.target or "teraschool_drill_" + uuid.uuid4().hex
+    if not re.fullmatch(r"teraschool_drill_[a-z0-9_]{1,40}", args.target):
+        parser.error("目标库必须使用 teraschool_drill_ 前缀和小写字母、数字或下划线")
+    if args.target == args.source:
+        parser.error("源库与目标库不能相同")
+
     runner = WslRunner(args.distro, args.port)
     args.out_dir.mkdir(parents=True, exist_ok=True)
     report: dict = {"source": args.source, "target": args.target, "steps": []}
     target_created = False
+    target_oid = None
+    marker = "teraschool-drill:" + uuid.uuid4().hex
     try:
+        existing = runner.psql("postgres", f"select count(*) from pg_database where datname='{args.target}';")
+        if existing != "0":
+            raise RuntimeError("目标库已存在，拒绝覆盖或删除")
         started = time.perf_counter()
         source_counts = table_counts(runner, args.source)
         report["source_counts"] = source_counts
@@ -200,9 +214,10 @@ def main() -> int:
         report["dump_bytes"] = runner.dump_size
         report["dump_copied_to_windows"] = runner.local_copy_ok
 
-        runner.psql("postgres", f'drop database if exists "{args.target}" with (force);')
         runner.psql("postgres", f'create database "{args.target}";')
         target_created = True
+        target_oid = runner.psql("postgres", f"select oid from pg_database where datname='{args.target}';")
+        runner.psql("postgres", f'comment on database "{args.target}" is \'{marker}\';')
 
         restore_seconds = runner.pg_restore(args.target)
         report["restore_seconds"] = round(restore_seconds, 2)
@@ -225,11 +240,21 @@ def main() -> int:
     finally:
         if target_created and not args.keep:
             try:
-                runner.psql("postgres", f'drop database if exists "{args.target}" with (force);')
+                owner = runner.psql("postgres", f"select oid::text || ':' || coalesce(shobj_description(oid, 'pg_database'),'') from pg_database where datname='{args.target}';")
+                if not target_oid or owner != target_oid + ":" + marker:
+                    raise RuntimeError("目标库身份或归属标记变化，拒绝清理")
+                runner.psql("postgres", f'drop database "{args.target}" with (force);')
                 report["target_dropped"] = True
             except Exception as error:  # noqa: BLE001
                 report["target_dropped"] = False
                 report["drop_error"] = str(error)
+                report["status"] = "failed"
+        dump_path = getattr(runner, "dump_path", None)
+        if dump_path and re.fullmatch(r"/tmp/teraschool-drill-[0-9a-f]{32}\.dump", dump_path):
+            cleanup = run(["wsl", "-d", args.distro, "-u", "root", "--", "rm", "-f", "--", dump_path])
+            report["temporary_dump_removed"] = cleanup.returncode == 0
+            if cleanup.returncode != 0:
+                report["status"] = "failed"
         (args.out_dir / "report.json").write_text(
             json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
         )

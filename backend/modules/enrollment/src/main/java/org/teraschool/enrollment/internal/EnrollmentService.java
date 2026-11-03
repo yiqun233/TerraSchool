@@ -41,6 +41,8 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
   private final SchoolAccess schools;
   private final StudentAccess students;
   private final PriceAccess prices;
+  private final org.teraschool.finance.api.PeriodGate periods;
+  private final List<DiscountGuard> discountGuards;
 
   public EnrollmentService(
       CurrentActor actors,
@@ -48,13 +50,17 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
       DSLContext sql,
       SchoolAccess schools,
       StudentAccess students,
-      PriceAccess prices) {
+      PriceAccess prices,
+      org.teraschool.finance.api.PeriodGate periods,
+      List<DiscountGuard> discountGuards) {
     this.actors = actors;
     this.tx = tx;
     this.sql = sql;
     this.schools = schools;
     this.students = students;
     this.prices = prices;
+    this.periods = periods;
+    this.discountGuards = List.copyOf(discountGuards);
   }
 
   // ---------------------------------------------------------------- 查询
@@ -546,10 +552,11 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
   /**
    * 登记一次性减免。
    *
-   * <p>只写"减免多少 + 原因"，落到应收减项，不承担优惠券、阶梯折扣等规则计算；审批走通用审批流（如需要）。
+   * <p>只写"减免多少 + 原因"，落到应收减项，不承担优惠券、阶梯折扣等规则计算；独立优惠审批尚待业务确认，不能宣称已接入。
    */
   private EnrollmentView applyDiscountWithTrace(UUID id, ApplyDiscount command) {
-    if (id == null || command == null) throw new IllegalArgumentException("需要报名与减免金额");
+    if (id == null || command == null || command.requestId() == null)
+      throw new IllegalArgumentException("需要报名、请求身份与减免金额");
     var amount = positiveHours(command.amount());
     var reason = text(command.reason(), 200, "减免原因");
     var scope = actors.requireResourceScope("ENROLLMENT");
@@ -565,11 +572,22 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
           if (!schools.require(schoolId).active()) throw new AccessDeniedException("学校已停用，不能登记减免");
           if (!"ACTIVE".equals(row.get("status", String.class)))
             throw new EnrollmentConflict("ENROLLMENT_NOT_ACTIVE");
-          var original =
-              row.get("price", BigDecimal.class).add(row.get("service_fee", BigDecimal.class));
+          var digest =
+              fingerprint(
+                  "DISCOUNT", id.toString(), amount.toPlainString(), String.valueOf(reason));
+          var previous = previousRequest(verified, command.requestId(), digest);
+          if (previous != null)
+            return view(
+                requireEnrollment(verified, previous),
+                students.require(row.get("student_id", UUID.class)).name());
+          periods.requireOpen(schoolId, LocalDate.now());
+          if (cancelledHours(id).signum() > 0)
+            throw new EnrollmentConflict("DISCOUNT_AFTER_REFUND");
           var outstanding = netAmount(id);
           if (amount.compareTo(outstanding) > 0)
             throw new EnrollmentConflict("DISCOUNT_EXCEED_RECEIVABLE");
+          var newNetAmount = outstanding.subtract(amount);
+          for (var guard : discountGuards) guard.requireAllowed(id, newNetAmount);
           sql.execute(
               "insert into enrollment.discount(tenant_id,enrollment_id,amount,reason,created_by)"
                   + " values (?,?,?,?,?)",
@@ -584,6 +602,14 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
               scope.tenantId(),
               id,
               amount.negate());
+          sql.execute("update enrollment.enrollment set version=version+1 where id=?", id);
+          sql.execute(
+              "insert into enrollment.creation_request(tenant_id,actor_id,request_id,kind,resource_id,fingerprint) values (?,?,?,'DISCOUNT',?,?)",
+              scope.tenantId(),
+              scope.accountId(),
+              command.requestId(),
+              id,
+              digest);
           audit(scope, "DISCOUNT_ADDED", id, schoolId, amount.toPlainString());
           return view(
               requireEnrollment(verified, id),
@@ -608,8 +634,9 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
                         + "e.status,e.created_at,s.student_no,s.name as student_name"
                         + " from enrollment.enrollment e"
                         + " join archive.student s on s.id=e.student_id and s.tenant_id=e.tenant_id"
-                        + " where e.school_id=? order by e.created_at desc limit 5000",
+                        + " where e.school_id=? order by e.created_at desc limit 5001",
                     schoolId);
+            org.teraschool.platform.api.CsvExport.requireComplete(rows.size());
             var csv = new StringBuilder();
             csv.append("学员号,学员姓名,产品,课程,价格,课时,净应收,状态,报名时间").append(NEWLINE);
             for (var row : rows) {
@@ -647,11 +674,7 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
   private static final char NEWLINE = (char) 10;
 
   private String cell(String value) {
-    if (value == null) return "";
-    var text = value.replace("\"", "\"\"");
-    return text.indexOf(',') >= 0 || text.indexOf('"') >= 0 || text.indexOf(NEWLINE) >= 0
-        ? "\"" + text + "\""
-        : text;
+    return org.teraschool.platform.api.CsvExport.cell(value);
   }
 
   // ---------------------------------------------------------------- 内部

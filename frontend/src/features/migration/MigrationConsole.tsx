@@ -24,9 +24,7 @@ const STUDENT_HELP =
 const RECEIPT_HELP = "每行：旧主键,学员号,金额,方式,收款日期";
 
 /**
- * 旧库迁移控制台：粘贴 CSV → 装载暂存 → 干跑对账 → 确认导入。
- *
- * 干跑不写业务表，只报告"将导入多少、金额合计、有哪些差异"；确认按旧主键记账，重复确认幂等。
+ * 旧库迁移控制台：暂存与干跑可用，旧主体确认导入暂时停用。
  */
 export function MigrationConsole({
   onUnauthorized,
@@ -53,6 +51,7 @@ export function MigrationConsole({
   const [report, setReport] = useState<MigrationReport | null>(null);
   const [openingCsv, setOpeningCsv] = useState("");
   const [batchId, setBatchId] = useState(() => `open-${Date.now()}`);
+  const [openingDate, setOpeningDate] = useState("");
   const [dryRun, setDryRun] = useState(true);
   const [openingReport, setOpeningReport] = useState<OpeningReport | null>(
     null,
@@ -101,6 +100,10 @@ export function MigrationConsole({
       setError("请先选择学校");
       return;
     }
+    if (!openingDate) {
+      setError("请选择期初日期；同一批次重试时必须保持日期一致。");
+      return;
+    }
     const rows = parse(openingCsv).map((cells) => ({
       studentNo: cells[0],
       amount: cells[1] || "0",
@@ -119,14 +122,24 @@ export function MigrationConsole({
       const { data, response } = await api.POST("/api/migration/openings", {
         params: { query: { schoolId: current! } },
         headers: { [token.headerName!]: token.token! },
-        body: { batchId, occurredOn: "", reason: "旧库期初迁移", rows, dryRun },
+        body: {
+          batchId,
+          occurredOn: openingDate,
+          reason: "旧库期初迁移",
+          rows,
+          dryRun,
+        },
       });
       if (response.status === 401) {
         onUnauthorized();
         return;
       }
       if (!response.ok || !data) {
-        setError("期初导入失败：请核对权限、学员号与金额格式。");
+        setError(
+          response.status === 409
+            ? "批次冲突或历史批次待核验：请核对批次号、日期与完整原始清单；勿重复导入已成功行。"
+            : "期初导入失败：请核对权限、学员号与金额格式。",
+        );
         return;
       }
       const imported = data as OpeningReport;
@@ -271,12 +284,12 @@ export function MigrationConsole({
           type="primary"
           onClick={() => void call("/api/migration/commit")}
           loading={busy}
-          disabled={!canManage || busy || !report}
+          disabled
         >
           确认导入
         </Button>
         <Typography.Text type="secondary">
-          干跑不写业务表；确认按旧主键记账，重复确认不会重复导入
+          暂存和干跑可用；旧库确认导入暂时停用，待受控导入及真实样本验证完成后开放。
         </Typography.Text>
       </Space>
       <Card
@@ -293,6 +306,13 @@ export function MigrationConsole({
             style={{ width: 200 }}
             value={batchId}
             onChange={(event) => setBatchId(event.target.value)}
+            disabled={!canManage || busy}
+          />
+          <Input
+            aria-label="期初日期"
+            type="date"
+            value={openingDate}
+            onChange={(event) => setOpeningDate(event.target.value)}
             disabled={!canManage || busy}
           />
           <Space>
@@ -335,13 +355,15 @@ export function MigrationConsole({
         {openingReport ? (
           <Table
             style={{ marginTop: 8 }}
-            rowKey={(row: { studentNo?: string }) =>
-              row.studentNo ?? Math.random().toString()
-            }
+            rowKey="sourceRowNumber"
             size="small"
-            dataSource={openingReport.rows ?? []}
+            dataSource={(openingReport.rows ?? []).map((row, index) => ({
+              ...row,
+              sourceRowNumber: index + 1,
+            }))}
             pagination={false}
             columns={[
+              { title: "源行号", dataIndex: "sourceRowNumber" },
               { title: "学员号", dataIndex: "studentNo" },
               { title: "结果", dataIndex: "status" },
               { title: "说明", dataIndex: "detail" },
@@ -355,34 +377,51 @@ export function MigrationConsole({
           title={`对账结果（批次 ${reconciliation.batchId}）`}
           style={{ marginTop: 12 }}
         >
+          <p>
+            {reconciliation.completeness === "COMPLETE"
+              ? "本批清单已处理完毕；仍须检查各行差异。"
+              : reconciliation.completeness === "INCOMPLETE"
+                ? "本批仍有失败或待处理行。外部条件修复后可按原清单重试；若源行内容有误，应仅将失败行更正后新建批次，勿重复导入成功行。原批次仍保留未完成状态。"
+                : "历史批次缺少完整清单，请对照原始数据人工核验。"}
+          </p>
           <Space wrap>
             <span>
               行数 {reconciliation.rows}，对上 {reconciliation.matched}，差异{" "}
               {reconciliation.mismatched}
             </span>
             <span>
-              金额：应有 {reconciliation.expectedAmount} / 实际{" "}
+              金额：应有 {reconciliation.expectedAmount ?? "待核算"} / 实际{" "}
               {reconciliation.actualAmount}
             </span>
             <span>
-              课时：应有 {reconciliation.expectedHours} / 实际{" "}
+              课时：应有 {reconciliation.expectedHours ?? "待核算"} / 实际{" "}
               {reconciliation.actualHours}
             </span>
           </Space>
           <Table
-            rowKey={(row: { studentNo?: string }) => row.studentNo ?? ""}
+            rowKey={(row: { studentNo?: string; rowNumber?: number }) =>
+              row.rowNumber == null
+                ? `历史-${row.studentNo}`
+                : String(row.rowNumber)
+            }
             size="small"
             style={{ marginTop: 8 }}
             dataSource={reconciliation.details ?? []}
             pagination={false}
             columns={[
+              { title: "源行号", dataIndex: "rowNumber" },
               { title: "学员号", dataIndex: "studentNo" },
               { title: "应有金额", dataIndex: "expectedAmount" },
               { title: "实际金额", dataIndex: "actualAmount" },
               { title: "金额差", dataIndex: "amountDiff" },
               { title: "应有课时", dataIndex: "expectedHours" },
               { title: "实际课时", dataIndex: "actualHours" },
+              { title: "目标报名", dataIndex: "enrollmentId" },
+              { title: "应有消费", dataIndex: "expectedConsumedAmount" },
+              { title: "实际消费", dataIndex: "actualConsumedAmount" },
+              { title: "消费差", dataIndex: "consumedAmountDiff" },
               { title: "结果", dataIndex: "status" },
+              { title: "说明", dataIndex: "detail" },
             ]}
           />
         </Card>

@@ -104,7 +104,12 @@ export function StudentDirectory({
         { credentials: "include" },
       );
       if (!response.ok) {
-        setError("导出失败，请核对学员读取权限。");
+        const detail = await response.json().catch(() => null);
+        setError(
+          detail?.code === "EXPORT_LIMIT_EXCEEDED"
+            ? "学员超过 5000 条，暂不支持完整导出。"
+            : "导出失败，请核对学员读取权限。",
+        );
         return;
       }
       const blob = await response.blob();

@@ -52,6 +52,7 @@ class SettlementModeActualCostTest {
         SCHOOL,
         TENANT,
         SCHOOL);
+    EngineeringTest.seedExplicitApprovalPolicy(TENANT, SCHOOL);
     update(
         "insert into product.curriculum(id,tenant_id,school_id,name) values (?,?,?,'语文')",
         CHINESE,
@@ -104,6 +105,10 @@ class SettlementModeActualCostTest {
   }
 
   EnrollmentView enrollment(int mode) throws Exception {
+    return enrollment(mode, true);
+  }
+
+  EnrollmentView enrollment(int mode, boolean allocate) throws Exception {
     var price =
         asActor(
             OPS,
@@ -139,6 +144,7 @@ class SettlementModeActualCostTest {
     var approved =
         asActor(
             OPS, () -> enrollments.approve(created.id(), new EnrollmentVersion(created.version())));
+    if (!allocate) return approved;
     var receipt =
         asActor(
             OPS,
@@ -266,7 +272,7 @@ class SettlementModeActualCostTest {
 
   @Test
   void modeFourDeductsDiscountBeforeUnitPrice() throws Exception {
-    var enrollment = enrollment(4);
+    var enrollment = enrollment(4, false);
     // 1000 元 100 课时，先优惠 200 元：应收 800 元，100 课时 → 8.00 元/课时。
     var discounted =
         asActor(
@@ -280,7 +286,7 @@ class SettlementModeActualCostTest {
 
   @Test
   void modeFourDeductsDiscountAndRefundTogether() throws Exception {
-    var enrollment = enrollment(4);
+    var enrollment = enrollment(4, false);
     asActor(
         OPS,
         () ->
@@ -293,7 +299,7 @@ class SettlementModeActualCostTest {
 
   @Test
   void modeFourTrailingAmountMatchesNetAfterDiscount() throws Exception {
-    var enrollment = enrollment(4);
+    var enrollment = enrollment(4, false);
     asActor(
         OPS,
         () ->

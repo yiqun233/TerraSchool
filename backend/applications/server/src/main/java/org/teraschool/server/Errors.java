@@ -17,6 +17,11 @@ class Errors {
     return problem(503, "AUDIT_UNAVAILABLE");
   }
 
+  @ExceptionHandler(org.teraschool.platform.api.ExportLimitExceeded.class)
+  ResponseEntity<ProblemDetail> exportLimitExceeded() {
+    return problem(409, "EXPORT_LIMIT_EXCEEDED");
+  }
+
   @ExceptionHandler(org.springframework.web.HttpMediaTypeNotSupportedException.class)
   ResponseEntity<ProblemDetail> unsupported(jakarta.servlet.http.HttpServletRequest request) {
     return contractRejected(request, 415, "UNSUPPORTED_MEDIA_TYPE");
@@ -77,9 +82,26 @@ class Errors {
     return problem(409, error.code());
   }
 
+  @ExceptionHandler(org.teraschool.finance.api.PeriodConflict.class)
+  ResponseEntity<ProblemDetail> periodConflict(org.teraschool.finance.api.PeriodConflict error) {
+    return problem(409, error.code());
+  }
+
+  @ExceptionHandler(org.teraschool.approval.api.ApprovalConflict.class)
+  ResponseEntity<ProblemDetail> approvalConflict(
+      org.teraschool.approval.api.ApprovalConflict error) {
+    return problem(409, error.code());
+  }
+
   @ExceptionHandler(org.teraschool.teaching.api.TeachingConflict.class)
   ResponseEntity<ProblemDetail> teachingConflict(
       org.teraschool.teaching.api.TeachingConflict error) {
+    return problem(409, error.code());
+  }
+
+  @ExceptionHandler(org.teraschool.migration.api.MigrationConflict.class)
+  ResponseEntity<ProblemDetail> migrationConflict(
+      org.teraschool.migration.api.MigrationConflict error) {
     return problem(409, error.code());
   }
 

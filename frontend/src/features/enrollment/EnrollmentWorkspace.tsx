@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Alert,
@@ -1150,6 +1150,12 @@ export function DiscountModal({
   onError: (message: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [uncertain, setUncertain] = useState(false);
+  const request = useRef<{
+    requestId: string;
+    amount: string;
+    reason?: string;
+  } | null>(null);
   const [form] = Form.useForm();
 
   async function save() {
@@ -1159,6 +1165,7 @@ export function DiscountModal({
     } catch {
       return;
     }
+    if (busy) return;
     setBusy(true);
     try {
       const token = await csrf();
@@ -1167,23 +1174,31 @@ export function DiscountModal({
         {
           params: { path: { id: enrollmentId } },
           headers: { [token.headerName!]: token.token! },
-          body: {
+          body: (request.current ??= {
             requestId: crypto.randomUUID(),
             amount: String(values.amount),
             reason: values.reason || undefined,
-          },
+          }),
         },
       );
       if (response.status === 409) {
-        onError("减免金额超过剩余应收，或报名当前状态不允许减免。");
+        request.current = null;
+        setUncertain(false);
+        onError("当前状态不允许减免，请检查分配、消费、退款及财务期间。");
         return;
       }
       if (!response.ok) {
+        if (response.status >= 500) setUncertain(true);
+        else {
+          request.current = null;
+          setUncertain(false);
+        }
         onError("登记减免失败，请核对报名维护权限。");
         return;
       }
       onDone();
     } catch {
+      setUncertain(true);
       onError("无法获取安全令牌或网络中断，请重试。");
     } finally {
       setBusy(false);
@@ -1194,8 +1209,10 @@ export function DiscountModal({
     <Modal
       title="登记减免"
       open
-      onCancel={onCancel}
-      mask={{ closable: !busy }}
+      onCancel={uncertain ? undefined : onCancel}
+      closable={!busy && !uncertain}
+      keyboard={!busy && !uncertain}
+      mask={{ closable: !busy && !uncertain }}
       footer={null}
     >
       <Form form={form} layout="vertical">
@@ -1208,14 +1225,15 @@ export function DiscountModal({
             min={0.01}
             precision={2}
             style={{ width: "100%" }}
-            disabled={busy}
+            disabled={busy || uncertain}
           />
         </Form.Item>
         <Form.Item label="原因" name="reason">
-          <Input maxLength={200} disabled={busy} />
+          <Input maxLength={200} disabled={busy || uncertain} />
         </Form.Item>
         <Typography.Text type="secondary">
-          减免只写金额与原因，不改课时与单价；如需审批请走通用审批流。
+          已发生消费或退款时暂不支持直接减免；减免不能使已分配金额超过应收。
+          {uncertain ? "上次结果未确认，请使用相同内容重试。" : ""}
         </Typography.Text>
         <div style={{ marginTop: 12 }}>
           <Button

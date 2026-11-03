@@ -10,10 +10,13 @@ class ModuleBoundaryTest {
   @Test
   void boundaries() {
     var classes = new ClassFileImporter().importPackages("org.teraschool");
-    for (String module :
-        new String[] {
-          "platform", "identity", "organization", "archive", "product", "enrollment", "funds"
-        })
+    var modules =
+        classes.stream()
+            .map(type -> type.getPackageName().split("\\."))
+            .filter(parts -> parts.length > 2 && !parts[2].equals("server"))
+            .map(parts -> parts[2])
+            .collect(java.util.stream.Collectors.toSet());
+    for (String module : modules)
       noClasses()
           .that()
           .resideOutsideOfPackage("org.teraschool." + module + "..")
@@ -23,17 +26,7 @@ class ModuleBoundaryTest {
           .check(classes);
     noClasses()
         .that()
-        .resideInAnyPackage(
-            "org.teraschool.platform..",
-            "org.teraschool.identity..",
-            "org.teraschool.organization..",
-            "org.teraschool.archive..",
-            "org.teraschool.product..",
-            "org.teraschool.enrollment..",
-            "org.teraschool.funds..",
-            "org.teraschool.teaching..",
-            "org.teraschool.approval..",
-            "org.teraschool.finance..")
+        .resideOutsideOfPackage("org.teraschool.server..")
         .should()
         .dependOnClassesThat()
         .resideInAPackage("org.teraschool.server..")

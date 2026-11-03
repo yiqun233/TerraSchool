@@ -29,7 +29,7 @@ class SchedulingConstraintTest {
       OPS = UUID.randomUUID();
 
   @Autowired TeachingCommands teaching;
-  @Autowired org.teraschool.teaching.internal.SchedulingService scheduling;
+  @Autowired org.teraschool.teaching.api.SchedulingOperations scheduling;
 
   @DynamicPropertySource
   static void config(DynamicPropertyRegistry r) {

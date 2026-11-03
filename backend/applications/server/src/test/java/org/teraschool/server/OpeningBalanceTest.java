@@ -47,7 +47,12 @@ class OpeningBalanceTest {
         encoder.encode(UUID.randomUUID().toString()));
     for (var action :
         new String[] {
-          "FUNDS_READ", "FUNDS_RECEIPT", "FUNDS_ALLOCATE", "PERIOD_READ", "PERIOD_LOCK"
+          "FUNDS_READ",
+          "FUNDS_RECEIPT",
+          "FUNDS_ALLOCATE",
+          "PERIOD_READ",
+          "PERIOD_LOCK",
+          "MIGRATION_MANAGE"
         })
       update(
           "insert into identity.account_permission(tenant_id,account_id,school_id,action,effect)"
@@ -100,6 +105,24 @@ class OpeningBalanceTest {
     assertThat(balance.total()).isEqualTo("320.50");
     assertThat(balance.available()).isEqualTo("320.50");
     assertThat(asActor(OPS, () -> fundsQueries.receipts(student))).isEmpty();
+  }
+
+  @Test
+  void fundsReadAloneCannotPostOpening() throws Exception {
+    var reader = UUID.randomUUID();
+    update(
+        "insert into identity.account(id,tenant_id,login,password_hash) values (?,?,?,?)",
+        reader,
+        TENANT,
+        "opening-reader",
+        "unused");
+    update(
+        "insert into identity.account_permission(tenant_id,account_id,school_id,action,effect) values (?,?,?,'FUNDS_READ','ALLOW')",
+        TENANT,
+        reader,
+        SCHOOL);
+    assertThatThrownBy(() -> asActor(reader, () -> funds.openBalance(opening(student(), "100.00"))))
+        .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
   }
 
   @Test
