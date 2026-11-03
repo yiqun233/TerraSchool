@@ -17,7 +17,10 @@ import org.teraschool.funds.api.*;
 /** 期初余额：迁移旧库余额时落 OPENING 分录，可正可负，幂等，受锁月约束。 */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class OpeningBalanceTest {
-  static final UUID TENANT = UUID.randomUUID(), SCHOOL = UUID.randomUUID(), OPS = UUID.randomUUID();
+  static final UUID TENANT = UUID.randomUUID(),
+      SCHOOL = UUID.randomUUID(),
+      OPS = UUID.randomUUID(),
+      UNLOCKER = UUID.randomUUID();
 
   @Autowired FundsCommands funds;
   @Autowired FundsQueries fundsQueries;
@@ -45,6 +48,12 @@ class OpeningBalanceTest {
         TENANT,
         "opening-ops",
         encoder.encode(UUID.randomUUID().toString()));
+    update(
+        "insert into identity.account(id,tenant_id,login,password_hash) values (?,?,?,?)",
+        UNLOCKER,
+        TENANT,
+        "opening-unlocker",
+        encoder.encode(UUID.randomUUID().toString()));
     for (var action :
         new String[] {
           "FUNDS_READ",
@@ -59,6 +68,14 @@ class OpeningBalanceTest {
               + " values (?,?,?,?,'ALLOW')",
           TENANT,
           OPS,
+          SCHOOL,
+          action);
+    for (var action : new String[] {"PERIOD_READ", "PERIOD_UNLOCK"})
+      update(
+          "insert into identity.account_permission(tenant_id,account_id,school_id,action,effect)"
+              + " values (?,?,?,?,'ALLOW')",
+          TENANT,
+          UNLOCKER,
           SCHOOL,
           action);
   }
@@ -155,7 +172,7 @@ class OpeningBalanceTest {
         .isInstanceOf(org.teraschool.finance.api.PeriodConflict.class)
         .hasMessage("PERIOD_LOCKED");
     asActor(
-        OPS,
+        UNLOCKER,
         () ->
             periods.unlock(
                 SCHOOL, new org.teraschool.finance.api.LockPeriod(SCHOOL, "2026-02", "更正", 0L)));

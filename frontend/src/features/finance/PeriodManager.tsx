@@ -150,7 +150,9 @@ export function PeriodManager({
             title: "操作",
             key: "actions",
             render: (_: unknown, period: PeriodView) =>
-              school?.canLock ? (
+              (
+                period.status === "LOCKED" ? school?.canUnlock : school?.canLock
+              ) ? (
                 <Button
                   size="small"
                   danger={period.status !== "LOCKED"}

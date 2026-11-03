@@ -49,6 +49,7 @@ class ClassTypeAndPricingTest {
         SCHOOL,
         TENANT,
         SCHOOL);
+    EngineeringTest.seedExplicitApprovalPolicy(TENANT, SCHOOL);
     update(
         "insert into product.curriculum(id,tenant_id,school_id,name) values (?,?,?,'班型课程')",
         CHINESE,
@@ -72,8 +73,15 @@ class ClassTypeAndPricingTest {
         encoder.encode(UUID.randomUUID().toString()));
     for (var action :
         new String[] {
-          "PRODUCT_READ", "PRODUCT_MAINTAIN", "PRICE_PUBLISH", "ENROLLMENT_READ",
-          "ENROLLMENT_MAINTAIN", "ENROLLMENT_APPROVE", "TEACHING_READ", "TEACHING_MAINTAIN"
+          "PRODUCT_READ",
+          "PRODUCT_MAINTAIN",
+          "PRICE_PUBLISH",
+          "ENROLLMENT_READ",
+          "ENROLLMENT_MAINTAIN",
+          "ENROLLMENT_APPROVE",
+          "ENROLLMENT_DISCOUNT",
+          "TEACHING_READ",
+          "TEACHING_MAINTAIN"
         })
       update(
           "insert into identity.account_permission(tenant_id,account_id,school_id,action,effect)"

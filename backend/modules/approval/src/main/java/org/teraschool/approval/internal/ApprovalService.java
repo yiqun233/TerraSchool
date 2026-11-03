@@ -8,6 +8,7 @@ import org.jooq.Record;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.teraschool.approval.api.*;
+import org.teraschool.enrollment.api.DiscountApproval;
 import org.teraschool.enrollment.api.EnrollmentAccess;
 import org.teraschool.identity.api.Actor;
 import org.teraschool.identity.api.CurrentActor;
@@ -21,8 +22,15 @@ import org.teraschool.platform.api.TenantTransactions;
  * <p>退费类动作在策略要求时必须持有已批准且金额匹配的审批单，审批单只能被消耗一次；申请人不能审批自己的单据。缺少或停用策略时拒绝执行，由学校明确配置规则。
  */
 @Service
-public class ApprovalService implements ApprovalQueries, ApprovalCommands, ApprovalGate {
-  private static final Set<String> ACTIONS = Set.of("REFUND_HOURS", "CASH_REFUND");
+public class ApprovalService
+    implements ApprovalQueries, ApprovalCommands, ApprovalGate, DiscountApproval {
+  private static final Set<String> ACTIONS =
+      Set.of(
+          "REFUND_HOURS",
+          "CASH_REFUND",
+          "ENROLLMENT_DISCOUNT",
+          "SERVICE_FEE_REFUND",
+          "SERVICE_FEE_REVERSAL");
   private static final Set<String> DECISIONS = Set.of("APPROVED", "REJECTED");
   private static final java.util.regex.Pattern DECIMAL =
       java.util.regex.Pattern.compile("\\d{1,12}(\\.\\d{1,2})?");
@@ -198,16 +206,17 @@ public class ApprovalService implements ApprovalQueries, ApprovalCommands, Appro
     var action = action(command.action());
     var amount = amount(command.amount(), "申请金额", false);
     var reason = text(command.reason(), 200, "申请原因");
-    var apply = actors.requireAction("REFUND_APPLY");
+    var permission = "ENROLLMENT_DISCOUNT".equals(action) ? "ENROLLMENT_DISCOUNT" : "REFUND_APPLY";
+    var apply = actors.requireAction(permission);
     return tx.execute(
         apply.tenantId(),
         () -> {
           schools.lockTenant(apply.tenantId());
-          var verified = actors.requireActionInTransaction("REFUND_APPLY");
+          var verified = actors.requireActionInTransaction(permission);
           var enrollment = enrollments.require(command.enrollmentId());
           var schoolId = enrollment.schoolId();
           if (!verified.schools().contains(schoolId))
-            throw new AccessDeniedException("无该学校的退费申请权限");
+            throw new AccessDeniedException("无该学校的业务审批申请权限");
           if (!schools.require(schoolId).active()) throw new AccessDeniedException("学校已停用，不能申请审批");
           var pending =
               sql.fetchOne(
@@ -322,6 +331,11 @@ public class ApprovalService implements ApprovalQueries, ApprovalCommands, Appro
         schoolId,
         row.get("amount", BigDecimal.class),
         action);
+  }
+
+  @Override
+  public void consume(UUID schoolId, UUID enrollmentId, BigDecimal amount, UUID approvalId) {
+    consume("ENROLLMENT_DISCOUNT", schoolId, enrollmentId, amount, approvalId);
   }
 
   // ---------------------------------------------------------------- 内部

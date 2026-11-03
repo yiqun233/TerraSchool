@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.*;
 import static org.teraschool.server.EngineeringTest.update;
 
 import java.util.*;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -41,6 +43,7 @@ class SettlementModePricingTest {
   @Autowired TeachingCommands teaching;
   @Autowired TeachingQueries teachingQueries;
   @Autowired FundsCommands funds;
+  @Autowired FundsQueries fundsQueries;
 
   @DynamicPropertySource
   static void config(DynamicPropertyRegistry r) {
@@ -81,10 +84,22 @@ class SettlementModePricingTest {
         encoder.encode(PASSWORD));
     for (var action :
         new String[] {
-          "PRODUCT_READ", "PRODUCT_MAINTAIN", "PRICE_PUBLISH", "ENROLLMENT_READ",
-          "ENROLLMENT_MAINTAIN", "ENROLLMENT_APPROVE", "FUNDS_READ", "FUNDS_RECEIPT",
-          "FUNDS_ALLOCATE", "TEACHING_READ", "TEACHING_MAINTAIN", "ATTENDANCE_RECORD",
-          "LESSON_CLOSE", "REFUND_READ", "REFUND_APPLY"
+          "PRODUCT_READ",
+          "PRODUCT_MAINTAIN",
+          "PRICE_PUBLISH",
+          "ENROLLMENT_READ",
+          "ENROLLMENT_MAINTAIN",
+          "ENROLLMENT_APPROVE",
+          "ENROLLMENT_DISCOUNT",
+          "FUNDS_READ",
+          "FUNDS_RECEIPT",
+          "FUNDS_ALLOCATE",
+          "TEACHING_READ",
+          "TEACHING_MAINTAIN",
+          "ATTENDANCE_RECORD",
+          "LESSON_CLOSE",
+          "REFUND_READ",
+          "REFUND_APPLY"
         })
       update(
           "insert into identity.account_permission(tenant_id,account_id,school_id,action,effect)"
@@ -249,7 +264,7 @@ class SettlementModePricingTest {
   void discountReplayIsIdempotentAndChangedParametersAreRejected() throws Exception {
     var enrollment = multiCourse(1);
     var id = UUID.randomUUID();
-    var discount = new ApplyDiscount(id, "400.00", "优惠");
+    var discount = new ApplyDiscount(id, "400.00", "优惠", enrollment.version(), null);
     asActor(OPS, () -> enrollments.applyDiscount(enrollment.id(), discount));
     var replay = asActor(OPS, () -> enrollments.applyDiscount(enrollment.id(), discount));
     assertThat(replay.netAmount()).isEqualTo("1600.00");
@@ -275,7 +290,7 @@ class SettlementModePricingTest {
   }
 
   @Test
-  void discountCannotReduceReceivableBelowActiveAllocations() throws Exception {
+  void discountApprovalFailureRollsBackAllocationRebuild() throws Exception {
     var enrollment = multiCourse(1);
     var receipt =
         asActor(
@@ -290,17 +305,90 @@ class SettlementModePricingTest {
                         "CASH",
                         "2026-02-10")));
     asActor(OPS, () -> funds.allocate(new AllocateReceipt(receipt.id(), enrollment.id(), "2000")));
-    assertThatThrownBy(
-            () ->
-                asActor(
-                    OPS,
-                    () ->
-                        enrollments.applyDiscount(
-                            enrollment.id(), new ApplyDiscount(UUID.randomUUID(), "400.00", "优惠"))))
-        .isInstanceOf(EnrollmentConflict.class)
-        .hasMessage("DISCOUNT_REQUIRES_ALLOCATION_RELEASE");
+    update(
+        "update approval.policy set free_below=0 where school_id=? and action='ENROLLMENT_DISCOUNT'",
+        SCHOOL);
+    try {
+      assertThatThrownBy(
+              () ->
+                  asActor(
+                      OPS,
+                      () ->
+                          enrollments.applyDiscount(
+                              enrollment.id(),
+                              new ApplyDiscount(UUID.randomUUID(), "400.00", "需审批"))))
+          .hasMessage("APPROVAL_REQUIRED");
+    } finally {
+      update(
+          "update approval.policy set free_below=999999999999.99 where school_id=? and action='ENROLLMENT_DISCOUNT'",
+          SCHOOL);
+    }
     assertThat(asActor(OPS, () -> enrollmentQueries.detail(enrollment.id())).netAmount())
         .isEqualTo("2000.00");
+    assertThat(asActor(OPS, () -> fundsQueries.allocations(enrollment.id())))
+        .filteredOn(allocation -> "ACTIVE".equals(allocation.status()))
+        .extracting(allocation -> allocation.amount())
+        .containsExactly("2000.00");
+    assertThat(asActor(OPS, () -> fundsQueries.balance(enrollment.studentId())).available())
+        .isEqualTo("0.00");
+  }
+
+  @Test
+  void concurrentReplayOfSameDiscountRequestCreatesOneVersion() throws Exception {
+    var enrollment = multiCourse(1);
+    var command =
+        new ApplyDiscount(UUID.randomUUID(), "400.00", "并发重放", enrollment.version(), null);
+    var start = new CountDownLatch(1);
+    try (var workers = Executors.newFixedThreadPool(2)) {
+      var first =
+          workers.submit(
+              () -> {
+                start.await();
+                return asActor(OPS, () -> enrollments.applyDiscount(enrollment.id(), command));
+              });
+      var second =
+          workers.submit(
+              () -> {
+                start.await();
+                return asActor(OPS, () -> enrollments.applyDiscount(enrollment.id(), command));
+              });
+      start.countDown();
+      assertThat(first.get().netAmount()).isEqualTo("1600.00");
+      assertThat(second.get().netAmount()).isEqualTo("1600.00");
+    }
+    assertThat(asActor(OPS, () -> enrollmentQueries.detail(enrollment.id())).netAmount())
+        .isEqualTo("1600.00");
+  }
+
+  @Test
+  void discountRebalancesExcessAllocationBackToStudentAccount() throws Exception {
+    var enrollment = multiCourse(1);
+    var receipt =
+        asActor(
+            OPS,
+            () ->
+                funds.createReceipt(
+                    new CreateReceipt(
+                        UUID.randomUUID(),
+                        SCHOOL,
+                        enrollment.studentId(),
+                        "2000",
+                        "CASH",
+                        "2026-02-10")));
+    asActor(OPS, () -> funds.allocate(new AllocateReceipt(receipt.id(), enrollment.id(), "2000")));
+    asActor(
+        OPS,
+        () ->
+            enrollments.applyDiscount(
+                enrollment.id(), new ApplyDiscount(UUID.randomUUID(), "400.00", "优惠")));
+    assertThat(asActor(OPS, () -> enrollmentQueries.detail(enrollment.id())).netAmount())
+        .isEqualTo("1600.00");
+    assertThat(asActor(OPS, () -> fundsQueries.allocations(enrollment.id())))
+        .filteredOn(allocation -> "ACTIVE".equals(allocation.status()))
+        .extracting(allocation -> allocation.amount())
+        .containsExactly("1600.00");
+    assertThat(asActor(OPS, () -> fundsQueries.balance(enrollment.studentId())).available())
+        .isEqualTo("400.00");
   }
 
   @Test

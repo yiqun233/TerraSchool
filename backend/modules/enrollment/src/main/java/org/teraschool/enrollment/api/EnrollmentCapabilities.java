@@ -6,6 +6,7 @@ import java.util.UUID;
 public record EnrollmentCapabilities(
     boolean canRead,
     boolean canMaintain,
+    boolean canDiscount,
     boolean canApprove,
     List<EnrollmentSchoolOption> schools) {
   public EnrollmentCapabilities {

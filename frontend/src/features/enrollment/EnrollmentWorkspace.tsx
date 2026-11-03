@@ -195,6 +195,7 @@ export function EnrollmentWorkspace({
       {detailId ? (
         <EnrollmentDetail
           id={detailId}
+          canDiscount={Boolean(capabilities.data?.canDiscount)}
           onClose={() => {
             setDetailId(null);
             void enrollments.refetch();
@@ -569,10 +570,12 @@ export function EnrollmentCreator({
 /** 报名详情：商品快照、未收金额、收款与分配。 */
 export function EnrollmentDetail({
   id,
+  canDiscount,
   onClose,
   onUnauthorized,
 }: {
   id: string;
+  canDiscount: boolean;
   onClose: () => void;
   onUnauthorized: () => void;
 }) {
@@ -690,7 +693,9 @@ export function EnrollmentDetail({
           >
             <Space wrap>
               <Button onClick={() => setReceipting(true)}>确认收款</Button>
-              <Button onClick={() => setDiscounting(true)}>登记减免</Button>
+              {canDiscount ? (
+                <Button onClick={() => setDiscounting(true)}>登记减免</Button>
+              ) : null}
               <AllocateAction
                 enrollmentId={id}
                 outstanding={outstanding.data ?? null}
@@ -819,6 +824,7 @@ export function EnrollmentDetail({
       {discounting ? (
         <DiscountModal
           enrollmentId={id}
+          expectedVersion={detail.data?.version ?? 0}
           onCancel={() => setDiscounting(false)}
           onDone={() => {
             setDiscounting(false);
@@ -1137,14 +1143,16 @@ export function VoidReceiptButton({
   );
 }
 
-/** 登记一次性减免：只写金额与原因，落到应收减项。 */
+/** 登记一次性减免：独立授权、审批单（策略要求时）和报名版本共同防止并发改价。 */
 export function DiscountModal({
   enrollmentId,
+  expectedVersion,
   onCancel,
   onDone,
   onError,
 }: {
   enrollmentId: string;
+  expectedVersion: number;
   onCancel: () => void;
   onDone: () => void;
   onError: (message: string) => void;
@@ -1155,6 +1163,8 @@ export function DiscountModal({
     requestId: string;
     amount: string;
     reason?: string;
+    expectedVersion: number;
+    approvalId?: string;
   } | null>(null);
   const [form] = Form.useForm();
 
@@ -1178,6 +1188,8 @@ export function DiscountModal({
             requestId: crypto.randomUUID(),
             amount: String(values.amount),
             reason: values.reason || undefined,
+            expectedVersion,
+            approvalId: values.approvalId || undefined,
           }),
         },
       );
@@ -1193,7 +1205,7 @@ export function DiscountModal({
           request.current = null;
           setUncertain(false);
         }
-        onError("登记减免失败，请核对报名维护权限。");
+        onError("登记减免失败，请核对优惠权限、审批单和报名版本。");
         return;
       }
       onDone();
@@ -1231,8 +1243,11 @@ export function DiscountModal({
         <Form.Item label="原因" name="reason">
           <Input maxLength={200} disabled={busy || uncertain} />
         </Form.Item>
+        <Form.Item label="已通过的优惠审批单号（如策略要求）" name="approvalId">
+          <Input disabled={busy || uncertain} />
+        </Form.Item>
         <Typography.Text type="secondary">
-          已发生消费或退款时暂不支持直接减免；减免不能使已分配金额超过应收。
+          已发生消费或退款时暂不支持直接减免；多分配金额会原子释放回学员账户。
           {uncertain ? "上次结果未确认，请使用相同内容重试。" : ""}
         </Typography.Text>
         <div style={{ marginTop: 12 }}>

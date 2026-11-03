@@ -14,7 +14,8 @@ vi.mock("../../shared/http", () => ({ api: { GET: get, POST: post }, csrf }));
 const capabilities = {
   canRead: true,
   canLock: true,
-  schools: [{ id: "school-1", name: "期间学校", canLock: true }],
+  canUnlock: true,
+  schools: [{ id: "school-1", name: "期间学校", canLock: true, canUnlock: true }],
 };
 
 function renderWithClient(ui: React.ReactElement) {

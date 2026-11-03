@@ -5,6 +5,7 @@ import {
   Button,
   Card,
   Form,
+  Input,
   InputNumber,
   Modal,
   Select,
@@ -22,6 +23,9 @@ type ApprovalPolicyView = components["schemas"]["ApprovalPolicyView"];
 const ACTION_LABEL: Record<string, string> = {
   REFUND_HOURS: "退课时",
   CASH_REFUND: "现金退款",
+  ENROLLMENT_DISCOUNT: "报名优惠调整",
+  SERVICE_FEE_REFUND: "服务费退费",
+  SERVICE_FEE_REVERSAL: "服务费退费冲正",
 };
 const STATUS_LABEL: Record<string, string> = {
   PENDING: "待审批",
@@ -41,6 +45,7 @@ export function ApprovalInbox({
 }) {
   const [schoolId, setSchoolId] = useState<string>();
   const [editing, setEditing] = useState<ApprovalPolicyView | null>(null);
+  const [requesting, setRequesting] = useState(false);
   const [error, setError] = useState("");
 
   const capabilities = useQuery({
@@ -130,12 +135,36 @@ export function ApprovalInbox({
         >
           刷新待办
         </Button>
+        <Button onClick={() => setRequesting(true)}>申请审批</Button>
         <Typography.Text type="secondary">
           金额低于免批额度时无需审批
         </Typography.Text>
       </Space>
       {error ? <Alert title={error} type="error" showIcon /> : null}
-      <Card title="审批策略" size="small">
+      <Card
+        title="审批策略"
+        size="small"
+        extra={
+          school?.canManage &&
+          !(policies.data ?? []).some(
+            (policy) => policy.action === "ENROLLMENT_DISCOUNT",
+          ) ? (
+            <Button
+              size="small"
+              onClick={() =>
+                setEditing({
+                  action: "ENROLLMENT_DISCOUNT",
+                  freeBelow: "0.00",
+                  active: true,
+                  version: 0,
+                } as ApprovalPolicyView)
+              }
+            >
+              配置优惠审批
+            </Button>
+          ) : null
+        }
+      >
         <Table
           rowKey="action"
           size="small"
@@ -227,7 +256,113 @@ export function ApprovalInbox({
           }}
         />
       ) : null}
+      {requesting && current ? (
+        <RequestEditor
+          onCancel={() => setRequesting(false)}
+          onSaved={() => {
+            setRequesting(false);
+            void requests.refetch();
+          }}
+          onError={setError}
+        />
+      ) : null}
     </>
+  );
+}
+
+function RequestEditor({
+  onCancel,
+  onSaved,
+  onError,
+}: {
+  onCancel: () => void;
+  onSaved: () => void;
+  onError: (message: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [form] = Form.useForm();
+
+  async function save() {
+    let values;
+    try {
+      values = await form.validateFields();
+    } catch {
+      return;
+    }
+    setBusy(true);
+    try {
+      const token = await csrf();
+      const { response } = await api.POST("/api/approval/requests", {
+        headers: { [token.headerName!]: token.token! },
+        body: {
+          action: values.action,
+          enrollmentId: values.enrollmentId,
+          amount: String(values.amount),
+          reason: values.reason,
+        },
+      });
+      if (!response.ok) {
+        onError("申请失败，请核对业务权限、报名和审批策略。");
+        return;
+      }
+      onSaved();
+    } catch {
+      onError("申请审批时网络中断，请刷新后核对申请状态。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title="申请财务审批" open onCancel={onCancel} footer={null}>
+      <Form form={form} layout="vertical">
+        <Form.Item label="动作" name="action" rules={[{ required: true }]}>
+          <Select
+            options={[
+              {
+                value: "ENROLLMENT_DISCOUNT",
+                label: ACTION_LABEL.ENROLLMENT_DISCOUNT,
+              },
+              { value: "REFUND_HOURS", label: ACTION_LABEL.REFUND_HOURS },
+              { value: "CASH_REFUND", label: ACTION_LABEL.CASH_REFUND },
+              {
+                value: "SERVICE_FEE_REFUND",
+                label: ACTION_LABEL.SERVICE_FEE_REFUND,
+              },
+              {
+                value: "SERVICE_FEE_REVERSAL",
+                label: ACTION_LABEL.SERVICE_FEE_REVERSAL,
+              },
+            ]}
+          />
+        </Form.Item>
+        <Form.Item
+          label="报名编号"
+          name="enrollmentId"
+          rules={[{ required: true }]}
+        >
+          <Input />
+        </Form.Item>
+        <Form.Item
+          label="申请金额（元）"
+          name="amount"
+          rules={[{ required: true }]}
+        >
+          <InputNumber min={0.01} precision={2} style={{ width: "100%" }} />
+        </Form.Item>
+        <Form.Item label="原因" name="reason">
+          <Input maxLength={200} />
+        </Form.Item>
+        <Button
+          type="primary"
+          loading={busy}
+          disabled={busy}
+          onClick={() => void save()}
+        >
+          提交申请
+        </Button>
+      </Form>
+    </Modal>
   );
 }
 

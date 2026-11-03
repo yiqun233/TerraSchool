@@ -17,7 +17,8 @@ public class TeachingDiscountGuard implements DiscountGuard {
   }
 
   @Override
-  public void requireAllowed(UUID enrollmentId, BigDecimal newNetAmount) {
+  public void requireAllowed(
+      UUID enrollmentId, UUID schoolId, UUID studentId, BigDecimal newNetAmount) {
     if (sql.fetchExists(
         sql.selectOne().from("teaching.consumption").where("enrollment_id=?", enrollmentId)))
       throw new EnrollmentConflict("DISCOUNT_AFTER_CONSUMPTION");

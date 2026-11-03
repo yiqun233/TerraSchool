@@ -11,6 +11,7 @@ import java.time.format.DateTimeParseException;
 import java.util.*;
 import org.jooq.DSLContext;
 import org.jooq.Record;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.teraschool.archive.api.StudentAccess;
@@ -43,6 +44,7 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
   private final PriceAccess prices;
   private final org.teraschool.finance.api.PeriodGate periods;
   private final List<DiscountGuard> discountGuards;
+  private final DiscountApproval discountApproval;
 
   public EnrollmentService(
       CurrentActor actors,
@@ -52,7 +54,8 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
       StudentAccess students,
       PriceAccess prices,
       org.teraschool.finance.api.PeriodGate periods,
-      List<DiscountGuard> discountGuards) {
+      List<DiscountGuard> discountGuards,
+      @Lazy DiscountApproval discountApproval) {
     this.actors = actors;
     this.tx = tx;
     this.sql = sql;
@@ -61,6 +64,7 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
     this.prices = prices;
     this.periods = periods;
     this.discountGuards = List.copyOf(discountGuards);
+    this.discountApproval = discountApproval;
   }
 
   // ---------------------------------------------------------------- 查询
@@ -69,8 +73,9 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
   public EnrollmentCapabilities capabilities() {
     var scope = actors.requireResourceScope("ENROLLMENT");
     boolean canApprove = hasAction("ENROLLMENT_APPROVE");
+    boolean canDiscount = hasAction("ENROLLMENT_DISCOUNT");
     if (scope.readableSchoolIds().isEmpty())
-      return new EnrollmentCapabilities(true, false, canApprove, List.of());
+      return new EnrollmentCapabilities(true, false, canDiscount, canApprove, List.of());
     return tx.execute(
         scope.tenantId(),
         () -> {
@@ -89,6 +94,7 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
               true,
               options.stream()
                   .anyMatch(EnrollmentCapabilities.EnrollmentSchoolOption::maintainable),
+              canDiscount,
               canApprove,
               options);
         });
@@ -749,50 +755,70 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
   /**
    * 登记一次性减免。
    *
-   * <p>只写"减免多少 + 原因"，落到应收减项，不承担优惠券、阶梯折扣等规则计算；独立优惠审批尚待业务确认，不能宣称已接入。
+   * <p>优惠使用独立权限和审批策略；历史调整追加版本事实，不覆盖既有消费或退款。
    */
   private EnrollmentView applyDiscountWithTrace(UUID id, ApplyDiscount command) {
     if (id == null || command == null || command.requestId() == null)
       throw new IllegalArgumentException("需要报名、请求身份与减免金额");
     var amount = positiveHours(command.amount());
     var reason = text(command.reason(), 200, "减免原因");
-    var scope = actors.requireResourceScope("ENROLLMENT");
+    var scope = actors.requireAction("ENROLLMENT_DISCOUNT");
     return tx.execute(
         scope.tenantId(),
         () -> {
           schools.lockTenant(scope.tenantId());
-          var verified = actors.requireResourceScopeInTransaction("ENROLLMENT");
+          var verified = actors.requireActionInTransaction("ENROLLMENT_DISCOUNT");
           var row = requireEnrollmentForUpdate(id);
           var schoolId = row.get("school_id", UUID.class);
-          if (!verified.maintainableSchoolIds().contains(schoolId))
-            throw new AccessDeniedException("无该学校的报名维护权限");
+          if (!verified.schools().contains(schoolId))
+            throw new AccessDeniedException("无该学校的优惠登记权限");
           if (!schools.require(schoolId).active()) throw new AccessDeniedException("学校已停用，不能登记减免");
           if (!"ACTIVE".equals(row.get("status", String.class)))
             throw new EnrollmentConflict("ENROLLMENT_NOT_ACTIVE");
           var digest =
               fingerprint(
-                  "DISCOUNT", id.toString(), amount.toPlainString(), String.valueOf(reason));
+                  "DISCOUNT",
+                  id.toString(),
+                  amount.toPlainString(),
+                  String.valueOf(reason),
+                  String.valueOf(command.expectedVersion()),
+                  String.valueOf(command.approvalId()));
           var previous = previousRequest(verified, command.requestId(), digest);
           if (previous != null)
             return view(
-                requireEnrollment(verified, previous),
+                requireEnrollmentByTenant(previous),
                 students.require(row.get("student_id", UUID.class)).name());
           periods.requireOpen(schoolId, LocalDate.now());
+          if (command.expectedVersion() != null
+              && !row.get("version", Long.class).equals(command.expectedVersion()))
+            throw new EnrollmentConflict("VERSION_CONFLICT");
           if (cancelledHours(id).signum() > 0)
             throw new EnrollmentConflict("DISCOUNT_AFTER_REFUND");
           var outstanding = netAmount(id);
           if (amount.compareTo(outstanding) > 0)
             throw new EnrollmentConflict("DISCOUNT_EXCEED_RECEIVABLE");
           var newNetAmount = outstanding.subtract(amount);
-          for (var guard : discountGuards) guard.requireAllowed(id, newNetAmount);
+          for (var guard : discountGuards)
+            guard.requireAllowed(id, schoolId, row.get("student_id", UUID.class), newNetAmount);
+          discountApproval.consume(schoolId, id, amount, command.approvalId());
+          var discountVersion =
+              sql.fetchOne(
+                      "select coalesce(max(version_no),0)+1 from enrollment.discount"
+                          + " where enrollment_id=?",
+                      id)
+                  .get(0, Long.class);
           sql.execute(
-              "insert into enrollment.discount(tenant_id,enrollment_id,amount,reason,created_by)"
-                  + " values (?,?,?,?,?)",
+              "insert into enrollment.discount(tenant_id,enrollment_id,amount,reason,created_by,"
+                  + "version_no,previous_total,new_total,approval_id) values (?,?,?,?,?,?,?,?,?)",
               scope.tenantId(),
               id,
               amount,
               reason,
-              scope.accountId());
+              scope.accountId(),
+              discountVersion,
+              outstanding,
+              newNetAmount,
+              command.approvalId());
           sql.execute(
               "insert into enrollment.charge(tenant_id,enrollment_id,kind,amount,reason)"
                   + " values (?,?,'ADJUSTMENT',?,'优惠减免')",
@@ -800,16 +826,10 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
               id,
               amount.negate());
           sql.execute("update enrollment.enrollment set version=version+1 where id=?", id);
-          sql.execute(
-              "insert into enrollment.creation_request(tenant_id,actor_id,request_id,kind,resource_id,fingerprint) values (?,?,?,'DISCOUNT',?,?)",
-              scope.tenantId(),
-              scope.accountId(),
-              command.requestId(),
-              id,
-              digest);
+          rememberRequest(verified, command.requestId(), id, digest);
           audit(scope, "DISCOUNT_ADDED", id, schoolId, amount.toPlainString());
           return view(
-              requireEnrollment(verified, id),
+              requireEnrollmentByTenant(id),
               students.require(row.get("student_id", UUID.class)).name());
         });
   }
@@ -1007,6 +1027,20 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
     return row.get("resource_id", UUID.class);
   }
 
+  private UUID previousRequest(Actor actor, UUID requestId, String fingerprint) {
+    var row =
+        sql.fetchOne(
+            "select resource_id,fingerprint from enrollment.creation_request"
+                + " where tenant_id=? and actor_id=? and request_id=?",
+            actor.tenantId(),
+            actor.accountId(),
+            requestId);
+    if (row == null) return null;
+    if (!fingerprint.equals(row.get("fingerprint", String.class)))
+      throw new EnrollmentConflict("IDEMPOTENCY_MISMATCH");
+    return row.get("resource_id", UUID.class);
+  }
+
   private void rememberRequest(
       ResourceScope scope, UUID requestId, UUID resource, String fingerprint) {
     sql.execute(
@@ -1014,6 +1048,17 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
             + " values (?,?,?,'ENROLLMENT',?,?)",
         scope.tenantId(),
         scope.accountId(),
+        requestId,
+        resource,
+        fingerprint);
+  }
+
+  private void rememberRequest(Actor actor, UUID requestId, UUID resource, String fingerprint) {
+    sql.execute(
+        "insert into enrollment.creation_request(tenant_id,actor_id,request_id,kind,resource_id,fingerprint)"
+            + " values (?,?,?,'DISCOUNT',?,?)",
+        actor.tenantId(),
+        actor.accountId(),
         requestId,
         resource,
         fingerprint);

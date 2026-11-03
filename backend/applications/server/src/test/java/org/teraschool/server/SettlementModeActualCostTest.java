@@ -80,10 +80,22 @@ class SettlementModeActualCostTest {
         encoder.encode(PASSWORD));
     for (var action :
         new String[] {
-          "PRODUCT_READ", "PRODUCT_MAINTAIN", "PRICE_PUBLISH", "ENROLLMENT_READ",
-          "ENROLLMENT_MAINTAIN", "ENROLLMENT_APPROVE", "FUNDS_READ", "FUNDS_RECEIPT",
-          "FUNDS_ALLOCATE", "TEACHING_READ", "TEACHING_MAINTAIN", "ATTENDANCE_RECORD",
-          "LESSON_CLOSE", "REFUND_READ", "REFUND_APPLY"
+          "PRODUCT_READ",
+          "PRODUCT_MAINTAIN",
+          "PRICE_PUBLISH",
+          "ENROLLMENT_READ",
+          "ENROLLMENT_MAINTAIN",
+          "ENROLLMENT_APPROVE",
+          "ENROLLMENT_DISCOUNT",
+          "FUNDS_READ",
+          "FUNDS_RECEIPT",
+          "FUNDS_ALLOCATE",
+          "TEACHING_READ",
+          "TEACHING_MAINTAIN",
+          "ATTENDANCE_RECORD",
+          "LESSON_CLOSE",
+          "REFUND_READ",
+          "REFUND_APPLY"
         })
       update(
           "insert into identity.account_permission(tenant_id,account_id,school_id,action,effect)"
@@ -231,6 +243,27 @@ class SettlementModeActualCostTest {
     assertThat(refunded.amount()).isEqualTo("200.00");
     assertThat(refunded.netAmount()).isEqualTo("800.00");
     assertThat(consume(enrollment, "1.00")).isEqualTo("16.00");
+  }
+
+  @Test
+  void refundRequestFingerprintIncludesAmountCourseAndApproval() throws Exception {
+    var enrollment = enrollment(4);
+    var requestId = UUID.randomUUID();
+    var initial = new CancelHoursAndReturnCommand(requestId, "1.00", "防重摘要", null, null, "8.00");
+    var result = asActor(OPS, () -> funds.cancelHoursAndReturnToAccount(enrollment.id(), initial));
+    assertThat(asActor(OPS, () -> funds.cancelHoursAndReturnToAccount(enrollment.id(), initial)))
+        .isEqualTo(result);
+    for (var changed :
+        List.of(
+            new CancelHoursAndReturnCommand(requestId, "1.00", "防重摘要", null, null, "9.00"),
+            new CancelHoursAndReturnCommand(requestId, "1.00", "防重摘要", null, CHINESE, "8.00"),
+            new CancelHoursAndReturnCommand(
+                requestId, "1.00", "防重摘要", UUID.randomUUID(), null, "8.00")))
+      assertThatThrownBy(
+              () ->
+                  asActor(OPS, () -> funds.cancelHoursAndReturnToAccount(enrollment.id(), changed)))
+          .isInstanceOf(FundsConflict.class)
+          .hasMessage("IDEMPOTENCY_MISMATCH");
   }
 
   static Stream<org.junit.jupiter.params.provider.Arguments> modeRefundExpectations() {

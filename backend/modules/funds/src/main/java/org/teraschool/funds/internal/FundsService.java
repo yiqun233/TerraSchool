@@ -530,6 +530,10 @@ public class FundsService implements FundsQueries, FundsCommands {
       throw new IllegalArgumentException("需要报名、课时与请求身份");
     var hours = moneyAmount(command.hours(), "退课时");
     var reason = text(command.reason(), 200, "退课时原因");
+    var requestedAmount =
+        command.amount() == null || command.amount().isBlank()
+            ? null
+            : moneyAmount(command.amount(), "退费额");
     var refund = actors.requireAction("REFUND_APPLY");
     return tx.execute(
         refund.tenantId(),
@@ -553,7 +557,13 @@ public class FundsService implements FundsQueries, FundsCommands {
           lockStudent(enrollment.studentId());
           var fingerprint =
               fingerprint(
-                  "REFUND", enrollmentId.toString(), hours.toPlainString(), String.valueOf(reason));
+                  "REFUND",
+                  enrollmentId.toString(),
+                  hours.toPlainString(),
+                  String.valueOf(reason),
+                  String.valueOf(command.curriculumId()),
+                  requestedAmount == null ? "DEFAULT" : requestedAmount.toPlainString(),
+                  String.valueOf(command.approvalId()));
           var previous = previousRequest(refund, command.requestId(), fingerprint, "REFUND");
           if (previous != null) return refundResult(enrollmentId);
           var consumed = consumption.consumed(enrollmentId).hours();
@@ -562,9 +572,9 @@ public class FundsService implements FundsQueries, FundsCommands {
           if (hours.compareTo(refundable) > 0) throw new FundsConflict("HOURS_EXCEED_REFUNDABLE");
           // 审批闸门：按策略要求校验并消耗审批单；金额由服务端计算，不接受调用方自报。
           var refundAmount =
-              command.amount() == null || command.amount().isBlank()
+              requestedAmount == null
                   ? cancellationAmount(enrollment, hours, command.curriculumId())
-                  : moneyAmount(command.amount(), "退费额");
+                  : requestedAmount;
           approvals.consume(
               "REFUND_HOURS", schoolId, enrollmentId, refundAmount, command.approvalId());
           var cancellation =
@@ -699,7 +709,11 @@ public class FundsService implements FundsQueries, FundsCommands {
           if (previous != null)
             return serviceFeeRefundResult(enrollmentId, command.requestId(), amount);
           approvals.consume(
-              "REFUND_HOURS", enrollment.schoolId(), enrollmentId, amount, command.approvalId());
+              "SERVICE_FEE_REFUND",
+              enrollment.schoolId(),
+              enrollmentId,
+              amount,
+              command.approvalId());
           enrollmentCommands.cancelServiceFee(
               enrollmentId,
               new CancelServiceFee(
@@ -776,7 +790,7 @@ public class FundsService implements FundsQueries, FundsCommands {
             var approvalAmount = correction.abs();
             if (approvalAmount.signum() == 0) approvalAmount = new BigDecimal(reversed.amount());
             approvals.consume(
-                "REFUND_HOURS",
+                "SERVICE_FEE_REVERSAL",
                 enrollment.schoolId(),
                 enrollmentId,
                 approvalAmount,

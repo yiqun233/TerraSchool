@@ -67,7 +67,9 @@ public class PeriodService implements PeriodQueries, PeriodCommands, PeriodGate 
   public FinanceCapabilities capabilities() {
     var scope = actors.requireResourceScope("PERIOD");
     var lock = schoolsOf("PERIOD_LOCK");
-    if (scope.readableSchoolIds().isEmpty()) return new FinanceCapabilities(true, false, List.of());
+    var unlock = schoolsOf("PERIOD_UNLOCK");
+    if (scope.readableSchoolIds().isEmpty())
+      return new FinanceCapabilities(true, false, false, List.of());
     return tx.execute(
         scope.tenantId(),
         () -> {
@@ -77,10 +79,16 @@ public class PeriodService implements PeriodQueries, PeriodCommands, PeriodGate 
                   .filter(names::containsKey)
                   .sorted(
                       Comparator.comparing((UUID key) -> names.get(key)).thenComparing(key -> key))
-                  .map(key -> new FinanceSchoolOption(key, names.get(key), lock.contains(key)))
+                  .map(
+                      key ->
+                          new FinanceSchoolOption(
+                              key, names.get(key), lock.contains(key), unlock.contains(key)))
                   .toList();
           return new FinanceCapabilities(
-              true, options.stream().anyMatch(FinanceSchoolOption::canLock), options);
+              true,
+              options.stream().anyMatch(FinanceSchoolOption::canLock),
+              options.stream().anyMatch(FinanceSchoolOption::canUnlock),
+              options);
         });
   }
 
@@ -132,13 +140,16 @@ public class PeriodService implements PeriodQueries, PeriodCommands, PeriodGate 
     var schoolId = command.schoolId();
     var period = period(command.period());
     var reason = text(command.reason(), 200, "原因");
+    if (!lock && (reason == null || reason.isBlank()))
+      throw new IllegalArgumentException("解锁必须填写纠错原因");
     try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
-      var actor = actors.requireAction("PERIOD_LOCK");
+      var action = lock ? "PERIOD_LOCK" : "PERIOD_UNLOCK";
+      var actor = actors.requireAction(action);
       return tx.execute(
           actor.tenantId(),
           () -> {
             schools.lockTenant(actor.tenantId());
-            var verified = actors.requireActionInTransaction("PERIOD_LOCK");
+            var verified = actors.requireActionInTransaction(action);
             if (!verified.schools().contains(schoolId))
               throw new AccessDeniedException("无该学校的锁月权限");
             if (!schools.require(schoolId).active())
@@ -181,6 +192,8 @@ public class PeriodService implements PeriodQueries, PeriodCommands, PeriodGate 
             if (command.expectedVersion() == null
                 || !existing.get("version", Long.class).equals(command.expectedVersion()))
               throw new PeriodConflict("VERSION_CONFLICT");
+            if (actor.accountId().equals(existing.get("locked_by", UUID.class)))
+              throw new AccessDeniedException("锁月人与解锁人必须是不同人员");
             sql.execute(
                 "update finance.period set status='OPEN',locked_at=null,locked_by=null,reason=?,"
                     + "version=version+1,updated_at=CURRENT_TIMESTAMP where id=?",

@@ -253,7 +253,10 @@ export function CancelHoursModal({
       });
       if (!response.ok || !data) return [];
       return data.filter(
-        (item) => item.enrollmentId === enrollmentId && !item.usedAt,
+        (item) =>
+          item.enrollmentId === enrollmentId &&
+          item.action === "REFUND_HOURS" &&
+          !item.usedAt,
       );
     },
   });
@@ -277,6 +280,9 @@ export function CancelHoursModal({
             requestId: crypto.randomUUID(),
             hours: String(values.hours),
             reason: values.reason || undefined,
+            curriculumId: values.curriculumId || undefined,
+            amount: values.amount == null ? undefined : String(values.amount),
+            approvalId: approvalId ?? undefined,
           },
         },
       );

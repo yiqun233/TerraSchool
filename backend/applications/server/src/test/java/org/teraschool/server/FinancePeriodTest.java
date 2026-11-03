@@ -107,7 +107,8 @@ class FinancePeriodTest {
           "REFUND_READ",
           "REFUND_APPLY",
           "REFUND_PAY",
-          "PERIOD_READ"
+          "PERIOD_READ",
+          "PERIOD_UNLOCK"
         })
       update(
           "insert into identity.account_permission(tenant_id,account_id,school_id,action,effect)"
@@ -189,7 +190,7 @@ class FinancePeriodTest {
 
   PeriodView unlock(String period, Long version) {
     return asActor(
-        LOCKER, () -> periodCommands.unlock(SCHOOL, new LockPeriod(SCHOOL, period, "更正", version)));
+        OPS, () -> periodCommands.unlock(SCHOOL, new LockPeriod(SCHOOL, period, "更正", version)));
   }
 
   @Test
