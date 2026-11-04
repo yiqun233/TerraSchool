@@ -8,4 +8,8 @@ public interface ApprovalCommands {
   ApprovalRequestView request(CreateApprovalRequest command);
 
   ApprovalRequestView decide(UUID id, DecideApproval command);
+
+  ApprovalRequestView withdraw(UUID id, long expectedVersion);
+
+  ApprovalRequestView expire(UUID id, long expectedVersion, String reason);
 }

@@ -35,7 +35,7 @@ import org.teraschool.teaching.api.*;
 public class TeachingService implements TeachingQueries, TeachingCommands, ConsumptionAccess {
   private static final java.util.regex.Pattern HOURS =
       java.util.regex.Pattern.compile("\\d{1,6}(\\.\\d{1,2})?");
-  private static final Set<String> ATTENDANCE = Set.of("PRESENT", "ABSENT", "LEAVE");
+  private static final Set<String> ATTENDANCE = Set.of("PRESENT", "ABSENT", "LEAVE", "PARTIAL");
 
   private final CurrentActor actors;
   private final TenantTransactions tx;
@@ -99,6 +99,222 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
                   .anyMatch(TeachingCapabilities.TeachingSchoolOption::canRecordAttendance),
               options.stream().anyMatch(TeachingCapabilities.TeachingSchoolOption::canCloseLesson),
               options);
+        });
+  }
+
+  @Override
+  public TeacherWorkbench myWorkbench(String fromText, String toText) {
+    var from = workbenchDate(fromText);
+    var to = workbenchDate(toText);
+    if (to.isBefore(from) || to.isAfter(from.plusDays(92)))
+      throw new IllegalArgumentException("教师课表范围不能倒置或超过 93 天");
+    var scope = actors.requireResourceScope("TEACHING");
+    return tx.execute(
+        scope.tenantId(),
+        () -> {
+          var verified = actors.requireResourceScopeInTransaction("TEACHING");
+          var schoolIds = new ArrayList<>(verified.readableSchoolIds());
+          if (schoolIds.isEmpty()) return new TeacherWorkbench(List.of(), List.of());
+          var marks = String.join(",", Collections.nCopies(schoolIds.size(), "?"));
+          var args = new ArrayList<Object>();
+          args.add(verified.accountId());
+          args.addAll(schoolIds);
+          args.add(from);
+          args.add(to);
+          var rows =
+              sql.fetch(
+                  "select l.id,l.class_id,c.name as class_name,cur.name as curriculum_name,"
+                      + "l.lesson_date,l.starts_at,l.ends_at,l.room_name,l.topic,l.status,l.version,"
+                      + "c.status as class_status,c.group_training "
+                      + "from teaching.lesson l join teaching.class c on c.id=l.class_id "
+                      + "join product.curriculum cur on cur.id=c.curriculum_id "
+                      + "where l.teacher_id in (select t.id from organization.teacher t "
+                      + "join organization.employee e on e.tenant_id=t.tenant_id and e.id=t.employee_id "
+                      + "where e.account_id=? and t.active and t.school_id in ("
+                      + marks
+                      + ")) and l.lesson_date between ? and ? "
+                      + "order by l.lesson_date,l.starts_at,l.id limit 1000",
+                  args.toArray());
+          var lessonViews =
+              rows.map(
+                  row ->
+                      new TeacherLessonView(
+                          row.get("id", UUID.class),
+                          row.get("class_id", UUID.class),
+                          row.get("class_name", String.class),
+                          row.get("curriculum_name", String.class),
+                          date(row.get("lesson_date", LocalDate.class)),
+                          row.get("starts_at").toString(),
+                          row.get("ends_at").toString(),
+                          row.get("room_name", String.class),
+                          row.get("topic", String.class),
+                          row.get("status", String.class),
+                          row.get("version", Long.class)));
+          var grouped = new LinkedHashMap<UUID, TeacherClassView>();
+          for (var row : rows) {
+            var id = row.get("class_id", UUID.class);
+            var previous = grouped.get(id);
+            int count = previous == null ? 1 : previous.lessonCount() + 1;
+            grouped.put(
+                id,
+                new TeacherClassView(
+                    id,
+                    row.get("class_name", String.class),
+                    row.get("curriculum_name", String.class),
+                    row.get("class_status", String.class),
+                    Boolean.TRUE.equals(row.get("group_training", Boolean.class)),
+                    count));
+          }
+          return new TeacherWorkbench(List.copyOf(grouped.values()), lessonViews);
+        });
+  }
+
+  private static LocalDate workbenchDate(String input) {
+    try {
+      if (input == null || !input.matches("[0-9]{4}-[0-9]{2}-[0-9]{2}"))
+        throw new IllegalArgumentException("日期格式无效");
+      return LocalDate.parse(input);
+    } catch (DateTimeParseException invalid) {
+      throw new IllegalArgumentException("日期格式无效");
+    }
+  }
+
+  @Override
+  public TeacherClassWorkbench myClass(UUID classId) {
+    var scope = actors.requireResourceScope("TEACHING");
+    return tx.execute(
+        scope.tenantId(),
+        () -> {
+          var verified = actors.requireResourceScopeInTransaction("TEACHING");
+          var classRow = requireClass(verified, classId);
+          var schoolId = classRow.get("school_id", UUID.class);
+          var teacherId =
+              sql.fetchOne(
+                  "select t.id from organization.teacher t"
+                      + " join organization.employee e on e.tenant_id=t.tenant_id and e.id=t.employee_id"
+                      + " where e.account_id=? and t.school_id=? and t.active",
+                  verified.accountId(),
+                  schoolId);
+          if (teacherId == null) throw new AccessDeniedException("当前账号未绑定该班级学校的在职教师");
+          var assignedTeacherId = teacherId.get("id", UUID.class);
+          var lessons =
+              sql.fetch(
+                  "select l.id,l.class_id,c.name as class_name,cur.name as curriculum_name,"
+                      + "l.lesson_date,l.starts_at,l.ends_at,l.room_name,l.topic,l.status,l.version "
+                      + "from teaching.lesson l join teaching.class c on c.id=l.class_id "
+                      + "join product.curriculum cur on cur.id=c.curriculum_id "
+                      + "where l.class_id=? and l.teacher_id=? "
+                      + "order by l.lesson_date,l.starts_at,l.id limit 1000",
+                  classId,
+                  assignedTeacherId);
+          if (lessons.isEmpty()) throw new AccessDeniedException("当前教师不是该班级的任课教师");
+
+          var memberRows =
+              sql.fetch(
+                  "select enrollment_id,joined_on,active from teaching.enrollment_class"
+                      + " where class_id=? order by joined_on,enrollment_id",
+                  classId);
+          var enrollmentsInClass =
+              memberRows.stream()
+                  .map(row -> enrollments.require(row.get("enrollment_id", UUID.class)))
+                  .toList();
+          var studentNames =
+              students.names(
+                  enrollmentsInClass.stream()
+                      .map(EnrollmentAccess.EnrollmentRef::studentId)
+                      .toList());
+          var members =
+              memberRows.map(
+                  row -> {
+                    var enrollment = enrollments.require(row.get("enrollment_id", UUID.class));
+                    return new ClassMemberView(
+                        enrollment.id(),
+                        studentNames.get(enrollment.studentId()),
+                        row.get("joined_on", LocalDate.class).toString(),
+                        Boolean.TRUE.equals(row.get("active", Boolean.class)) ? "ACTIVE" : "LEFT");
+                  });
+          var lessonViews =
+              lessons.map(
+                  row ->
+                      new TeacherLessonView(
+                          row.get("id", UUID.class),
+                          row.get("class_id", UUID.class),
+                          row.get("class_name", String.class),
+                          row.get("curriculum_name", String.class),
+                          date(row.get("lesson_date", LocalDate.class)),
+                          row.get("starts_at").toString(),
+                          row.get("ends_at").toString(),
+                          row.get("room_name", String.class),
+                          row.get("topic", String.class),
+                          row.get("status", String.class),
+                          row.get("version", Long.class)));
+          var classInfo =
+              new TeacherClassView(
+                  classId,
+                  classRow.get("name", String.class),
+                  classRow.get("curriculum_name", String.class),
+                  classRow.get("status", String.class),
+                  Boolean.TRUE.equals(classRow.get("group_training", Boolean.class)),
+                  lessonViews.size());
+          return new TeacherClassWorkbench(classInfo, members, lessonViews);
+        });
+  }
+
+  @Override
+  public DailyResourceSchedule dailyResourceSchedule(
+      UUID schoolId, String dayText, int page, int pageSize) {
+    var scope = actors.requireResourceScope("TEACHING");
+    if (page < 0 || page > 100_000 || pageSize < 1 || pageSize > 200)
+      throw new IllegalArgumentException("资源日报分页参数超出范围");
+    var day = workbenchDate(dayText);
+    return tx.execute(
+        scope.tenantId(),
+        () -> {
+          var verified = actors.requireResourceScopeInTransaction("TEACHING");
+          requireReadable(verified, schoolId);
+          var totals =
+              sql.fetchOne(
+                  "select count(*) as total,count(*) filter (where l.teacher_id is null) as missing_teacher,"
+                      + "count(*) filter (where l.room_id is null) as missing_room"
+                      + " from teaching.lesson l join teaching.class c on c.id=l.class_id"
+                      + " where c.school_id=? and l.lesson_date=?",
+                  schoolId,
+                  day);
+          var rows =
+              sql.fetch(
+                  "select l.id,c.name as class_name,l.lesson_date,l.starts_at,l.ends_at,"
+                      + "coalesce(t.name,l.teacher_name) as teacher_name,coalesce(r.name,l.room_name) as room_name,"
+                      + "l.topic,l.status,l.teacher_id,l.room_id from teaching.lesson l"
+                      + " join teaching.class c on c.id=l.class_id"
+                      + " left join organization.teacher t on t.id=l.teacher_id"
+                      + " left join organization.room r on r.id=l.room_id"
+                      + " where c.school_id=? and l.lesson_date=?"
+                      + " order by l.starts_at,c.name,l.id limit ? offset ?",
+                  schoolId,
+                  day,
+                  pageSize,
+                  (long) page * pageSize);
+          var slots =
+              rows.map(
+                  row ->
+                      new ResourceScheduleSlot(
+                          row.get("id", UUID.class),
+                          row.get("class_name", String.class),
+                          date(row.get("lesson_date", LocalDate.class)),
+                          row.get("starts_at").toString(),
+                          row.get("ends_at").toString(),
+                          row.get("teacher_name", String.class),
+                          row.get("room_name", String.class),
+                          row.get("topic", String.class),
+                          row.get("status", String.class)));
+          return new DailyResourceSchedule(
+              day.toString(),
+              slots,
+              totals.get("missing_teacher", Long.class).intValue(),
+              totals.get("missing_room", Long.class).intValue(),
+              totals.get("total", Long.class),
+              page,
+              pageSize);
         });
   }
 
@@ -177,13 +393,15 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
         () -> {
           requireLesson(scope, lessonId);
           return sql.fetch(
-                  "select enrollment_id,status from teaching.attendance where lesson_id=?"
+                  "select enrollment_id,status,attended_minutes from teaching.attendance where lesson_id=?"
                       + " order by enrollment_id",
                   lessonId)
               .map(
                   row ->
                       new AttendanceInput(
-                          row.get("enrollment_id", UUID.class), row.get("status", String.class)));
+                          row.get("enrollment_id", UUID.class),
+                          row.get("status", String.class),
+                          row.get("attended_minutes", Integer.class)));
         });
   }
 
@@ -258,6 +476,100 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
   public ClassView createClass(CreateClass command) {
     try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
       return createClassWithTrace(command);
+    }
+  }
+
+  @Override
+  public ClassView closeClass(UUID classId, LessonVersion command) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      if (classId == null || command == null || command.expectedVersion() == null)
+        throw new IllegalArgumentException("需要班级和版本");
+      var scope = actors.requireResourceScope("TEACHING");
+      return tx.execute(
+          scope.tenantId(),
+          () -> {
+            schools.lockTenant(scope.tenantId());
+            var verified = actors.requireResourceScopeInTransaction("TEACHING");
+            var row = requireClass(verified, classId);
+            var schoolId = row.get("school_id", UUID.class);
+            if (!verified.maintainableSchoolIds().contains(schoolId))
+              throw new AccessDeniedException("无班级维护权限");
+            if (!schools.require(schoolId).active()) throw new AccessDeniedException("学校已停用，不能结班");
+            if (!"ACTIVE".equals(row.get("status", String.class)))
+              throw new TeachingConflict("CLASS_NOT_ACTIVE");
+            if (!row.get("version", Long.class).equals(command.expectedVersion()))
+              throw new TeachingConflict("VERSION_CONFLICT");
+            if (sql.fetchExists(
+                sql.selectOne()
+                    .from("teaching.lesson")
+                    .where("class_id=? and status<>'CLOSED'", classId)))
+              throw new TeachingConflict("CLASS_HAS_OPEN_LESSONS");
+            int changed =
+                sql.execute(
+                    "update teaching.class set status='CLOSED',version=version+1 where id=? and version=? and status='ACTIVE'",
+                    classId,
+                    command.expectedVersion());
+            if (changed != 1) throw new TeachingConflict("VERSION_CONFLICT");
+            sql.execute(
+                "update teaching.enrollment_class set active=false where class_id=? and active",
+                classId);
+            audit(verified, "CLASS_CLOSED", classId, schoolId, "members-ended");
+            return classView(requireClass(verified, classId), schools.require(schoolId).name());
+          });
+    }
+  }
+
+  @Override
+  public ClassView cancelClass(UUID classId, CancelClass command) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      if (classId == null
+          || command == null
+          || command.requestId() == null
+          || command.expectedVersion() == null) throw new IllegalArgumentException("需要班级、请求身份与版本");
+      var reason = text(command.reason(), 200, "取消原因");
+      if (reason == null) throw new IllegalArgumentException("取消原因必填");
+      var scope = actors.requireResourceScope("TEACHING");
+      var fingerprint =
+          fingerprint(
+              "CLASS_CANCEL", classId.toString(), command.expectedVersion().toString(), reason);
+      return tx.execute(
+          scope.tenantId(),
+          () -> {
+            schools.lockTenant(scope.tenantId());
+            var verified = actors.requireResourceScopeInTransaction("TEACHING");
+            var current =
+                sql.fetchOne(
+                    "select school_id,status,version from teaching.class where id=? for update",
+                    classId);
+            if (current == null) throw new AccessDeniedException("班级不存在或不可访问");
+            var schoolId = current.get("school_id", UUID.class);
+            if (!verified.maintainableSchoolIds().contains(schoolId))
+              throw new AccessDeniedException("无该学校班级维护权限");
+            var school = schools.require(schoolId);
+            if (!school.active()) throw new AccessDeniedException("学校已停用，不能取消班级");
+            var previous = previousRequest(scope, command.requestId(), "CLASS", fingerprint);
+            if (previous != null) return classView(requireClass(verified, previous), school.name());
+            if (!current.get("version", Long.class).equals(command.expectedVersion()))
+              throw new TeachingConflict("VERSION_CONFLICT");
+            if (!"ACTIVE".equals(current.get("status", String.class)))
+              throw new TeachingConflict("CLASS_NOT_ACTIVE");
+            if (sql.fetchOne("select 1 from teaching.lesson where class_id=? limit 1", classId)
+                != null) throw new TeachingConflict("CLASS_HAS_LESSONS");
+            if (sql.fetchOne(
+                    "select 1 from teaching.enrollment_class where class_id=? and active limit 1",
+                    classId)
+                != null) throw new TeachingConflict("CLASS_HAS_ACTIVE_MEMBERS");
+            int changed =
+                sql.execute(
+                    "update teaching.class set status='CANCELLED',version=version+1"
+                        + " where id=? and status='ACTIVE' and version=?",
+                    classId,
+                    command.expectedVersion());
+            if (changed != 1) throw new TeachingConflict("VERSION_CONFLICT");
+            rememberRequest(scope, command.requestId(), "CLASS", classId, fingerprint);
+            audit(scope, "CLASS_CANCELLED", classId, schoolId, "reason=" + reason);
+            return classView(requireClass(verified, classId), school.name());
+          });
     }
   }
 
@@ -466,26 +778,41 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
                       row.get("class_id", UUID.class))
                   .map(item -> item.get("enrollment_id", UUID.class));
           if (members.isEmpty()) throw new TeachingConflict("CLASS_HAS_NO_MEMBER");
-          var provided = new HashMap<UUID, String>();
+          var provided = new HashMap<UUID, AttendanceInput>();
           for (var input : command.records()) {
             if (input == null
                 || input.enrollmentId() == null
                 || !ATTENDANCE.contains(input.status()))
               throw new IllegalArgumentException("考勤状态无效");
-            if (provided.put(input.enrollmentId(), input.status()) != null)
+            if ("PARTIAL".equals(input.status())) {
+              var duration =
+                  java.time.Duration.between(
+                          row.get("starts_at", LocalTime.class),
+                          row.get("ends_at", LocalTime.class))
+                      .toMinutes();
+              if (input.attendedMinutes() == null
+                  || input.attendedMinutes() <= 0
+                  || input.attendedMinutes() >= duration)
+                throw new IllegalArgumentException("部分缺勤分钟必须大于 0 且少于课次时长");
+            } else if (input.attendedMinutes() != null) {
+              throw new IllegalArgumentException("仅部分缺勤可以填写实际出勤分钟");
+            }
+            if (provided.put(input.enrollmentId(), input) != null)
               throw new IllegalArgumentException("同一次考勤出现重复报名");
           }
           if (!provided.keySet().equals(new HashSet<>(members)))
             throw new TeachingConflict("ATTENDANCE_MUST_COVER_MEMBERS");
           for (var entry : provided.entrySet())
             sql.execute(
-                "insert into teaching.attendance(tenant_id,lesson_id,enrollment_id,status)"
-                    + " values (?,?,?,?) on conflict (lesson_id,enrollment_id)"
-                    + " do update set status=excluded.status,recorded_at=CURRENT_TIMESTAMP",
+                "insert into teaching.attendance(tenant_id,lesson_id,enrollment_id,status,attended_minutes)"
+                    + " values (?,?,?,?,?) on conflict (lesson_id,enrollment_id)"
+                    + " do update set status=excluded.status,attended_minutes=excluded.attended_minutes,"
+                    + " recorded_at=CURRENT_TIMESTAMP",
                 record.tenantId(),
                 id,
                 entry.getKey(),
-                entry.getValue());
+                entry.getValue().status(),
+                entry.getValue().attendedMinutes());
           int updated =
               sql.execute(
                   "update teaching.lesson set status='CONFIRMED',confirmed_at=CURRENT_TIMESTAMP,"
@@ -529,17 +856,31 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
             throw new TeachingConflict("VERSION_CONFLICT");
           var lessonHours = row.get("hours", BigDecimal.class);
           var lessonDate = row.get("lesson_date", LocalDate.class);
-          var present =
+          var attending =
               sql.fetch(
-                  "select a.enrollment_id from teaching.attendance a where a.lesson_id=? and a.status='PRESENT'",
+                  "select a.enrollment_id,a.status,a.attended_minutes from teaching.attendance a"
+                      + " where a.lesson_id=? and a.status in ('PRESENT','PARTIAL')",
                   id);
+          var lessonDurationMinutes =
+              java.time.Duration.between(
+                      row.get("starts_at", LocalTime.class), row.get("ends_at", LocalTime.class))
+                  .toMinutes();
           var lessonCurriculum =
               sql.fetchOne(
                       "select curriculum_id from teaching.class where id=?",
                       row.get("class_id", UUID.class))
                   .get("curriculum_id", UUID.class);
-          for (var item : present) {
+          for (var item : attending) {
             var enrollmentId = item.get("enrollment_id", UUID.class);
+            var consumedLessonHours = lessonHours;
+            if ("PARTIAL".equals(item.get("status", String.class))) {
+              consumedLessonHours =
+                  lessonHours
+                      .multiply(BigDecimal.valueOf(item.get("attended_minutes", Integer.class)))
+                      .divide(BigDecimal.valueOf(lessonDurationMinutes), 2, RoundingMode.HALF_UP);
+              if (consumedLessonHours.signum() <= 0)
+                throw new TeachingConflict("PARTIAL_ATTENDANCE_TOO_SHORT_TO_BILL");
+            }
             var enrollment = enrollments.require(enrollmentId);
             var mode = enrollment.settlementMode();
             if (mode < 1 || mode > 5) throw new TeachingConflict("SETTLEMENT_MODE_UNSUPPORTED");
@@ -599,20 +940,20 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
             var remaining = capHours.subtract(consumed).min(totalRemaining);
             if (remaining.signum() <= 0) continue;
             // 拼接/截断规则未确认前明确拒绝跨界，整个关课事务回滚，不能整节超耗。
-            if (lessonHours.compareTo(remaining) > 0)
+            if (consumedLessonHours.compareTo(remaining) > 0)
               throw new TeachingConflict("LESSON_HOURS_EXCEED_REMAINING");
             var unit = fee.divide(feeHours, 6, RoundingMode.HALF_UP);
-            var amount = unit.multiply(lessonHours).setScale(2, RoundingMode.HALF_UP);
+            var amount = unit.multiply(consumedLessonHours).setScale(2, RoundingMode.HALF_UP);
             // 尾差修正：最后一段课时消耗时补齐到该范围内的应收总额。
             var trailingFee =
                 mode == 1
                     ? fee.subtract(cancelledAmount(enrollmentId))
                     : mode == 3 ? fee.subtract(courseRefund) : fee;
-            if (byCourse && courseConsumed.add(lessonHours).compareTo(capHours) == 0)
+            if (byCourse && courseConsumed.add(consumedLessonHours).compareTo(capHours) == 0)
               amount = trailingFee.subtract(consumedAmount(enrollmentId, consumedCurriculum));
             else if (mode != 2
                 && !byCourse
-                && totalConsumed.add(lessonHours).compareTo(capHours) == 0)
+                && totalConsumed.add(consumedLessonHours).compareTo(capHours) == 0)
               amount = trailingFee.subtract(consumedAmount(enrollmentId, null));
             if (amount.signum() < 0) amount = BigDecimal.ZERO;
             sql.execute(
@@ -624,7 +965,7 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
                 close.tenantId(),
                 enrollmentId,
                 id,
-                lessonHours,
+                consumedLessonHours,
                 amount,
                 mode,
                 fee,

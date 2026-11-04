@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
   Button,
+  Card,
   Input,
   Modal,
   Select,
@@ -15,6 +16,9 @@ import type { components } from "../../shared/generated/api";
 import { CustomerFollowups } from "./CustomerFollowups";
 
 type Customer = components["schemas"]["Customer"];
+type MergedCustomer = components["schemas"]["MergedCustomer"];
+type CustomerStudentLink = components["schemas"]["CustomerStudentLinkView"];
+type CustomerConversion = components["schemas"]["CustomerConversionResult"];
 type Pending = {
   requestId: string;
   schoolId: string;
@@ -75,6 +79,7 @@ export function CustomerWorkspace({
   );
   const [schoolId, setSchoolId] = useState<string>();
   const [page, setPage] = useState(0);
+  const [poolPage, setPoolPage] = useState(0);
   const [channelPage, setChannelPage] = useState(0);
   const [channelId, setChannelId] = useState<string | undefined>(
     () => pending?.channelId ?? undefined,
@@ -86,6 +91,19 @@ export function CustomerWorkspace({
   const [busy, setBusy] = useState(false);
   const [followupTarget, setFollowupTarget] = useState<string | null>(null);
   const [phoneDetail, setPhoneDetail] = useState<string | null>(null);
+  const [mergeSource, setMergeSource] = useState<Customer | null>(null);
+  const [conversionTarget, setConversionTarget] = useState<Customer | null>(
+    null,
+  );
+  const [studentName, setStudentName] = useState("");
+  const [contactRelation, setContactRelation] = useState("GUARDIAN");
+  const [conversionError, setConversionError] = useState("");
+  const [conversionResult, setConversionResult] =
+    useState<CustomerConversion | null>(null);
+  const [conversionBusy, setConversionBusy] = useState(false);
+  const conversionGuard = useRef(false);
+  const [mergePrimaryId, setMergePrimaryId] = useState<string>();
+  const [mergeHistoryFor, setMergeHistoryFor] = useState<string | null>(null);
   const guard = useRef(false);
   const schools = useQuery({
     queryKey: ["customer-schools"],
@@ -106,6 +124,35 @@ export function CustomerWorkspace({
   const visibleSchools = schools.error ? [] : (schools.data ?? []);
   const current = pending?.schoolId ?? schoolId ?? visibleSchools[0]?.id;
   const currentSchool = visibleSchools.find((item) => item.id === current);
+  const reminderDate = new Date();
+  const reminderThroughOn = `${reminderDate.getFullYear()}-${String(reminderDate.getMonth() + 1).padStart(2, "0")}-${String(reminderDate.getDate()).padStart(2, "0")}`;
+  const reminders = useQuery({
+    queryKey: ["customer-reminders", current, reminderThroughOn],
+    enabled: !!current && !!currentSchool?.phoneReadable,
+    queryFn: async ({ signal }) => {
+      const { data, response } = await api.GET(
+        "/api/admissions/customers/reminders",
+        {
+          params: {
+            query: {
+              schoolId: current!,
+              throughOn: reminderThroughOn,
+              page: 0,
+              size: 20,
+            },
+          },
+          signal,
+        },
+      );
+      if (response.status === 401) {
+        onUnauthorized();
+        throw new Error("登录已失效");
+      }
+      if (!response.ok || !data)
+        throw new Error("无法读取跟进提醒，请核对权限。");
+      return data;
+    },
+  });
   const rows = useQuery({
     queryKey: ["customers", current, page],
     enabled: !!current,
@@ -121,6 +168,61 @@ export function CustomerWorkspace({
       if (!response.ok || !data)
         throw new Error("无法读取本人客户，请核对权限并刷新。");
       return data;
+    },
+  });
+  const poolRows = useQuery({
+    queryKey: ["customer-pool", current, poolPage],
+    enabled: !!current && !!currentSchool?.poolReadable,
+    queryFn: async ({ signal }) => {
+      const { data, response } = await api.GET(
+        "/api/admissions/customers/pool",
+        {
+          params: { query: { schoolId: current!, page: poolPage, size: 20 } },
+          signal,
+        },
+      );
+      if (response.status === 401) {
+        onUnauthorized();
+        throw new Error("登录已失效");
+      }
+      if (!response.ok || !data)
+        throw new Error("无法读取学校公海客户，请核对权限。");
+      return data;
+    },
+  });
+  const mergedRows = useQuery({
+    queryKey: ["customer-merges", mergeHistoryFor],
+    enabled: !!mergeHistoryFor,
+    queryFn: async ({ signal }): Promise<MergedCustomer[]> => {
+      const { data, response } = await api.GET(
+        "/api/admissions/customers/{id}/merges",
+        { params: { path: { id: mergeHistoryFor! } }, signal },
+      );
+      if (response.status === 401) {
+        onUnauthorized();
+        throw new Error("登录已失效");
+      }
+      if (!response.ok || !data) throw new Error("无法读取客户合并记录");
+      return data;
+    },
+  });
+  const conversionLink = useQuery({
+    queryKey: ["customer-student-link", accountKey, conversionTarget?.id],
+    enabled: !!conversionTarget?.id,
+    queryFn: async ({ signal }): Promise<CustomerStudentLink | null> => {
+      const { data, response } = await api.GET(
+        "/api/admissions/customers/{id}/student-link",
+        {
+          params: { path: { id: conversionTarget!.id! } },
+          signal,
+        },
+      );
+      if (response.status === 401) {
+        onUnauthorized();
+        throw new Error("登录已失效，请重新登录");
+      }
+      if (!response.ok) throw new Error("无法读取客户转学员关联");
+      return data ?? null;
     },
   });
   const channels = useQuery({
@@ -142,7 +244,10 @@ export function CustomerWorkspace({
     },
   });
   const canEdit =
-    !!currentSchool?.maintainable && !schools.error && !rows.error;
+    !!currentSchool?.maintainable &&
+    !!currentSchool.phoneReadable &&
+    !schools.error &&
+    !rows.error;
   const visibleChannels = channels.error ? null : channels.data;
   const channelUnavailable = !!channelId && !visibleChannels;
   useEffect(() => {
@@ -247,7 +352,7 @@ export function CustomerWorkspace({
       setChannelId(undefined);
       setDuplicate(null);
       setPage(0);
-      setNotice("客户已录入，仅创建人可查看。");
+      setNotice("客户已录入，当前负责人可查看。");
       await client.invalidateQueries({ queryKey: ["customers", current] });
     } catch {
       setNotice(
@@ -359,10 +464,223 @@ export function CustomerWorkspace({
       setBusy(false);
     }
   }
+  async function poolAction(
+    id: string,
+    version: number,
+    action: "claim" | "release-to-pool",
+  ) {
+    if (guard.current || !current) return;
+    guard.current = true;
+    setBusy(true);
+    setNotice("");
+    try {
+      const token = await csrf();
+      const { response } = await api.POST(
+        action === "claim"
+          ? "/api/admissions/customers/{id}/claim"
+          : "/api/admissions/customers/{id}/release-to-pool",
+        {
+          params: { path: { id } },
+          headers: { [token.headerName!]: token.token! },
+          body: { expectedVersion: version },
+        },
+      );
+      if (response.status === 401) {
+        onUnauthorized();
+        return;
+      }
+      if (!response.ok) {
+        setNotice(
+          response.status === 409
+            ? "客户归属已变化，请刷新列表后重试。"
+            : "客户归属调整失败，请核对权限后重试。",
+        );
+        return;
+      }
+      setNotice(action === "claim" ? "已认领客户。" : "客户已转入公海。");
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ["customers", current] }),
+        client.invalidateQueries({ queryKey: ["customer-pool", current] }),
+      ]);
+    } catch {
+      setNotice("操作结果未确认，请刷新本人客户和公海后核对。");
+    } finally {
+      guard.current = false;
+      setBusy(false);
+    }
+  }
+  async function mergeCustomer() {
+    if (!mergeSource?.id || !mergePrimaryId || guard.current) return;
+    const primary = rows.data?.items?.find(
+      (item) => item.id === mergePrimaryId,
+    );
+    if (!primary?.id || !current) return;
+    guard.current = true;
+    setBusy(true);
+    setNotice("");
+    try {
+      const token = await csrf();
+      const { response } = await api.POST(
+        "/api/admissions/customers/{id}/merge",
+        {
+          params: { path: { id: mergeSource.id } },
+          headers: { [token.headerName!]: token.token! },
+          body: {
+            primaryId: primary.id,
+            expectedSourceVersion: mergeSource.version ?? 0,
+            expectedPrimaryVersion: primary.version ?? 0,
+          },
+        },
+      );
+      if (response.status === 401) {
+        onUnauthorized();
+        return;
+      }
+      if (!response.ok) {
+        setNotice("合并未完成，请刷新客户列表并核对版本及负责人权限。");
+        return;
+      }
+      setNotice("客户已合并；原档及跟进历史保留，可从主档的合并记录撤销。");
+      setMergeSource(null);
+      setMergePrimaryId(undefined);
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ["customers", current] }),
+        client.invalidateQueries({ queryKey: ["customer-merges", primary.id] }),
+      ]);
+    } catch {
+      setNotice("合并结果未确认，请刷新本人客户和合并记录后核对。");
+    } finally {
+      guard.current = false;
+      setBusy(false);
+    }
+  }
+  async function reverseCustomerMerge(source: MergedCustomer) {
+    if (!source.sourceId || guard.current || !current) return;
+    guard.current = true;
+    setBusy(true);
+    setNotice("");
+    try {
+      const token = await csrf();
+      const { response } = await api.POST(
+        "/api/admissions/customers/{id}/merge/reverse",
+        {
+          params: { path: { id: source.sourceId } },
+          headers: { [token.headerName!]: token.token! },
+          body: { expectedVersion: source.version ?? 0 },
+        },
+      );
+      if (response.status === 401) {
+        onUnauthorized();
+        return;
+      }
+      if (!response.ok) {
+        setNotice("撤销合并失败，请刷新记录后核对版本和负责人权限。");
+        return;
+      }
+      setNotice("已撤销合并，原客户档案已恢复到本人客户列表。");
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ["customers", current] }),
+        client.invalidateQueries({
+          queryKey: ["customer-merges", mergeHistoryFor],
+        }),
+      ]);
+    } catch {
+      setNotice("撤销结果未确认，请刷新本人客户和合并记录后核对。");
+    } finally {
+      guard.current = false;
+      setBusy(false);
+    }
+  }
+  async function convertCustomerToStudent() {
+    if (!conversionTarget?.id || !current || conversionGuard.current) return;
+    const cleanName = studentName.trim();
+    if (!cleanName) {
+      setConversionError("请填写学员姓名。");
+      return;
+    }
+    conversionGuard.current = true;
+    setConversionBusy(true);
+    setConversionError("");
+    try {
+      const values = [
+        conversionTarget.id,
+        conversionTarget.version ?? 0,
+        cleanName,
+        contactRelation,
+      ];
+      const attemptKey = `teraschool.customer-conversion.${accountKey}.${conversionTarget.id}`;
+      const digest = await fingerprint("customer-conversion", values);
+      let requestId: string = crypto.randomUUID();
+      try {
+        const saved = JSON.parse(
+          localStorage.getItem(attemptKey) ?? "null",
+        ) as { requestId?: unknown; fingerprint?: unknown } | null;
+        if (
+          typeof saved?.requestId === "string" &&
+          saved.fingerprint === digest
+        )
+          requestId = saved.requestId;
+      } catch {
+        /* 损坏的身份记录按新请求处理，不读取其中其他字段。 */
+      }
+      localStorage.setItem(
+        attemptKey,
+        JSON.stringify({ requestId, fingerprint: digest }),
+      );
+      const token = await csrf();
+      const { data, response } = await api.POST(
+        "/api/admissions/customers/{id}/convert-to-student",
+        {
+          params: { path: { id: conversionTarget.id } },
+          headers: { [token.headerName!]: token.token! },
+          body: {
+            requestId,
+            expectedCustomerVersion: conversionTarget.version ?? 0,
+            campusId: undefined,
+            studentName: cleanName,
+            studentNameEnglish: undefined,
+            sex: "UNKNOWN",
+            birthday: undefined,
+            certType: undefined,
+            certCode: undefined,
+            studentPhone: undefined,
+            email: undefined,
+            customerContactRelation: contactRelation,
+            confirmDuplicate: false,
+          },
+        },
+      );
+      if (response.status === 401) {
+        onUnauthorized();
+        return;
+      }
+      if (!response.ok || !data?.conversion?.studentId) {
+        setConversionError(
+          response.status === 409
+            ? "客户状态已变化或已转化，请刷新并核对。"
+            : "转化结果未确认。请保留本表内容后重试。",
+        );
+        return;
+      }
+      localStorage.removeItem(attemptKey);
+      setConversionResult(data);
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ["customers", current] }),
+        client.invalidateQueries({
+          queryKey: ["customer-student-link", accountKey, conversionTarget.id],
+        }),
+      ]);
+    } catch {
+      setConversionError("转化结果未确认。请保留本表内容后重试。");
+    } finally {
+      conversionGuard.current = false;
+      setConversionBusy(false);
+    }
+  }
   return (
     <section>
       <Typography.Paragraph>
-        这里只显示您创建的客户。电话默认脱敏，查看完整号码和录入查重需要单独授权；查重只覆盖本人有完整电话权限的学校。
+        这里只显示您负责的客户。电话默认脱敏，查看完整号码和录入查重需要单独授权；同校公海需要独立权限，认领后成为当前负责人。可将本人同校重复客户合并到明确选择的主档，并保留撤销入口。
       </Typography.Paragraph>
       {schools.error ? (
         <Alert type="error" title={schools.error.message} showIcon />
@@ -417,6 +735,57 @@ export function CustomerWorkspace({
           showIcon
           style={{ marginBottom: 12 }}
         />
+      ) : null}
+      {currentSchool?.phoneReadable ? (
+        <Card
+          title="待回访提醒（本人客户）"
+          size="small"
+          style={{ marginTop: 12 }}
+          extra={
+            <Button
+              size="small"
+              onClick={() => void reminders.refetch()}
+              loading={reminders.isFetching}
+            >
+              刷新
+            </Button>
+          }
+        >
+          {reminders.error ? (
+            <Alert type="error" title={reminders.error.message} showIcon />
+          ) : null}
+          <Table
+            rowKey={(row) => row.id!}
+            size="small"
+            loading={reminders.isFetching}
+            dataSource={reminders.data?.items ?? []}
+            pagination={false}
+            locale={{ emptyText: "当前没有到期提醒" }}
+            columns={[
+              { title: "客户", dataIndex: "customerName" },
+              { title: "下次联系", dataIndex: "nextContactOn" },
+              { title: "最近跟进", dataIndex: "occurredOn" },
+              {
+                title: "跟进摘要",
+                dataIndex: "content",
+                ellipsis: true,
+              },
+              {
+                title: "操作",
+                render: (_, row) =>
+                  row.customerId ? (
+                    <Button
+                      size="small"
+                      disabled={!currentSchool.phoneReadable}
+                      onClick={() => setFollowupTarget(row.customerId!)}
+                    >
+                      查看跟进
+                    </Button>
+                  ) : null,
+              },
+            ]}
+          />
+        </Card>
       ) : null}
       <Space wrap>
         <Select
@@ -541,25 +910,123 @@ export function CustomerWorkspace({
           {
             title: "操作",
             render: (_, row) =>
-              currentSchool?.phoneReadable &&
-              !rows.error &&
-              !schools.error &&
-              row.id ? (
+              !rows.error && !schools.error && row.id ? (
                 <Space>
-                  <Button disabled={busy} onClick={() => void reveal(row.id!)}>
-                    查看完整电话
-                  </Button>
-                  <Button
-                    disabled={busy}
-                    onClick={() => setFollowupTarget(row.id!)}
-                  >
-                    跟进记录
-                  </Button>
+                  {currentSchool?.phoneReadable ? (
+                    <>
+                      <Button
+                        disabled={busy}
+                        onClick={() => void reveal(row.id!)}
+                      >
+                        查看完整电话
+                      </Button>
+                      <Button
+                        disabled={busy}
+                        onClick={() => setFollowupTarget(row.id!)}
+                      >
+                        跟进记录
+                      </Button>
+                    </>
+                  ) : null}
+                  {currentSchool?.poolManageable ? (
+                    <Button
+                      disabled={busy}
+                      onClick={() =>
+                        void poolAction(
+                          row.id!,
+                          row.version ?? 0,
+                          "release-to-pool",
+                        )
+                      }
+                    >
+                      转入公海
+                    </Button>
+                  ) : null}
+                  {currentSchool?.maintainable ? (
+                    <>
+                      {currentSchool.phoneReadable ? (
+                        <Button
+                          disabled={busy}
+                          onClick={() => {
+                            setConversionTarget(row);
+                            setStudentName("");
+                            setContactRelation("GUARDIAN");
+                            setConversionError("");
+                            setConversionResult(null);
+                          }}
+                        >
+                          转为学员
+                        </Button>
+                      ) : null}
+                      <Button
+                        disabled={busy}
+                        onClick={() => {
+                          setMergeSource(row);
+                          setMergePrimaryId(undefined);
+                        }}
+                      >
+                        合并客户
+                      </Button>
+                      <Button
+                        disabled={busy}
+                        onClick={() => setMergeHistoryFor(row.id!)}
+                      >
+                        合并记录
+                      </Button>
+                    </>
+                  ) : null}
                 </Space>
               ) : null,
           },
         ]}
       />
+      {currentSchool?.poolReadable ? (
+        <Card title="学校公海" size="small" style={{ marginTop: 20 }}>
+          {poolRows.error ? (
+            <Alert type="error" title={poolRows.error.message} showIcon />
+          ) : null}
+          <Table<Customer>
+            rowKey={(row) => row.id!}
+            loading={poolRows.isFetching}
+            dataSource={poolRows.data?.items ?? []}
+            pagination={false}
+            locale={{ emptyText: "当前学校公海暂无客户" }}
+            columns={[
+              { title: "客户姓名", dataIndex: "name" },
+              { title: "联系电话", dataIndex: "maskedPhone" },
+              {
+                title: "操作",
+                render: (_, row) =>
+                  row.id ? (
+                    <Button
+                      disabled={busy || !currentSchool.maintainable}
+                      onClick={() =>
+                        void poolAction(row.id!, row.version ?? 0, "claim")
+                      }
+                    >
+                      认领
+                    </Button>
+                  ) : null,
+              },
+            ]}
+          />
+          <Space style={{ marginTop: 8 }}>
+            <Button
+              disabled={poolPage === 0 || busy}
+              onClick={() => setPoolPage(poolPage - 1)}
+            >
+              上一页
+            </Button>
+            <span>第 {poolPage + 1} 页</span>
+            <Button
+              disabled={!!poolRows.error || !poolRows.data?.hasMore || busy}
+              onClick={() => setPoolPage(poolPage + 1)}
+            >
+              下一页
+            </Button>
+          </Space>
+        </Card>
+      ) : null}
       <Space style={{ marginTop: 12 }}>
         <Button
           disabled={page === 0 || busy}
@@ -592,10 +1059,153 @@ export function CustomerWorkspace({
           customerId={followupTarget}
           accountKey={accountKey}
           canEdit={canEdit}
-          onClose={() => setFollowupTarget(null)}
+          onClose={() => {
+            setFollowupTarget(null);
+            void client.invalidateQueries({
+              queryKey: ["customer-reminders", current],
+            });
+          }}
           onUnauthorized={onUnauthorized}
         />
       ) : null}
+      <Modal
+        title="客户转学员"
+        open={!!conversionTarget}
+        confirmLoading={conversionBusy}
+        okText={conversionResult ? "完成" : "创建学员并关联"}
+        okButtonProps={{
+          disabled:
+            !!conversionLink.data?.studentId ||
+            !!conversionResult?.conversion?.studentId,
+        }}
+        onOk={() => {
+          if (conversionResult?.conversion?.studentId) {
+            setConversionTarget(null);
+            return;
+          }
+          void convertCustomerToStudent();
+        }}
+        onCancel={() => {
+          setConversionTarget(null);
+          setConversionResult(null);
+        }}
+      >
+        <Typography.Paragraph>
+          学员档案不会自动沿用客户姓名。请填写学员姓名，并确认客户联系人与学员的关系；客户姓名和电话会保存为主要联系人。重复学员提示只供核对，不会自动合并档案。
+        </Typography.Paragraph>
+        {conversionLink.error ? (
+          <Alert type="error" title={conversionLink.error.message} showIcon />
+        ) : null}
+        {conversionError ? (
+          <Alert
+            type="error"
+            title={conversionError}
+            showIcon
+            style={{ marginBottom: 12 }}
+          />
+        ) : null}
+        {conversionResult?.conversion?.studentId ||
+        conversionLink.data?.studentId ? (
+          <>
+            <Typography.Paragraph>
+              已关联学员档案：
+              {conversionResult?.conversion?.studentId ??
+                conversionLink.data?.studentId}
+            </Typography.Paragraph>
+            {(conversionResult?.creation?.possibleDuplicates?.length ?? 0) >
+            0 ? (
+              <Alert
+                type="warning"
+                title={`创建时发现 ${conversionResult!.creation!.possibleDuplicates!.length} 条可能重复的学员档案，请进入学员档案核对。`}
+                showIcon
+              />
+            ) : null}
+          </>
+        ) : (
+          <Space orientation="vertical" style={{ width: "100%" }}>
+            <Input
+              aria-label="学员姓名"
+              placeholder="学员姓名"
+              maxLength={50}
+              value={studentName}
+              onChange={(event) => setStudentName(event.target.value)}
+              disabled={conversionBusy}
+            />
+            <Select
+              aria-label="客户联系人与学员关系"
+              value={contactRelation}
+              onChange={setContactRelation}
+              disabled={conversionBusy}
+              options={[
+                { value: "FATHER", label: "父亲" },
+                { value: "MOTHER", label: "母亲" },
+                { value: "GUARDIAN", label: "监护人" },
+                { value: "OTHER", label: "其他" },
+              ]}
+            />
+          </Space>
+        )}
+      </Modal>
+      <Modal
+        title="合并重复客户"
+        open={!!mergeSource}
+        confirmLoading={busy}
+        okText="确认合并"
+        okButtonProps={{ disabled: !mergePrimaryId }}
+        onOk={() => void mergeCustomer()}
+        onCancel={() => {
+          setMergeSource(null);
+          setMergePrimaryId(undefined);
+        }}
+      >
+        <Typography.Paragraph>
+          将“{mergeSource?.name}
+          ”作为副档合并到所选主档。副档会从本人客户列表隐藏，原档、跟进和请求记录保留；可从主档撤销合并。此操作不迁移学员或资金。
+        </Typography.Paragraph>
+        <Select
+          aria-label="合并主档客户"
+          placeholder="选择保留的主档客户"
+          value={mergePrimaryId}
+          onChange={setMergePrimaryId}
+          style={{ width: "100%" }}
+          options={(rows.data?.items ?? [])
+            .filter((item) => item.id && item.id !== mergeSource?.id)
+            .map((item) => ({ value: item.id!, label: item.name }))}
+        />
+      </Modal>
+      <Modal
+        title="已合并的客户副档"
+        open={!!mergeHistoryFor}
+        footer={<Button onClick={() => setMergeHistoryFor(null)}>关闭</Button>}
+        onCancel={() => setMergeHistoryFor(null)}
+      >
+        {mergedRows.error ? (
+          <Alert type="error" title={mergedRows.error.message} showIcon />
+        ) : null}
+        <Table<MergedCustomer>
+          rowKey={(row) => row.sourceId!}
+          size="small"
+          loading={mergedRows.isFetching}
+          dataSource={mergedRows.data ?? []}
+          pagination={false}
+          locale={{ emptyText: "该客户暂无合并副档" }}
+          columns={[
+            { title: "副档客户", dataIndex: "name" },
+            { title: "合并时间", dataIndex: "mergedAt" },
+            {
+              title: "操作",
+              render: (_: unknown, row) => (
+                <Button
+                  disabled={busy}
+                  onClick={() => void reverseCustomerMerge(row)}
+                >
+                  撤销合并
+                </Button>
+              ),
+            },
+          ]}
+        />
+      </Modal>
       <Modal
         title="完整联系电话"
         open={

@@ -50,4 +50,19 @@ class ApprovalHttp {
   ApprovalRequestView decide(@PathVariable UUID id, @RequestBody DecideApproval command) {
     return commands.decide(id, command);
   }
+
+  /** 申请人可撤回仍待审且版本匹配的审批单。 */
+  @PostMapping(value = "/api/approval/requests/{id}/withdraw", consumes = "application/json")
+  ApprovalRequestView withdraw(@PathVariable UUID id, @RequestBody WithdrawApproval command) {
+    return commands.withdraw(id, command.expectedVersion());
+  }
+
+  record WithdrawApproval(long expectedVersion) {}
+
+  @PostMapping(value = "/api/approval/requests/{id}/expire", consumes = "application/json")
+  ApprovalRequestView expire(@PathVariable UUID id, @RequestBody ExpireApproval command) {
+    return commands.expire(id, command.expectedVersion(), command.reason());
+  }
+
+  record ExpireApproval(long expectedVersion, String reason) {}
 }

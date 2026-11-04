@@ -15,7 +15,9 @@ const capabilities = {
   canRead: true,
   canLock: true,
   canUnlock: true,
-  schools: [{ id: "school-1", name: "期间学校", canLock: true, canUnlock: true }],
+  schools: [
+    { id: "school-1", name: "期间学校", canLock: true, canUnlock: true },
+  ],
 };
 
 function renderWithClient(ui: React.ReactElement) {
@@ -53,6 +55,8 @@ it("列出十二个月并按状态标注，锁定月份显示解锁按钮", asyn
           },
         ],
       };
+    if (path === "/api/finance/reports/funds-reconciliation")
+      return { response: { ok: false, status: 403 } };
     throw new Error("unexpected path " + path);
   });
   renderWithClient(<PeriodManager onUnauthorized={vi.fn()} />);
@@ -62,6 +66,34 @@ it("列出十二个月并按状态标注，锁定月份显示解锁按钮", asyn
   expect(screen.getByRole("button", { name: /解\s*锁/ })).toBeTruthy();
   expect(screen.getByRole("button", { name: /锁\s*定/ })).toBeTruthy();
   expect(screen.getByText(/已锁定 1 个月/)).toBeTruthy();
+});
+
+it("对账卡片显示累计平衡式分项和差额", async () => {
+  get.mockImplementation(async (path: string) => {
+    if (path === "/api/finance/capabilities")
+      return { response: { ok: true, status: 200 }, data: capabilities };
+    if (path === "/api/finance/periods")
+      return { response: { ok: true, status: 200 }, data: [] };
+    if (path === "/api/finance/reports/funds-reconciliation")
+      return {
+        response: { ok: true, status: 200 },
+        data: {
+          schoolId: "school-1",
+          openingAmount: "100.00",
+          netReceiptAmount: "1000.00",
+          cashRefundAmount: "50.00",
+          activeAllocatedAmount: "300.00",
+          accountBalanceAmount: "750.00",
+          differenceAmount: "0.00",
+        },
+      };
+    throw new Error("unexpected path " + path);
+  });
+  renderWithClient(<PeriodManager onUnauthorized={vi.fn()} />);
+  expect(await screen.findByText("资金总账对账（累计）")).toBeTruthy();
+  expect(screen.getByText("1000.00")).toBeTruthy();
+  expect(screen.getByText("0.00")).toBeTruthy();
+  expect(screen.getByText(/不按所选年份或财务期间筛选/)).toBeTruthy();
 });
 
 it("解锁必须填写原因并携带版本", async () => {

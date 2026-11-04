@@ -26,11 +26,18 @@ const ACTION_LABEL: Record<string, string> = {
   ENROLLMENT_DISCOUNT: "报名优惠调整",
   SERVICE_FEE_REFUND: "服务费退费",
   SERVICE_FEE_REVERSAL: "服务费退费冲正",
+  ENROLLMENT_TRANSFER: "转班",
+  ENROLLMENT_WITHDRAWAL: "退班",
+  ENROLLMENT_DEFER: "延期",
+  ENROLLMENT_REDUCTION: "报名减款",
+  SERVICE_FEE_REDUCTION: "服务费减款",
 };
 const STATUS_LABEL: Record<string, string> = {
   PENDING: "待审批",
   APPROVED: "已通过",
   REJECTED: "已驳回",
+  WITHDRAWN: "已撤回",
+  EXPIRED: "已失效",
 };
 
 /**
@@ -46,6 +53,7 @@ export function ApprovalInbox({
   const [schoolId, setSchoolId] = useState<string>();
   const [editing, setEditing] = useState<ApprovalPolicyView | null>(null);
   const [requesting, setRequesting] = useState(false);
+  const [expiring, setExpiring] = useState<ApprovalRequestView | null>(null);
   const [error, setError] = useState("");
 
   const capabilities = useQuery({
@@ -83,7 +91,7 @@ export function ApprovalInbox({
     enabled: !!current,
     queryFn: async ({ signal }) => {
       const { data, response } = await api.GET("/api/approval/requests", {
-        params: { query: { schoolId: current!, status: "PENDING" } },
+        params: { query: { schoolId: current! } },
         signal,
       });
       if (!response.ok || !data) return [];
@@ -103,6 +111,45 @@ export function ApprovalInbox({
       setError("审批单已变化或不能审批自己的单据。");
     } else if (!response.ok) {
       setError("审批失败，请核对审批权限。");
+    }
+    await requests.refetch();
+  }
+
+  async function withdraw(request: ApprovalRequestView) {
+    setError("");
+    const token = await csrf();
+    const { response } = await api.POST(
+      "/api/approval/requests/{id}/withdraw",
+      {
+        params: { path: { id: request.id! } },
+        headers: { [token.headerName!]: token.token! },
+        body: { expectedVersion: request.version },
+      },
+    );
+    if (response.status === 409) {
+      setError("审批单已处理或版本已变化，请刷新记录。 ");
+    } else if (!response.ok) {
+      setError("撤回失败，请确认这是本人提交的待审申请。 ");
+    }
+    await requests.refetch();
+  }
+
+  async function expire() {
+    if (!expiring) return;
+    const reason = window.prompt("请输入审批单失效原因")?.trim();
+    if (!reason) return;
+    setError("");
+    const token = await csrf();
+    const { response } = await api.POST("/api/approval/requests/{id}/expire", {
+      params: { path: { id: expiring.id! } },
+      headers: { [token.headerName!]: token.token! },
+      body: { expectedVersion: expiring.version, reason },
+    });
+    setExpiring(null);
+    if (response.status === 409) {
+      setError("审批单已处理或版本已变化，请刷新记录。");
+    } else if (!response.ok) {
+      setError("失效操作失败，请核对审批权限和失效原因。");
     }
     await requests.refetch();
   }
@@ -197,7 +244,7 @@ export function ApprovalInbox({
           locale={{ emptyText: "未配置策略：当前视为免审批（生产应显式配置）" }}
         />
       </Card>
-      <Card title="待我审批" size="small" style={{ marginTop: 16 }}>
+      <Card title="审批记录" size="small" style={{ marginTop: 16 }}>
         <Table
           rowKey="id"
           size="small"
@@ -223,8 +270,20 @@ export function ApprovalInbox({
               title: "操作",
               key: "actions",
               render: (_: unknown, request: ApprovalRequestView) =>
-                school?.canDecide ? (
+                request.status === "PENDING" &&
+                request.requestedBy === capabilities.data?.currentAccountId ? (
+                  <Button
+                    size="small"
+                    danger
+                    onClick={() => void withdraw(request)}
+                  >
+                    撤回
+                  </Button>
+                ) : school?.canDecide && request.status === "PENDING" ? (
                   <Space>
+                    <Button size="small" onClick={() => setExpiring(request)}>
+                      设为失效
+                    </Button>
                     <Button
                       size="small"
                       onClick={() => void decide(request, "APPROVED")}
@@ -266,6 +325,18 @@ export function ApprovalInbox({
           onError={setError}
         />
       ) : null}
+      <Modal
+        title="审批申请设为失效"
+        open={!!expiring}
+        onCancel={() => setExpiring(null)}
+        onOk={() => void expire()}
+        okText="确认失效"
+        cancelText="返回"
+      >
+        <Typography.Paragraph>
+          此操作会关闭待审申请并保留审批人和原因记录；已审批单不能执行此操作。
+        </Typography.Paragraph>
+      </Modal>
     </>
   );
 }
@@ -280,6 +351,7 @@ function RequestEditor({
   onError: (message: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [requestId, setRequestId] = useState(() => crypto.randomUUID());
   const [form] = Form.useForm();
 
   async function save() {
@@ -295,13 +367,17 @@ function RequestEditor({
       const { response } = await api.POST("/api/approval/requests", {
         headers: { [token.headerName!]: token.token! },
         body: {
+          requestId,
           action: values.action,
           enrollmentId: values.enrollmentId,
           amount: String(values.amount),
           reason: values.reason,
         },
       });
-      if (!response.ok) {
+      if (response.status === 409) {
+        onError("审批申请已变化或重复提交，请刷新列表后核对原申请。");
+        return;
+      } else if (!response.ok) {
         onError("申请失败，请核对业务权限、报名和审批策略。");
         return;
       }
@@ -315,7 +391,11 @@ function RequestEditor({
 
   return (
     <Modal title="申请财务审批" open onCancel={onCancel} footer={null}>
-      <Form form={form} layout="vertical">
+      <Form
+        form={form}
+        layout="vertical"
+        onValuesChange={() => setRequestId(crypto.randomUUID())}
+      >
         <Form.Item label="动作" name="action" rules={[{ required: true }]}>
           <Select
             options={[
@@ -332,6 +412,26 @@ function RequestEditor({
               {
                 value: "SERVICE_FEE_REVERSAL",
                 label: ACTION_LABEL.SERVICE_FEE_REVERSAL,
+              },
+              {
+                value: "ENROLLMENT_TRANSFER",
+                label: ACTION_LABEL.ENROLLMENT_TRANSFER,
+              },
+              {
+                value: "ENROLLMENT_WITHDRAWAL",
+                label: ACTION_LABEL.ENROLLMENT_WITHDRAWAL,
+              },
+              {
+                value: "ENROLLMENT_DEFER",
+                label: ACTION_LABEL.ENROLLMENT_DEFER,
+              },
+              {
+                value: "ENROLLMENT_REDUCTION",
+                label: ACTION_LABEL.ENROLLMENT_REDUCTION,
+              },
+              {
+                value: "SERVICE_FEE_REDUCTION",
+                label: ACTION_LABEL.SERVICE_FEE_REDUCTION,
               },
             ]}
           />

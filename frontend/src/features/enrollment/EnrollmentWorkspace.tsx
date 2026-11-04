@@ -43,6 +43,7 @@ export function EnrollmentWorkspace({
 }) {
   const [schoolId, setSchoolId] = useState<string>();
   const [creating, setCreating] = useState(false);
+  const [creatingBatch, setCreatingBatch] = useState(false);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [error, setError] = useState("");
 
@@ -105,14 +106,24 @@ export function EnrollmentWorkspace({
           onChange={(value) => setSchoolId(value)}
         />
         {school?.maintainable ? (
-          <Button
-            onClick={() => {
-              setError("");
-              setCreating(true);
-            }}
-          >
-            登记报名
-          </Button>
+          <>
+            <Button
+              onClick={() => {
+                setError("");
+                setCreating(true);
+              }}
+            >
+              登记报名
+            </Button>
+            <Button
+              onClick={() => {
+                setError("");
+                setCreatingBatch(true);
+              }}
+            >
+              多产品报名
+            </Button>
+          </>
         ) : null}
         <Button
           onClick={() => void enrollments.refetch()}
@@ -153,7 +164,9 @@ export function EnrollmentWorkspace({
           {
             title: "冻结价格/课时",
             render: (_: unknown, row: EnrollmentView) =>
-              `${row.price} 元 / ${row.hours} 课时`,
+              row.price === "0.00" && row.hours === "0.00"
+                ? `仅服务费 ${row.serviceFee} 元`
+                : `${row.price} 元 / ${row.hours} 课时`,
           },
           { title: "净应收", dataIndex: "netAmount" },
           {
@@ -190,6 +203,17 @@ export function EnrollmentWorkspace({
             setCreating(false);
             void enrollments.refetch();
           }}
+        />
+      ) : null}
+      {creatingBatch && current ? (
+        <EnrollmentBatchCreator
+          schoolId={current}
+          onCancel={() => setCreatingBatch(false)}
+          onCreated={() => {
+            setCreatingBatch(false);
+            void enrollments.refetch();
+          }}
+          onUnauthorized={onUnauthorized}
         />
       ) : null}
       {detailId ? (
@@ -277,6 +301,236 @@ export function validateCourseLines(
   const ids = lines.map((line) => line.curriculumId);
   if (new Set(ids).size !== ids.length) return "同一课程不能重复出现";
   return null;
+}
+
+/** 一名学员的一次多产品报名；每个产品独立冻结价格快照，服务端原子提交。 */
+export function EnrollmentBatchCreator({
+  schoolId,
+  onCancel,
+  onCreated,
+  onUnauthorized,
+}: {
+  schoolId: string;
+  onCancel: () => void;
+  onCreated: () => void;
+  onUnauthorized: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [uncertain, setUncertain] = useState(false);
+  const [error, setError] = useState("");
+  const [keyword, setKeyword] = useState("");
+  const [students, setStudents] = useState<StudentSummary[]>([]);
+  const [studentId, setStudentId] = useState<string>();
+  const [priceVersionIds, setPriceVersionIds] = useState<string[]>([]);
+  const [form] = Form.useForm();
+  const requestRef = useRef<{
+    fingerprint: string;
+    body: components["schemas"]["CreateEnrollmentBatch"];
+  } | null>(null);
+
+  const sellable = useQuery({
+    queryKey: ["sellable", schoolId],
+    queryFn: async ({ signal }) => {
+      const on = new Date().toISOString().slice(0, 10);
+      const { data, response } = await api.GET("/api/product/sellable", {
+        params: { query: { schoolId, on } },
+        signal,
+      });
+      if (!response.ok || !data) throw new Error("无法读取可售价格");
+      return data;
+    },
+  });
+
+  async function search(value: string) {
+    setKeyword(value);
+    if (!value.trim()) {
+      setStudents([]);
+      return;
+    }
+    const { data, response } = await api.GET("/api/archive/students", {
+      params: { query: { search: value.trim(), size: 10 } },
+    });
+    if (!response.ok || !data) {
+      setError("无法检索学员档案，请确认读取权限。");
+      return;
+    }
+    setStudents(data.items ?? []);
+  }
+
+  async function save() {
+    let values;
+    try {
+      values = await form.validateFields();
+    } catch {
+      return;
+    }
+    if (!studentId || priceVersionIds.length < 2) {
+      setError("请选择学员和至少两个不同产品。");
+      return;
+    }
+    const fingerprint = JSON.stringify({
+      studentId,
+      priceVersionIds,
+      enrolledOn: values.enrolledOn,
+    });
+    if (requestRef.current?.fingerprint !== fingerprint) {
+      requestRef.current = {
+        fingerprint,
+        body: {
+          items: priceVersionIds.map((priceVersionId) => ({
+            requestId: crypto.randomUUID(),
+            studentId,
+            priceVersionId,
+            enrolledOn: values.enrolledOn,
+          })),
+        },
+      };
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const token = await csrf();
+      const { response } = await api.POST("/api/enrollment/enrollments/batch", {
+        headers: { [token.headerName!]: token.token! },
+        body: requestRef.current!.body,
+      });
+      if (response.status === 401) {
+        onUnauthorized();
+        return;
+      }
+      if (!response.ok) {
+        if (response.status >= 500) {
+          setUncertain(true);
+          setError("服务器结果未确认；请保持表单不变并使用相同请求重试。");
+        } else {
+          requestRef.current = null;
+          setUncertain(false);
+          setError(
+            response.status === 409
+              ? "批量报名条件已变化，请检查价格和报名状态。"
+              : "多产品报名失败，请核对权限与价格有效期。",
+          );
+        }
+        return;
+      }
+      requestRef.current = null;
+      onCreated();
+    } catch {
+      setUncertain(true);
+      setError("网络中断，结果未确认；请使用相同内容重试以安全核对。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function resetRequest() {
+    if (!uncertain) requestRef.current = null;
+  }
+
+  return (
+    <Modal
+      title="多产品报名"
+      open
+      onCancel={uncertain ? undefined : onCancel}
+      closable={!busy && !uncertain}
+      keyboard={!busy && !uncertain}
+      mask={{ closable: !busy && !uncertain }}
+      footer={null}
+    >
+      {error ? (
+        <Alert title={error} type={uncertain ? "warning" : "error"} showIcon />
+      ) : null}
+      <Input.Search
+        placeholder="按姓名或学员号检索学员"
+        allowClear
+        value={keyword}
+        onChange={(event) => setKeyword(event.target.value)}
+        onSearch={(value) => void search(value)}
+        disabled={busy || uncertain}
+      />
+      <Select
+        aria-label="选择学员"
+        style={{ width: "100%", marginTop: 8 }}
+        value={studentId}
+        onChange={(value) => {
+          setStudentId(value);
+          resetRequest();
+        }}
+        options={students.map((item) => ({
+          value: item.id,
+          label: `${item.studentNo} ${item.name}`,
+        }))}
+        placeholder="请先检索并选择学员"
+        disabled={busy || uncertain}
+      />
+      <Form
+        form={form}
+        layout="vertical"
+        style={{ marginTop: 12 }}
+        initialValues={{ enrolledOn: new Date().toISOString().slice(0, 10) }}
+        onValuesChange={resetRequest}
+      >
+        <Form.Item
+          label="报名日期"
+          name="enrolledOn"
+          rules={[{ required: true, message: "请输入报名日期" }]}
+        >
+          <Input placeholder="YYYY-MM-DD" disabled={busy || uncertain} />
+        </Form.Item>
+        <Form.Item
+          label="可售产品（至少两个）"
+          name="priceVersionIds"
+          rules={[
+            { required: true, message: "请选择至少两个产品" },
+            {
+              validator: async (_, value: string[]) => {
+                if (!value || value.length >= 2) return;
+                throw new Error("请选择至少两个产品");
+              },
+            },
+          ]}
+        >
+          <Select
+            mode="multiple"
+            showSearch
+            optionFilterProp="label"
+            value={priceVersionIds}
+            onChange={(values) => {
+              setPriceVersionIds(values);
+              resetRequest();
+            }}
+            options={(sellable.data ?? []).map((item) => ({
+              value: item.priceVersionId,
+              label: `${item.productName}：${item.price} 元 / ${item.hours} 课时`,
+            }))}
+            placeholder="选择不同产品的已发布价格"
+            disabled={busy || uncertain}
+          />
+        </Form.Item>
+      </Form>
+      <Typography.Text type="secondary">
+        系统会为每个产品分别冻结价格与课时；任一产品校验失败时，本批报名整体回滚。
+        {uncertain ? "请勿更改表单，使用同一请求重试。" : ""}
+      </Typography.Text>
+      <div style={{ marginTop: 12 }}>
+        <Button
+          type="primary"
+          onClick={() => void save()}
+          loading={busy}
+          disabled={busy}
+        >
+          提交多产品报名
+        </Button>
+        <Button
+          style={{ marginLeft: 8 }}
+          onClick={onCancel}
+          disabled={busy || uncertain}
+        >
+          取消
+        </Button>
+      </div>
+    </Modal>
+  );
 }
 
 /** 登记报名：学员来自档案检索，商品来自可售快照。 */

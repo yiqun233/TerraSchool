@@ -14,6 +14,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.teraschool.admissions.api.*;
+import org.teraschool.archive.api.*;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class CustomerTest {
@@ -27,6 +28,8 @@ class CustomerTest {
   @Autowired CustomerQueries queries;
   @Autowired CustomerFollowupCommands followupCommands;
   @Autowired CustomerFollowupQueries followupQueries;
+  @Autowired CustomerConversionService conversions;
+  @Autowired StudentCommands studentCommands;
   @Autowired ChannelCommands channels;
   @Autowired org.teraschool.platform.api.TenantTransactions tx;
 
@@ -53,6 +56,7 @@ class CustomerTest {
           "unused");
       for (var action : List.of("CUSTOMER_READ", "CUSTOMER_MAINTAIN")) grant(user, SCHOOL, action);
     }
+    for (var action : List.of("STUDENT_READ", "STUDENT_MAINTAIN")) grant(A, SCHOOL, action);
     for (var action : List.of("CUSTOMER_PHONE_READ", "CHANNEL_READ", "CHANNEL_MAINTAIN"))
       grant(A, SCHOOL, action);
     for (var action : List.of("CUSTOMER_READ", "CUSTOMER_MAINTAIN", "CUSTOMER_PHONE_READ"))
@@ -131,7 +135,7 @@ class CustomerTest {
         as(
             A,
             () ->
-                new CustomerHttp(queries, commands, followupQueries, followupCommands)
+                new CustomerHttp(queries, commands, followupQueries, followupCommands, conversions)
                     .followups(customer.id(), 0, 20));
     assertThat(response.getHeaders().getCacheControl()).contains("no-store");
     var changed =
@@ -156,6 +160,319 @@ class CustomerTest {
                 TENANT,
                 customer.id()))
         .isEqualTo(1);
+  }
+
+  @Test
+  void customerConversionCreatesStudentAndOwnerLinkAtomicallyAndIdempotently() throws Exception {
+    var customer = created(A, input("王家长", "13900004567"));
+    var requestId = UUID.randomUUID();
+    var command =
+        new ConvertCustomerToStudent(
+            requestId,
+            customer.version(),
+            null,
+            "王同学",
+            null,
+            "UNKNOWN",
+            null,
+            null,
+            null,
+            null,
+            null,
+            "GUARDIAN",
+            false);
+    var first = as(A, () -> conversions.convert(customer.id(), command));
+    var replay = as(A, () -> conversions.convert(customer.id(), command));
+    assertThat(replay.conversion()).isEqualTo(first.conversion());
+    assertThat(replay.creation().profile().id()).isEqualTo(first.creation().profile().id());
+    assertThat(
+            count(
+                "select count(*) from admissions.customer_student_link where tenant_id=? and customer_id=?",
+                TENANT,
+                customer.id()))
+        .isEqualTo(1);
+    assertThat(
+            count(
+                "select count(*) from archive.student where tenant_id=? and id=?",
+                TENANT,
+                first.creation().profile().id()))
+        .isEqualTo(1);
+    assertThat(
+            count(
+                "select count(*) from archive.student_contact sc join archive.contact c on c.tenant_id=sc.tenant_id and c.id=sc.contact_id where sc.student_id=? and c.name='王家长' and c.phone='13900004567' and sc.relation='GUARDIAN' and sc.is_primary",
+                first.creation().profile().id()))
+        .isEqualTo(1);
+    assertThat(
+            count(
+                "select count(*) from audit.customer_event where tenant_id=? and customer_id=? and action='STUDENT_LINKED'",
+                TENANT,
+                customer.id()))
+        .isEqualTo(1);
+    assertThatThrownBy(
+            () ->
+                as(
+                    A,
+                    () ->
+                        conversions.convert(
+                            customer.id(),
+                            new ConvertCustomerToStudent(
+                                requestId,
+                                customer.version(),
+                                null,
+                                "不同姓名",
+                                null,
+                                "UNKNOWN",
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                "GUARDIAN",
+                                false))))
+        .isInstanceOf(CustomerConflict.class)
+        .hasMessage("IDEMPOTENCY_MISMATCH");
+    assertThatThrownBy(
+            () ->
+                as(
+                    A,
+                    () ->
+                        conversions.convert(
+                            customer.id(),
+                            new ConvertCustomerToStudent(
+                                UUID.randomUUID(),
+                                customer.version(),
+                                null,
+                                "王同学",
+                                null,
+                                "UNKNOWN",
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                "GUARDIAN",
+                                false))))
+        .isInstanceOf(CustomerConflict.class)
+        .hasMessage("CUSTOMER_ALREADY_CONVERTED");
+    assertThat(as(A, () -> conversions.link(customer.id()))).isEqualTo(first.conversion());
+  }
+
+  @Test
+  void failedStudentCreationDoesNotLeaveCustomerConversionLink() throws Exception {
+    as(
+        A,
+        () ->
+            studentCommands.create(
+                new CreateStudent(
+                    UUID.randomUUID(),
+                    SCHOOL,
+                    null,
+                    "证件已占用学员",
+                    null,
+                    "UNKNOWN",
+                    null,
+                    "OTHER",
+                    "ABCD1234",
+                    null,
+                    null,
+                    List.of(),
+                    false)));
+    var customer = created(A, input("待转家长", "13900004568"));
+    var command =
+        new ConvertCustomerToStudent(
+            UUID.randomUUID(),
+            customer.version(),
+            null,
+            "待转学生",
+            null,
+            "UNKNOWN",
+            null,
+            "OTHER",
+            "ABCD1234",
+            null,
+            null,
+            "GUARDIAN",
+            false);
+    assertThatThrownBy(() -> as(A, () -> conversions.convert(customer.id(), command)))
+        .isInstanceOf(StudentConflict.class)
+        .hasMessage("DUPLICATE_CERTIFICATE");
+    assertThat(
+            count(
+                "select count(*) from admissions.customer_student_link where tenant_id=? and customer_id=?",
+                TENANT,
+                customer.id()))
+        .isZero();
+    assertThat(
+            count(
+                "select count(*) from archive.student where tenant_id=? and school_id=? and cert_code='ABCD1234'",
+                TENANT,
+                SCHOOL))
+        .isEqualTo(1);
+  }
+
+  @Test
+  void customerConversionRequiresPhoneReadPermission() throws Exception {
+    var customer = created(A, input("需电话权限的联系人", "13900004569"));
+    update(
+        "delete from identity.account_permission where tenant_id=? and account_id=? and school_id=? and action='CUSTOMER_PHONE_READ'",
+        TENANT,
+        A,
+        SCHOOL);
+    try {
+      assertThatThrownBy(
+              () ->
+                  as(
+                      A,
+                      () ->
+                          conversions.convert(
+                              customer.id(),
+                              new ConvertCustomerToStudent(
+                                  UUID.randomUUID(),
+                                  customer.version(),
+                                  null,
+                                  "无权读取联系人的学员",
+                                  null,
+                                  "UNKNOWN",
+                                  null,
+                                  null,
+                                  null,
+                                  null,
+                                  null,
+                                  "GUARDIAN",
+                                  false))))
+          .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
+      assertThat(
+              count(
+                  "select count(*) from admissions.customer_student_link where tenant_id=? and customer_id=?",
+                  TENANT,
+                  customer.id()))
+          .isZero();
+    } finally {
+      grant(A, SCHOOL, "CUSTOMER_PHONE_READ");
+    }
+  }
+
+  @Test
+  void latestFollowupControlsOwnerOnlyDueReminder() {
+    var customer = created(A, input("提醒客户", "13900001236"));
+    var first =
+        new CustomerFollowupCommands.FollowupCreate(
+            UUID.randomUUID(), "安排本周回访", "2026-11-01", "2026-11-10");
+    var followup = as(A, () -> followupCommands.create(customer.id(), first));
+    var reminders = as(A, () -> followupQueries.reminders(SCHOOL, "2026-11-10", 0, 20));
+    assertThat(reminders.items())
+        .anySatisfy(
+            reminder -> {
+              assertThat(reminder.customerId()).isEqualTo(customer.id());
+              assertThat(reminder.id()).isEqualTo(followup.id());
+              assertThat(reminder.nextContactOn()).isEqualTo("2026-11-10");
+            });
+    assertThat(as(B, () -> followupQueries.reminders(SCHOOL, "2026-11-10", 0, 20)).items())
+        .noneMatch(reminder -> reminder.customerId().equals(customer.id()));
+
+    as(
+        A,
+        () ->
+            followupCommands.create(
+                customer.id(),
+                new CustomerFollowupCommands.FollowupCreate(
+                    UUID.randomUUID(), "已完成回访", "2026-11-10", null)));
+    assertThat(as(A, () -> followupQueries.reminders(SCHOOL, "2026-11-20", 0, 20)).items())
+        .noneMatch(reminder -> reminder.customerId().equals(customer.id()));
+  }
+
+  @Test
+  void sameOwnerCustomerMergePreservesHistoryAndCanBeReversed() throws Exception {
+    var source = created(A, input("合并来源线索", "13900002001"));
+    var primary = created(A, input("保留主线索", "13900002002"));
+    var followup =
+        as(
+            A,
+            () ->
+                followupCommands.create(
+                    source.id(),
+                    new CustomerFollowupCommands.FollowupCreate(
+                        UUID.randomUUID(), "合并前沟通", "2026-11-01", null)));
+
+    var merged = as(A, () -> commands.merge(source.id(), primary.id(), 0, 0));
+
+    assertThat(merged.primaryId()).isEqualTo(primary.id());
+    assertThat(merged.sourceVersion()).isEqualTo(1);
+    assertThat(merged.primaryVersion()).isEqualTo(1);
+    assertThat(as(A, () -> queries.list(SCHOOL, 0, 100)).items())
+        .extracting(Customer::id)
+        .doesNotContain(source.id());
+    assertThat(as(A, () -> queries.mergedInto(primary.id())))
+        .extracting(CustomerQueries.MergedCustomer::sourceId)
+        .containsExactly(source.id());
+    assertThat(as(A, () -> followupQueries.list(primary.id(), 0, 20)).items())
+        .containsExactly(followup);
+    assertThatThrownBy(() -> as(B, () -> commands.reverseMerge(source.id(), 1)))
+        .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
+    assertThat(
+            count(
+                "select count(*) from audit.operation_failure where tenant_id=? and actor_id=? and action='CUSTOMER_MERGE_REVERSE' and code='ACCESS_DENIED'",
+                TENANT,
+                B))
+        .isGreaterThanOrEqualTo(1);
+
+    var reversed = as(A, () -> commands.reverseMerge(source.id(), 1));
+    assertThat(reversed.primaryId()).isEqualTo(primary.id());
+    assertThat(reversed.sourceVersion()).isEqualTo(2);
+    assertThat(reversed.primaryVersion()).isEqualTo(2);
+    assertThat(as(A, () -> queries.list(SCHOOL, 0, 100)).items())
+        .extracting(Customer::id)
+        .contains(source.id());
+    assertThat(as(A, () -> followupQueries.list(source.id(), 0, 20)).items())
+        .containsExactly(followup);
+    assertThat(
+            count(
+                "select count(*) from audit.customer_event where tenant_id=? and customer_id=? and action in ('MERGED','MERGE_REVERSED')",
+                TENANT,
+                source.id()))
+        .isEqualTo(2);
+  }
+
+  @Test
+  void concurrentCustomerMergeWithSameVersionsCanOnlyCommitOnce() throws Exception {
+    var source = created(A, input("并发合并来源", "13900002011"));
+    var primary = created(A, input("并发合并主档", "13900002012"));
+    var start = new CountDownLatch(1);
+    var pool = Executors.newFixedThreadPool(2);
+    try {
+      var one =
+          pool.submit(
+              () -> {
+                start.await();
+                return as(A, () -> commands.merge(source.id(), primary.id(), 0, 0));
+              });
+      var two =
+          pool.submit(
+              () -> {
+                start.await();
+                return as(A, () -> commands.merge(source.id(), primary.id(), 0, 0));
+              });
+      start.countDown();
+      var succeeded = 0;
+      var conflicted = 0;
+      for (var future : List.of(one, two)) {
+        try {
+          future.get(10, TimeUnit.SECONDS);
+          succeeded++;
+        } catch (ExecutionException failure) {
+          if (failure.getCause() instanceof CustomerConflict conflict
+              && "VERSION_CONFLICT".equals(conflict.code())) conflicted++;
+          else throw failure;
+        }
+      }
+      assertThat(succeeded).isEqualTo(1);
+      assertThat(conflicted).isEqualTo(1);
+      assertThat(as(A, () -> queries.mergedInto(primary.id())))
+          .extracting(CustomerQueries.MergedCustomer::sourceId)
+          .containsExactly(source.id());
+    } finally {
+      pool.shutdownNow();
+    }
   }
 
   @Test
@@ -233,7 +550,8 @@ class CustomerTest {
             () -> as(A, () -> commands.create(withToken(request, challenge.confirmationToken()))))
         .isInstanceOf(CustomerConflict.class)
         .hasMessage("DUPLICATE_CONFIRMATION_INVALID");
-    created(B, input("丙", "13800001020"));
+    assertThat(as(B, () -> commands.create(input("丙", "13800001020")).status()))
+        .isEqualTo("DUPLICATE_CONFIRMATION_REQUIRED");
     var other =
         new CustomerCommands.CustomerCreate(
             request.requestId(),
@@ -255,7 +573,10 @@ class CustomerTest {
         .doesNotContain(existing.id());
     assertThatThrownBy(() -> as(B, () -> commands.revealPhone(existing.id())))
         .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
-    assertThat(created(B, input("别人", "13800001002")).id()).isNotEqualTo(existing.id());
+    var challenge = as(B, () -> commands.create(input("别人", "13800001002")));
+    assertThat(challenge.status()).isEqualTo("DUPLICATE_CONFIRMATION_REQUIRED");
+    assertThat(challenge.customer()).isNull();
+    assertThat(challenge.confirmationToken()).isNotNull();
   }
 
   @Test
@@ -282,7 +603,7 @@ class CustomerTest {
         as(
             A,
             () ->
-                new CustomerHttp(queries, commands, followupQueries, followupCommands)
+                new CustomerHttp(queries, commands, followupQueries, followupCommands, conversions)
                     .phone(own.id()));
     assertThat(response.getBody().phone()).isEqualTo("13800001004");
     assertThat(response.getHeaders().getCacheControl()).contains("no-store");
@@ -517,6 +838,57 @@ class CustomerTest {
     } finally {
       executor.shutdownNow();
     }
+  }
+
+  @Test
+  void sameSchoolPublicPoolTransfersOwnerWithVersionAndPreservesFollowups() throws Exception {
+    grant(A, SCHOOL, "CUSTOMER_POOL_MANAGE");
+    grant(B, SCHOOL, "CUSTOMER_POOL_READ");
+    var customer = created(A, input("公海流转", "13900001991"));
+    var oldFollowup =
+        as(
+            A,
+            () ->
+                followupCommands.create(
+                    customer.id(),
+                    new CustomerFollowupCommands.FollowupCreate(
+                        UUID.randomUUID(), "转入前跟进", "2026-11-01", null)));
+
+    var released = as(A, () -> commands.releaseToPool(customer.id(), customer.version()));
+    assertThat(released.version()).isEqualTo(customer.version() + 1);
+    assertThat(as(A, () -> queries.list(SCHOOL, 0, 20)).items())
+        .noneMatch(row -> row.id().equals(customer.id()));
+    assertThat(as(B, () -> queries.pool(SCHOOL, 0, 20)).items())
+        .anyMatch(row -> row.id().equals(customer.id()));
+
+    var claimed = as(B, () -> commands.claim(customer.id(), released.version()));
+    assertThat(claimed.version()).isEqualTo(released.version() + 1);
+    assertThat(as(B, () -> queries.list(SCHOOL, 0, 20)).items())
+        .anyMatch(row -> row.id().equals(customer.id()));
+    assertThat(as(A, () -> queries.list(SCHOOL, 0, 20)).items())
+        .noneMatch(row -> row.id().equals(customer.id()));
+    assertThat(as(B, () -> followupQueries.list(customer.id(), 0, 20)).items())
+        .anyMatch(row -> row.id().equals(oldFollowup.id()));
+    assertThatThrownBy(() -> as(A, () -> commands.releaseToPool(customer.id(), released.version())))
+        .isInstanceOf(CustomerConflict.class)
+        .hasMessage("VERSION_CONFLICT");
+    assertThatThrownBy(() -> as(B, () -> commands.claim(customer.id(), released.version())))
+        .isInstanceOf(CustomerConflict.class)
+        .hasMessage("CUSTOMER_NOT_IN_POOL");
+    as(
+        B,
+        () ->
+            followupCommands.create(
+                customer.id(),
+                new CustomerFollowupCommands.FollowupCreate(
+                    UUID.randomUUID(), "转入后跟进", "2026-11-04", null)));
+    assertThat(as(B, () -> followupQueries.list(customer.id(), 0, 20)).items()).hasSize(2);
+    assertThat(
+            count(
+                "select count(*) from audit.customer_event where tenant_id=? and customer_id=? and action in ('POOL_RELEASED','POOL_CLAIMED')",
+                TENANT,
+                customer.id()))
+        .isEqualTo(2);
   }
 
   private long count(String query, Object... args) throws Exception {

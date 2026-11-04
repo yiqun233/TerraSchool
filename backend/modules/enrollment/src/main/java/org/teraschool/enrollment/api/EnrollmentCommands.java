@@ -5,6 +5,8 @@ import java.util.UUID;
 public interface EnrollmentCommands {
   EnrollmentView create(CreateEnrollment command);
 
+  EnrollmentBatch createBatch(CreateEnrollmentBatch command);
+
   EnrollmentView approve(UUID id, EnrollmentVersion command);
 
   /**

@@ -31,6 +31,8 @@ class TeachingAndConsumptionTest {
       OTHER_CURRICULUM = UUID.randomUUID(),
       PRODUCT = UUID.randomUUID(),
       PRICE = UUID.randomUUID(),
+      TEACHER_EMPLOYEE = UUID.randomUUID(),
+      TEACHER_RESOURCE = UUID.randomUUID(),
       TEACHER = UUID.randomUUID(),
       ASSISTANT = UUID.randomUUID(),
       READER = UUID.randomUUID();
@@ -101,6 +103,19 @@ class TeachingAndConsumptionTest {
           TENANT,
           entry.getValue(),
           encoder.encode(PASSWORD));
+    update(
+        "insert into organization.employee(id,tenant_id,school_id,name,account_id) values (?,?,?,'授课教师',?)",
+        TEACHER_EMPLOYEE,
+        TENANT,
+        SCHOOL,
+        TEACHER);
+    update(
+        "insert into organization.teacher(id,tenant_id,school_id,employee_id,name) values (?,?,?,?,?)",
+        TEACHER_RESOURCE,
+        TENANT,
+        SCHOOL,
+        TEACHER_EMPLOYEE,
+        "授课教师");
     for (var action :
         new String[] {"TEACHING_READ", "TEACHING_MAINTAIN", "ATTENDANCE_RECORD", "LESSON_CLOSE"})
       update(
@@ -199,7 +214,151 @@ class TeachingAndConsumptionTest {
                     "教师甲",
                     "教室甲",
                     "第一课",
-                    "1.00")));
+                    "1.00",
+                    TEACHER_RESOURCE,
+                    null)));
+  }
+
+  @Test
+  void teacherWorkbenchShowsOnlyAccountBoundLessonsInsideDateRange() {
+    var classView = newClass("本人课表班级");
+    var inRange = newLesson(classView.id(), "2026-11-12");
+    newLesson(classView.id(), "2026-12-15");
+    var workbench = asActor(TEACHER, () -> queries.myWorkbench("2026-11-12", "2026-11-12"));
+    assertThat(workbench.lessons())
+        .extracting(TeachingQueries.TeacherLessonView::id)
+        .containsExactly(inRange.id());
+    assertThat(workbench.classes())
+        .extracting(TeachingQueries.TeacherClassView::id)
+        .containsExactly(classView.id());
+    assertThat(asActor(READER, () -> queries.myWorkbench("2026-11-12", "2026-11-12")).lessons())
+        .isEmpty();
+    assertThatThrownBy(
+            () -> asActor(TEACHER, () -> queries.myWorkbench("2026-11-30", "2026-11-01")))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
+  void teacherClassWorkbenchReturnsRosterAndOnlyOwnLessons() {
+    var classView = classWithMember("教师班级工作台");
+    var lesson = newLesson(classView.id(), "2026-11-14");
+
+    var workbench = asActor(TEACHER, () -> queries.myClass(classView.id()));
+
+    assertThat(workbench.classInfo().id()).isEqualTo(classView.id());
+    assertThat(workbench.members())
+        .singleElement()
+        .satisfies(member -> assertThat(member.status()).isEqualTo("ACTIVE"));
+    assertThat(workbench.lessons())
+        .extracting(TeachingQueries.TeacherLessonView::id)
+        .containsExactly(lesson.id());
+    assertThatThrownBy(() -> asActor(READER, () -> queries.myClass(classView.id())))
+        .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
+  }
+
+  @Test
+  void dailyResourceScheduleIsScopedAndIncludesMissingResourceCounts() {
+    var classView = newClass("资源日报班级");
+    var lesson = newLesson(classView.id(), "2026-11-13");
+    var report = asActor(TEACHER, () -> queries.dailyResourceSchedule(SCHOOL, "2026-11-13", 0, 10));
+    assertThat(report.day()).isEqualTo("2026-11-13");
+    assertThat(report.total()).isEqualTo(1);
+    assertThat(report.pageSize()).isEqualTo(10);
+    assertThat(report.lessons())
+        .extracting(TeachingQueries.ResourceScheduleSlot::lessonId)
+        .contains(lesson.id());
+    assertThat(report.missingRoom()).isGreaterThanOrEqualTo(1);
+    assertThatThrownBy(
+            () -> asActor(TEACHER, () -> queries.dailyResourceSchedule(SCHOOL, "invalid", 0, 10)))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
+  void classCloseRequiresNoOpenLessonsAndEndsActiveMemberships() {
+    var classView = classWithMember("结班状态机");
+    var openLesson = newLesson(classView.id(), "2026-11-20");
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    TEACHER,
+                    () ->
+                        commands.closeClass(
+                            classView.id(), new LessonVersion(classView.version()))))
+        .isInstanceOf(TeachingConflict.class)
+        .hasMessage("CLASS_HAS_OPEN_LESSONS");
+    var closed =
+        asActor(
+            TEACHER,
+            () -> {
+              var lesson =
+                  commands.publishLesson(openLesson.id(), new LessonVersion(openLesson.version()));
+              var confirmed =
+                  commands.confirmAttendance(
+                      lesson.id(),
+                      new ConfirmAttendance(
+                          lesson.version(),
+                          List.of(new AttendanceInput(membershipOf(classView.id()), "PRESENT"))));
+              commands.closeLesson(confirmed.id(), new LessonVersion(confirmed.version()));
+              return commands.closeClass(classView.id(), new LessonVersion(classView.version()));
+            });
+    assertThat(closed.status()).isEqualTo("CLOSED");
+    assertThat(closed.version()).isEqualTo(classView.version() + 1);
+    assertThat(asActor(TEACHER, () -> queries.members(classView.id())))
+        .extracting(ClassMemberView::status)
+        .containsExactly("LEFT");
+  }
+
+  @Test
+  void emptyClassCancellationIsAuditedAndIdempotent() throws Exception {
+    var classView = newClass("空班取消");
+    var requestId = UUID.randomUUID();
+    var command = new CancelClass(requestId, classView.version(), "招生计划调整");
+
+    var cancelled = asActor(TEACHER, () -> commands.cancelClass(classView.id(), command));
+    var retried = asActor(TEACHER, () -> commands.cancelClass(classView.id(), command));
+
+    assertThat(cancelled.status()).isEqualTo("CANCELLED");
+    assertThat(cancelled.version()).isEqualTo(classView.version() + 1);
+    assertThat(retried).isEqualTo(cancelled);
+    assertThat(countAudit("audit.teaching_event", classView.id())).isEqualTo(2);
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    TEACHER,
+                    () ->
+                        commands.cancelClass(
+                            classView.id(),
+                            new CancelClass(requestId, classView.version(), "改用其他安排"))))
+        .isInstanceOf(TeachingConflict.class)
+        .hasMessage("IDEMPOTENCY_MISMATCH");
+  }
+
+  @Test
+  void classCancellationRejectsLessonsAndActiveMembers() {
+    var withMember = classWithMember("有学员班不可取消");
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    TEACHER,
+                    () ->
+                        commands.cancelClass(
+                            withMember.id(),
+                            new CancelClass(UUID.randomUUID(), withMember.version(), "测试"))))
+        .isInstanceOf(TeachingConflict.class)
+        .hasMessage("CLASS_HAS_ACTIVE_MEMBERS");
+
+    var withLesson = newClass("有课次班不可取消");
+    newLesson(withLesson.id(), "2026-11-21");
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    TEACHER,
+                    () ->
+                        commands.cancelClass(
+                            withLesson.id(),
+                            new CancelClass(UUID.randomUUID(), withLesson.version(), "测试"))))
+        .isInstanceOf(TeachingConflict.class)
+        .hasMessage("CLASS_HAS_LESSONS");
   }
 
   LessonView published(UUID classId, String date) {
@@ -431,6 +590,58 @@ class TeachingAndConsumptionTest {
     var reconciliation = asActor(READER, () -> queries.reconciliation(member));
     assertThat(reconciliation.consumedHours()).isEqualTo("0.00");
     assertThat(reconciliation.remainingHours()).isEqualTo("10.00");
+  }
+
+  @Test
+  void partialAttendanceConsumesProportionalHoursAndAmount() {
+    var classView = classWithMember("部分缺勤按分钟折算");
+    var member = membershipOf(classView.id());
+    var lesson = published(classView.id(), "2026-03-05");
+    var confirmed =
+        asActor(
+            TEACHER,
+            () ->
+                commands.confirmAttendance(
+                    lesson.id(),
+                    new ConfirmAttendance(
+                        lesson.version(), List.of(new AttendanceInput(member, "PARTIAL", 30)))));
+    asActor(
+        TEACHER,
+        () -> commands.closeLesson(confirmed.id(), new LessonVersion(confirmed.version())));
+
+    var reconciliation = asActor(READER, () -> queries.reconciliation(member));
+    assertThat(reconciliation.consumedHours()).isEqualTo("0.50");
+    assertThat(reconciliation.consumedAmount()).isEqualTo("50.00");
+    assertThat(reconciliation.remainingHours()).isEqualTo("9.50");
+    assertThat(reconciliation.consumptions())
+        .singleElement()
+        .satisfies(
+            item -> {
+              assertThat(item.hours()).isEqualTo("0.50");
+              assertThat(item.amount()).isEqualTo("50.00");
+            });
+  }
+
+  @Test
+  void partialAttendanceRequiresPositiveMinutesBelowLessonDuration() {
+    var classView = classWithMember("部分缺勤分钟校验");
+    var member = membershipOf(classView.id());
+    var lesson = published(classView.id(), "2026-03-07");
+    for (var invalidMinutes : new Integer[] {null, 0, 60}) {
+      assertThatThrownBy(
+              () ->
+                  asActor(
+                      TEACHER,
+                      () ->
+                          commands.confirmAttendance(
+                              lesson.id(),
+                              new ConfirmAttendance(
+                                  lesson.version(),
+                                  List.of(
+                                      new AttendanceInput(member, "PARTIAL", invalidMinutes))))))
+          .isInstanceOf(IllegalArgumentException.class)
+          .hasMessage("部分缺勤分钟必须大于 0 且少于课次时长");
+    }
   }
 
   @Test

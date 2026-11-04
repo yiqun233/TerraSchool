@@ -102,6 +102,21 @@ public class ProductCatalogService implements ProductQueries, ProductCommands {
                               row.get("subject", String.class),
                               row.get("active", Boolean.class),
                               row.get("version", Long.class)));
+          var groups =
+              sql.fetch(
+                      "select id,school_id,name,active,version from product.product_group"
+                          + " where school_id=? order by name,id limit ?",
+                      schoolId,
+                      MAX_ROWS)
+                  .map(
+                      row ->
+                          new ProductGroup(
+                              row.get("id", UUID.class),
+                              schoolId,
+                              school.name(),
+                              row.get("name", String.class),
+                              row.get("active", Boolean.class),
+                              row.get("version", Long.class)));
           var published = new HashMap<UUID, PriceVersion>();
           for (var row :
               sql.fetch(
@@ -113,9 +128,10 @@ public class ProductCatalogService implements ProductQueries, ProductCommands {
                   schoolId)) published.put(row.get("product_id", UUID.class), priceView(row));
           var products =
               sql.fetch(
-                      "select p.id,p.school_id,p.curriculum_id,p.name,p.settlement_mode,p.active,"
-                          + "p.version,c.name as curriculum_name"
+                      "select p.id,p.school_id,p.curriculum_id,p.group_id,p.name,p.settlement_mode,p.active,"
+                          + "p.version,c.name as curriculum_name,g.name as group_name"
                           + " from product.product p join product.curriculum c on c.id=p.curriculum_id"
+                          + " left join product.product_group g on g.id=p.group_id"
                           + " where p.school_id=? order by p.name, p.id limit ?",
                       schoolId,
                       MAX_ROWS)
@@ -127,12 +143,14 @@ public class ProductCatalogService implements ProductQueries, ProductCommands {
                               school.name(),
                               row.get("curriculum_id", UUID.class),
                               row.get("curriculum_name", String.class),
+                              row.get("group_id", UUID.class),
+                              row.get("group_name", String.class),
                               row.get("name", String.class),
                               row.get("settlement_mode", Integer.class),
                               row.get("active", Boolean.class),
                               row.get("version", Long.class),
                               published.get(row.get("id", UUID.class))));
-          return new ProductCatalog(schoolId, curricula, products);
+          return new ProductCatalog(schoolId, curricula, groups, products);
         });
   }
 
@@ -195,6 +213,145 @@ public class ProductCatalogService implements ProductQueries, ProductCommands {
   }
 
   // ---------------------------------------------------------------- 课程
+
+  @Override
+  public ProductGroup createProductGroup(CreateProductGroup command) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      return createProductGroupWithTrace(command);
+    }
+  }
+
+  private ProductGroup createProductGroupWithTrace(CreateProductGroup command) {
+    if (command == null || command.requestId() == null || command.schoolId() == null)
+      throw new IllegalArgumentException("需要请求身份和学校");
+    var name = text(command.name(), 100, "产品组名称");
+    if (name == null) throw new IllegalArgumentException("产品组名称必填");
+    var scope = actors.requireResourceScope("PRODUCT");
+    requireMaintainable(scope, command.schoolId());
+    var fingerprint = fingerprint("PRODUCT_GROUP", name);
+    return tx.execute(
+        scope.tenantId(),
+        () -> {
+          schools.lockTenant(scope.tenantId());
+          var verified = actors.requireResourceScopeInTransaction("PRODUCT");
+          requireMaintainable(verified, command.schoolId());
+          var school = schools.require(command.schoolId());
+          if (!school.active()) throw new AccessDeniedException("学校已停用，不能新增产品组");
+          var previous = previousRequest(scope, command.requestId(), fingerprint, "PRODUCT_GROUP");
+          if (previous != null)
+            return productGroupView(previous, command.schoolId(), school.name());
+          var id = UUID.randomUUID();
+          try {
+            sql.execute(
+                "insert into product.product_group(id,tenant_id,school_id,name) values (?,?,?,?)",
+                id,
+                scope.tenantId(),
+                command.schoolId(),
+                name);
+          } catch (RuntimeException error) {
+            if (uniqueViolation(error)) throw new ProductConflict("DUPLICATE_PRODUCT_GROUP_NAME");
+            throw error;
+          }
+          rememberRequest(scope, command.requestId(), "PRODUCT_GROUP", id, fingerprint);
+          audit(scope, "PRODUCT_GROUP_CREATED", id, command.schoolId(), "");
+          return productGroupView(id, command.schoolId(), school.name());
+        });
+  }
+
+  @Override
+  public ProductGroup updateProductGroup(UUID id, UpdateProductGroup command) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      return updateProductGroupWithTrace(id, command);
+    }
+  }
+
+  private ProductGroup updateProductGroupWithTrace(UUID id, UpdateProductGroup command) {
+    if (id == null || command == null || command.expectedVersion() == null)
+      throw new IllegalArgumentException("需要产品组和版本");
+    var name = text(command.name(), 100, "产品组名称");
+    if (name == null) throw new IllegalArgumentException("产品组名称必填");
+    var scope = actors.requireResourceScope("PRODUCT");
+    return tx.execute(
+        scope.tenantId(),
+        () -> {
+          schools.lockTenant(scope.tenantId());
+          var current =
+              requireProductGroup(actors.requireResourceScopeInTransaction("PRODUCT"), id);
+          var schoolId = current.get("school_id", UUID.class);
+          requireMaintainable(actors.requireResourceScopeInTransaction("PRODUCT"), schoolId);
+          if (!schools.require(schoolId).active()) throw new AccessDeniedException("学校已停用，不能修改产品组");
+          if (!current.get("version", Long.class).equals(command.expectedVersion()))
+            throw new ProductConflict("VERSION_CONFLICT");
+          var active = command.active() == null || command.active();
+          try {
+            if (sql.execute(
+                    "update product.product_group set name=?,active=?,version=version+1 where id=? and version=?",
+                    name,
+                    active,
+                    id,
+                    command.expectedVersion())
+                != 1) throw new ProductConflict("VERSION_CONFLICT");
+          } catch (RuntimeException error) {
+            if (uniqueViolation(error)) throw new ProductConflict("DUPLICATE_PRODUCT_GROUP_NAME");
+            throw error;
+          }
+          var changed = new LinkedHashSet<String>();
+          if (!Objects.equals(current.get("name", String.class), name)) changed.add("name");
+          if (!current.get("active", Boolean.class).equals(active)) changed.add("active");
+          audit(scope, "PRODUCT_GROUP_UPDATED", id, schoolId, String.join(",", changed));
+          return productGroupView(id, schoolId, schools.require(schoolId).name());
+        });
+  }
+
+  @Override
+  public CourseProduct changeProductGroup(UUID id, ChangeProductGroup command) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      return changeProductGroupWithTrace(id, command);
+    }
+  }
+
+  private CourseProduct changeProductGroupWithTrace(UUID id, ChangeProductGroup command) {
+    if (id == null || command == null || command.expectedVersion() == null)
+      throw new IllegalArgumentException("需要产品和版本");
+    var scope = actors.requireResourceScope("PRODUCT");
+    return tx.execute(
+        scope.tenantId(),
+        () -> {
+          schools.lockTenant(scope.tenantId());
+          var verified = actors.requireResourceScopeInTransaction("PRODUCT");
+          var current = requireProduct(verified, id);
+          var schoolId = current.get("school_id", UUID.class);
+          requireMaintainable(verified, schoolId);
+          if (!schools.require(schoolId).active()) throw new AccessDeniedException("学校已停用，不能修改产品");
+          if (!current.get("version", Long.class).equals(command.expectedVersion()))
+            throw new ProductConflict("VERSION_CONFLICT");
+          if (command.groupId() != null) {
+            var group = requireProductGroup(verified, command.groupId());
+            if (!schoolId.equals(group.get("school_id", UUID.class)))
+              throw new AccessDeniedException("产品组不属于该学校");
+            if (!group.get("active", Boolean.class))
+              throw new ProductConflict("PRODUCT_GROUP_INACTIVE");
+          }
+          var oldGroup = current.get("group_id", UUID.class);
+          if (Objects.equals(oldGroup, command.groupId()))
+            return productView(id, schoolId, schools.require(schoolId).name());
+          if (sql.execute(
+                  "update product.product set group_id=?,version=version+1 where id=? and version=?",
+                  command.groupId(),
+                  id,
+                  command.expectedVersion())
+              != 1) throw new ProductConflict("VERSION_CONFLICT");
+          audit(scope, "PRODUCT_GROUP_ASSIGNED", id, schoolId, "group_id");
+          return productView(id, schoolId, schools.require(schoolId).name());
+        });
+  }
+
+  @Override
+  public CourseProduct clearProductGroup(UUID id, ExpectedVersion command) {
+    if (command == null || command.expectedVersion() == null)
+      throw new IllegalArgumentException("需要产品版本");
+    return changeProductGroup(id, new ChangeProductGroup(command.expectedVersion(), null));
+  }
 
   @Override
   public Curriculum createCurriculum(CreateCurriculum command) {
@@ -422,12 +579,12 @@ public class ProductCatalogService implements ProductQueries, ProductCommands {
   private PriceVersion draftPriceVersionWithTrace(DraftPriceVersion command) {
     if (command == null || command.requestId() == null || command.productId() == null)
       throw new IllegalArgumentException("需要请求身份和产品");
-    var price = amount(command.price(), "价格", false);
-    var hours = amount(command.hours(), "课时", false);
+    var price = amount(command.price(), "价格", true);
+    var hours = amount(command.hours(), "课时", true);
     if (hours.compareTo(MAX_HOURS) > 0) throw new IllegalArgumentException("课时超出范围");
     var fee =
         command.serviceFee() == null ? BigDecimal.ZERO : amount(command.serviceFee(), "服务费", true);
-    if (price.compareTo(fee) < 0) throw new IllegalArgumentException("服务费不能高于价格");
+    requirePriceShape(price, hours, fee);
     studyDays(command.studyDays());
     var from = businessDate(command.effectiveFrom(), "生效日期");
     var to = optionalDate(command.effectiveTo(), "失效日期");
@@ -491,12 +648,12 @@ public class ProductCatalogService implements ProductQueries, ProductCommands {
   private PriceVersion updatePriceVersionWithTrace(UUID id, UpdatePriceVersion command) {
     if (id == null || command == null || command.expectedVersion() == null)
       throw new IllegalArgumentException("需要价格版本和版本号");
-    var price = amount(command.price(), "价格", false);
-    var hours = amount(command.hours(), "课时", false);
+    var price = amount(command.price(), "价格", true);
+    var hours = amount(command.hours(), "课时", true);
     if (hours.compareTo(MAX_HOURS) > 0) throw new IllegalArgumentException("课时超出范围");
     var fee =
         command.serviceFee() == null ? BigDecimal.ZERO : amount(command.serviceFee(), "服务费", true);
-    if (price.compareTo(fee) < 0) throw new IllegalArgumentException("服务费不能高于价格");
+    requirePriceShape(price, hours, fee);
     studyDays(command.studyDays());
     var from = businessDate(command.effectiveFrom(), "生效日期");
     var to = optionalDate(command.effectiveTo(), "失效日期");
@@ -678,7 +835,7 @@ public class ProductCatalogService implements ProductQueries, ProductCommands {
   private Record requireProduct(ResourceScope scope, UUID id) {
     var row =
         sql.fetchOne(
-            "select id,school_id,curriculum_id,name,settlement_mode,active,version from product.product"
+            "select id,school_id,curriculum_id,group_id,name,settlement_mode,active,version from product.product"
                 + " where id=?",
             id);
     if (row == null || !scope.readableSchoolIds().contains(row.get("school_id", UUID.class)))
@@ -689,7 +846,7 @@ public class ProductCatalogService implements ProductQueries, ProductCommands {
   private Record requireProductVisible(UUID id) {
     var row =
         sql.fetchOne(
-            "select id,school_id,curriculum_id,name,settlement_mode,active,version from product.product"
+            "select id,school_id,curriculum_id,group_id,name,settlement_mode,active,version from product.product"
                 + " where id=?",
             id);
     if (row == null) throw new AccessDeniedException("产品不存在或不可访问");
@@ -723,11 +880,34 @@ public class ProductCatalogService implements ProductQueries, ProductCommands {
         row.get("version", Long.class));
   }
 
+  private Record requireProductGroup(ResourceScope scope, UUID id) {
+    var row =
+        sql.fetchOne(
+            "select id,school_id,name,active,version from product.product_group where id=?", id);
+    if (row == null || !scope.readableSchoolIds().contains(row.get("school_id", UUID.class)))
+      throw new AccessDeniedException("产品组不存在或不可访问");
+    return row;
+  }
+
+  private ProductGroup productGroupView(UUID id, UUID schoolId, String schoolName) {
+    var row =
+        sql.fetchOne("select id,name,active,version from product.product_group where id=?", id);
+    if (row == null) throw new AccessDeniedException("产品组不存在或不可访问");
+    return new ProductGroup(
+        id,
+        schoolId,
+        schoolName,
+        row.get("name", String.class),
+        row.get("active", Boolean.class),
+        row.get("version", Long.class));
+  }
+
   private CourseProduct productView(UUID id, UUID schoolId, String schoolName) {
     var row =
         sql.fetchOne(
-            "select p.id,p.curriculum_id,p.name,p.settlement_mode,p.active,p.version,c.name as curriculum_name"
+            "select p.id,p.curriculum_id,p.group_id,p.name,p.settlement_mode,p.active,p.version,c.name as curriculum_name,g.name as group_name"
                 + " from product.product p join product.curriculum c on c.id=p.curriculum_id"
+                + " left join product.product_group g on g.id=p.group_id"
                 + " where p.id=?",
             id);
     if (row == null) throw new AccessDeniedException("产品不存在或不可访问");
@@ -743,6 +923,8 @@ public class ProductCatalogService implements ProductQueries, ProductCommands {
         schoolName,
         row.get("curriculum_id", UUID.class),
         row.get("curriculum_name", String.class),
+        row.get("group_id", UUID.class),
+        row.get("group_name", String.class),
         row.get("name", String.class),
         row.get("settlement_mode", Integer.class),
         row.get("active", Boolean.class),
@@ -832,6 +1014,13 @@ public class ProductCatalogService implements ProductQueries, ProductCommands {
       throw new IllegalArgumentException(label + "必须大于零");
     if (amount.compareTo(MAX_AMOUNT) > 0) throw new IllegalArgumentException(label + "超出范围");
     return amount;
+  }
+
+  private void requirePriceShape(BigDecimal price, BigDecimal hours, BigDecimal serviceFee) {
+    if (price.signum() == 0 && hours.signum() == 0 && serviceFee.signum() > 0) return;
+    if (price.signum() <= 0 || hours.signum() <= 0)
+      throw new IllegalArgumentException("课程价格与课时须同时大于零；仅服务费价格要求两者均为零且服务费大于零");
+    if (price.compareTo(serviceFee) < 0) throw new IllegalArgumentException("服务费不能高于课程价格");
   }
 
   private LocalDate optionalDate(String value, String label) {

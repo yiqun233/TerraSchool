@@ -193,6 +193,53 @@ class SchedulingConstraintTest {
   }
 
   @Test
+  void multiClassReservationsEnforceTeacherMinimumGap() {
+    asActor(OPS, () -> scheduling.savePolicy(SCHOOL, new SchedulePolicy(true, true, 30, null)));
+    var first = newClass();
+    var second = newClass();
+    var firstRule =
+        new ScheduleRule(
+            "2027-01-03",
+            "2027-01-03",
+            List.of(7),
+            "08:00",
+            "09:00",
+            "1",
+            null,
+            null,
+            "课",
+            TEACHER,
+            ROOM);
+    var secondRule =
+        new ScheduleRule(
+            "2027-01-03",
+            "2027-01-03",
+            List.of(7),
+            "09:00",
+            "10:00",
+            "1",
+            null,
+            null,
+            "课",
+            TEACHER,
+            ROOM);
+
+    var preview =
+        asActor(
+            OPS,
+            () ->
+                scheduling.previewBatch(
+                    new ScheduleBatchRequest(
+                        List.of(
+                            new ScheduleBatchItem(first, firstRule),
+                            new ScheduleBatchItem(second, secondRule)))));
+
+    assertThat(preview.classes().get(0).available()).isEqualTo(1);
+    assertThat(preview.classes().get(1).slots())
+        .allSatisfy(slot -> assertThat(slot.reason()).isEqualTo("TEACHER_MIN_GAP"));
+  }
+
+  @Test
   void blockRequiresExactlyOneResource() {
     assertThatThrownBy(
             () ->

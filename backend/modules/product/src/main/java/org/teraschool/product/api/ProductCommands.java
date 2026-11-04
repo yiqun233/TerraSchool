@@ -4,6 +4,14 @@ import java.util.UUID;
 
 /** 课程、产品与价格版本的写入契约；授权、校验、版本与审计都在应用服务内完成。 */
 public interface ProductCommands {
+  ProductGroup createProductGroup(CreateProductGroup command);
+
+  ProductGroup updateProductGroup(UUID id, UpdateProductGroup command);
+
+  CourseProduct changeProductGroup(UUID id, ChangeProductGroup command);
+
+  CourseProduct clearProductGroup(UUID id, ExpectedVersion command);
+
   Curriculum createCurriculum(CreateCurriculum command);
 
   Curriculum updateCurriculum(UUID id, UpdateCurriculum command);

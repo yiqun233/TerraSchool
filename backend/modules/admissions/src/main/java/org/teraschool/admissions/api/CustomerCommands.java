@@ -21,4 +21,13 @@ public interface CustomerCommands {
   CustomerCreateResult cancel(CustomerCreate command);
 
   CustomerPhone revealPhone(UUID id);
+
+  Customer claim(UUID id, long expectedVersion);
+
+  Customer releaseToPool(UUID id, long expectedVersion);
+
+  CustomerMergeResult merge(
+      UUID sourceId, UUID primaryId, long expectedSourceVersion, long expectedPrimaryVersion);
+
+  CustomerMergeResult reverseMerge(UUID sourceId, long expectedSourceVersion);
 }

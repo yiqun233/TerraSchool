@@ -9,6 +9,7 @@ import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -125,6 +126,131 @@ class SchedulingTest {
     var lessons = asActor(OPS, () -> teachingQueries.lessons(classId));
     assertThat(lessons).hasSize(4);
     assertThat(lessons).allSatisfy(lesson -> assertThat(lesson.status()).isEqualTo("DRAFT"));
+  }
+
+  @Test
+  void automaticallySelectsActiveTeacherAndRoomAndConfirmsTheirReferences() throws Exception {
+    var classId = newClass();
+    var fixed = rule(null, null);
+    var auto =
+        new ScheduleRule(
+            fixed.startDate(),
+            fixed.endDate(),
+            fixed.weekdays(),
+            fixed.startsAt(),
+            fixed.endsAt(),
+            fixed.hours(),
+            null,
+            null,
+            fixed.topic(),
+            null,
+            null,
+            true);
+    var unavailable = asActor(OPS, () -> scheduling.preview(classId, auto));
+    assertThat(unavailable.available()).isZero();
+    assertThat(unavailable.slots())
+        .allSatisfy(slot -> assertThat(slot.reason()).isEqualTo("NO_TEACHER_CANDIDATE"));
+
+    var teacherId = UUID.randomUUID();
+    var roomId = UUID.randomUUID();
+    update(
+        "insert into organization.teacher(id,tenant_id,school_id,name,qualification) values (?,?,?,?,?)",
+        teacherId,
+        TENANT,
+        SCHOOL,
+        "0自动教师",
+        "英语");
+    update(
+        "insert into organization.room(id,tenant_id,school_id,name,capacity) values (?,?,?,?,?)",
+        roomId,
+        TENANT,
+        SCHOOL,
+        "0自动教室",
+        30);
+    var preview = asActor(OPS, () -> scheduling.preview(classId, auto));
+    assertThat(preview.available()).isEqualTo(4);
+    assertThat(preview.teacherName()).isEqualTo("0自动教师");
+    assertThat(preview.roomName()).isEqualTo("0自动教室");
+    assertThat(asActor(OPS, () -> scheduling.confirm(classId, auto)).created()).isEqualTo(4);
+    var assigned =
+        tx.execute(
+            TENANT,
+            () ->
+                sql.fetchOne(
+                    "select count(*) as total from teaching.lesson where class_id=? and teacher_id=? and room_id=?",
+                    classId,
+                    teacherId,
+                    roomId));
+    assertThat(assigned.get("total", Long.class)).isEqualTo(4);
+  }
+
+  @Test
+  void multiClassPreviewReservesResourcesAndConfirmCreatesBothPlansAtomically() {
+    for (var suffix : List.of("甲", "乙")) {
+      var teacherId = UUID.randomUUID();
+      var roomId = UUID.randomUUID();
+      try {
+        update(
+            "insert into organization.teacher(id,tenant_id,school_id,name,qualification) values (?,?,?,?,?)",
+            teacherId,
+            TENANT,
+            SCHOOL,
+            "批量教师" + suffix,
+            "英语");
+        update(
+            "insert into organization.room(id,tenant_id,school_id,name,capacity) values (?,?,?,?,?)",
+            roomId,
+            TENANT,
+            SCHOOL,
+            "批量教室" + suffix,
+            30);
+      } catch (Exception error) {
+        throw new IllegalStateException(error);
+      }
+    }
+    var first = newClass();
+    var second = newClass();
+    var fixed = rule(null, null);
+    var automatic =
+        new ScheduleRule(
+            fixed.startDate(),
+            fixed.endDate(),
+            fixed.weekdays(),
+            fixed.startsAt(),
+            fixed.endsAt(),
+            fixed.hours(),
+            null,
+            null,
+            fixed.topic(),
+            null,
+            null,
+            true);
+    var request =
+        new ScheduleBatchRequest(
+            List.of(
+                new ScheduleBatchItem(first, automatic), new ScheduleBatchItem(second, automatic)));
+    var preview = asActor(OPS, () -> scheduling.previewBatch(request));
+    assertThat(preview.classes()).extracting(SchedulePreview::available).containsExactly(4, 4);
+    assertThat(preview.classes().getFirst().teacherName())
+        .isNotEqualTo(preview.classes().get(1).teacherName());
+    var result = asActor(OPS, () -> scheduling.confirmBatch(request));
+    assertThat(result.created()).isEqualTo(8);
+    assertThat(result.skipped()).isZero();
+  }
+
+  @Test
+  void multiClassConfirmationRollsBackEarlierClassesWhenALaterClassIsInvalid() {
+    var first = newClass();
+    var request =
+        new ScheduleBatchRequest(
+            List.of(
+                new ScheduleBatchItem(first, rule("王老师", "B201")),
+                new ScheduleBatchItem(UUID.randomUUID(), rule("赵老师", "C301"))));
+
+    assertThatThrownBy(() -> asActor(OPS, () -> scheduling.confirmBatch(request)))
+        .isInstanceOf(AccessDeniedException.class);
+
+    assertThat(asActor(OPS, () -> teachingQueries.lessons(first))).isEmpty();
   }
 
   @Test

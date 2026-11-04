@@ -27,9 +27,38 @@ class TeachingHttp {
     return queries.capabilities();
   }
 
+  @GetMapping("/api/teaching/me/workbench")
+  TeachingQueries.TeacherWorkbench myWorkbench(@RequestParam String from, @RequestParam String to) {
+    return queries.myWorkbench(from, to);
+  }
+
+  @GetMapping("/api/teaching/me/classes/{id}")
+  TeachingQueries.TeacherClassWorkbench myClass(@PathVariable UUID id) {
+    return queries.myClass(id);
+  }
+
+  @GetMapping("/api/teaching/reports/resource-daily-schedule")
+  TeachingQueries.DailyResourceSchedule dailyResourceSchedule(
+      @RequestParam UUID schoolId,
+      @RequestParam String day,
+      @RequestParam(defaultValue = "0") int page,
+      @RequestParam(defaultValue = "100") int pageSize) {
+    return queries.dailyResourceSchedule(schoolId, day, page, pageSize);
+  }
+
   @GetMapping("/api/teaching/classes")
   List<ClassView> classes(@RequestParam UUID schoolId) {
     return queries.classes(schoolId);
+  }
+
+  @PostMapping(value = "/api/teaching/schedule/batch/preview", consumes = "application/json")
+  ScheduleBatchPreview previewBatch(@RequestBody ScheduleBatchRequest request) {
+    return scheduling.previewBatch(request);
+  }
+
+  @PostMapping(value = "/api/teaching/schedule/batch/confirm", consumes = "application/json")
+  ScheduleBatchResult confirmBatch(@RequestBody ScheduleBatchRequest request) {
+    return scheduling.confirmBatch(request);
   }
 
   @GetMapping("/api/teaching/classes/{id}/members")
@@ -77,6 +106,16 @@ class TeachingHttp {
   @ResponseStatus(org.springframework.http.HttpStatus.CREATED)
   ClassView createClass(@RequestBody CreateClass command) {
     return commands.createClass(command);
+  }
+
+  @PostMapping(value = "/api/teaching/classes/{id}/close", consumes = "application/json")
+  ClassView closeClass(@PathVariable UUID id, @RequestBody LessonVersion command) {
+    return commands.closeClass(id, command);
+  }
+
+  @PostMapping(value = "/api/teaching/classes/{id}/cancel", consumes = "application/json")
+  ClassView cancelClass(@PathVariable UUID id, @RequestBody CancelClass command) {
+    return commands.cancelClass(id, command);
   }
 
   @PostMapping(value = "/api/teaching/classes/{id}/members", consumes = "application/json")

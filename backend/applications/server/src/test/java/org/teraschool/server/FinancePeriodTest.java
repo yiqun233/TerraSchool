@@ -37,6 +37,7 @@ class FinancePeriodTest {
   @LocalServerPort int port;
   @Autowired PeriodCommands periodCommands;
   @Autowired PeriodQueries periodQueries;
+  @Autowired FinancialReportQueries financialReports;
   @Autowired EnrollmentCommands enrollments;
   @Autowired FundsCommands funds;
   @Autowired TeachingCommands teaching;
@@ -191,6 +192,79 @@ class FinancePeriodTest {
   PeriodView unlock(String period, Long version) {
     return asActor(
         OPS, () -> periodCommands.unlock(SCHOOL, new LockPeriod(SCHOOL, period, "更正", version)));
+  }
+
+  @Test
+  void fundsReconciliationBalancesOpeningReceiptsRefundsAllocationsAndAccount() throws Exception {
+    var reportSchool = UUID.randomUUID();
+    update(
+        "insert into organization.unit(id,tenant_id,school_id,kind,name) values (?,?,?,'SCHOOL','对账隔离学校')",
+        reportSchool,
+        TENANT,
+        reportSchool);
+    update(
+        "insert into identity.account_permission(tenant_id,account_id,school_id,action,effect)"
+            + " values (?,?,?,'FUNDS_READ','ALLOW'),(?,?,?,'FUNDS_RECEIPT','ALLOW')",
+        TENANT,
+        OPS,
+        reportSchool,
+        TENANT,
+        OPS,
+        reportSchool);
+    var student = UUID.randomUUID();
+    update(
+        "insert into archive.student(id,tenant_id,student_no,name,sex,school_id) values (?,?,?,?,?,?)",
+        student,
+        TENANT,
+        "R" + student.toString().replace("-", "").substring(0, 8),
+        "对账隔离学员",
+        "FEMALE",
+        reportSchool);
+    var receipt =
+        asActor(
+            OPS,
+            () ->
+                funds.createReceipt(
+                    new CreateReceipt(
+                        UUID.randomUUID(), reportSchool, student, "1000", "CASH", "2026-04-12")));
+    var allocation = UUID.randomUUID();
+    update(
+        "insert into funds.allocation(id,tenant_id,receipt_id,enrollment_id,amount) values (?,?,?,?,?)",
+        allocation,
+        TENANT,
+        receipt.id(),
+        UUID.randomUUID(),
+        new java.math.BigDecimal("300.00"));
+    update(
+        "insert into funds.account_entry(tenant_id,student_id,kind,amount,source_id) values "
+            + "(?,?,'OPENING',100.00,?),(?,?,'ALLOCATION',-300.00,?),(?,?,'CASH_REFUND',-50.00,?)",
+        TENANT,
+        student,
+        UUID.randomUUID(),
+        TENANT,
+        student,
+        allocation,
+        TENANT,
+        student,
+        UUID.randomUUID());
+
+    var report = asActor(OPS, () -> financialReports.fundsReconciliation(reportSchool));
+    assertThat(report.openingAmount()).isEqualTo("100.00");
+    assertThat(report.netReceiptAmount()).isEqualTo("1000.00");
+    assertThat(report.cashRefundAmount()).isEqualTo("50.00");
+    assertThat(report.activeAllocatedAmount()).isEqualTo("300.00");
+    assertThat(report.accountBalanceAmount()).isEqualTo("750.00");
+    assertThat(report.differenceAmount()).isEqualTo("0.00");
+    update(
+        "update funds.account_entry set amount=-299.99 where student_id=? and kind='ALLOCATION'",
+        student);
+    assertThat(
+            asActor(
+                OPS, () -> financialReports.fundsReconciliation(reportSchool).differenceAmount()))
+        .isEqualTo("-0.01");
+    assertThatThrownBy(
+            () -> asActor(READER, () -> financialReports.fundsReconciliation(reportSchool)))
+        .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
   }
 
   @Test

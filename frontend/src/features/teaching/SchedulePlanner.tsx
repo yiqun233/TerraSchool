@@ -10,6 +10,7 @@ import {
   Modal,
   Select,
   Space,
+  Switch,
   Table,
   Tag,
   Typography,
@@ -38,6 +39,9 @@ const REASON_LABEL: Record<string, string> = {
   LESSON_OVERLAP: "同班时间重叠",
   TEACHER_CLASH: "教师已有课",
   ROOM_CLASH: "教室已占用",
+  NO_TEACHER_CANDIDATE: "学校内没有可用教师",
+  NO_ROOM_CANDIDATE: "没有容量足够的可用教室",
+  NO_FEASIBLE_RESOURCE_PAIR: "所选日期范围内无可行的教师与教室组合",
 };
 
 /**
@@ -112,6 +116,7 @@ export function SchedulePlanner({
       teacherName: undefined,
       roomName: undefined,
       topic: values.topic || undefined,
+      autoAssignResources: values.autoAssignResources ?? false,
     };
   }
 
@@ -193,7 +198,12 @@ export function SchedulePlanner({
     >
       {error ? <Alert title={error} type="error" showIcon /> : null}
       {message ? <Alert title={message} type="success" showIcon /> : null}
-      <Form form={form} layout="vertical" style={{ marginTop: 12 }}>
+      <Form
+        form={form}
+        layout="vertical"
+        initialValues={{ autoAssignResources: false }}
+        style={{ marginTop: 12 }}
+      >
         <Space wrap>
           <Form.Item
             label="开始日期"
@@ -300,6 +310,14 @@ export function SchedulePlanner({
             />
           </Form.Item>
         </Space>
+        <Form.Item
+          label="自动选择教师与教室"
+          name="autoAssignResources"
+          valuePropName="checked"
+          extra="按学校内启用状态、已有占用和教室容量，为整组周课选择可行资源。"
+        >
+          <Switch disabled={busy} />
+        </Form.Item>
         <Form.Item label="主题" name="topic">
           <Input maxLength={100} disabled={busy} />
         </Form.Item>
@@ -340,6 +358,13 @@ export function SchedulePreviewCard({ preview }: { preview: SchedulePreview }) {
           共 {preview.total} 个候选时段
         </Typography.Text>
       </Space>
+      <Typography.Text
+        type="secondary"
+        style={{ display: "block", marginTop: 8 }}
+      >
+        教师：{preview.teacherName ?? "未分配"}；教室：
+        {preview.roomName ?? "未分配"}
+      </Typography.Text>
       <Table
         rowKey="lessonDate"
         size="small"

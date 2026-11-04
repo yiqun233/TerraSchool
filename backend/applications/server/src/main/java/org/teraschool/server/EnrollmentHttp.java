@@ -42,6 +42,13 @@ class EnrollmentHttp {
     return commands.create(command);
   }
 
+  /** 多产品报名在一个事务内全部创建或全部回滚。 */
+  @PostMapping(value = "/api/enrollment/enrollments/batch", consumes = "application/json")
+  @ResponseStatus(org.springframework.http.HttpStatus.CREATED)
+  EnrollmentBatch createBatch(@RequestBody CreateEnrollmentBatch command) {
+    return commands.createBatch(command);
+  }
+
   /** 登记一次性减免：只写金额与原因，不承担优惠券/阶梯折扣等规则计算。 */
   @PostMapping(value = "/api/enrollment/enrollments/{id}/discounts", consumes = "application/json")
   EnrollmentView discount(@PathVariable UUID id, @RequestBody ApplyDiscount command) {

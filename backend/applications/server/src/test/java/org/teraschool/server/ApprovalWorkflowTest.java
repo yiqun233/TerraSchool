@@ -5,6 +5,7 @@ import static org.teraschool.server.EngineeringTest.update;
 
 import java.math.BigDecimal;
 import java.util.*;
+import java.util.concurrent.*;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -120,7 +121,8 @@ class ApprovalWorkflowTest {
           OPS,
           SCHOOL,
           action);
-    for (var action : new String[] {"REFUND_READ", "REFUND_APPLY", "APPROVAL_READ"})
+    for (var action :
+        new String[] {"REFUND_READ", "REFUND_APPLY", "APPROVAL_READ", "ENROLLMENT_MAINTAIN"})
       update(
           "insert into identity.account_permission(tenant_id,account_id,school_id,action,effect)"
               + " values (?,?,?,?,'ALLOW')",
@@ -211,7 +213,8 @@ class ApprovalWorkflowTest {
         APPLICANT,
         () ->
             approvalCommands.request(
-                new CreateApprovalRequest(enrollment.id(), action, amount, "测试申请")));
+                new CreateApprovalRequest(
+                    UUID.randomUUID(), enrollment.id(), action, amount, "测试申请")));
   }
 
   ApprovalRequestView approve(ApprovalRequestView request) {
@@ -315,6 +318,146 @@ class ApprovalWorkflowTest {
     assertThatThrownBy(() -> request(enrollment, "REFUND_HOURS", "300.00"))
         .isInstanceOf(ApprovalConflict.class)
         .hasMessage("APPROVAL_ALREADY_PENDING");
+  }
+
+  @Test
+  void requestRetryWithSameIdentityReturnsOriginalApprovalRequest() {
+    var enrollment = paidEnrollment(freshStudent());
+    var requestId = UUID.randomUUID();
+    var command =
+        new CreateApprovalRequest(requestId, enrollment.id(), "ENROLLMENT_DEFER", "50.0", "延期申请");
+
+    var first = asActor(APPLICANT, () -> approvalCommands.request(command));
+    var retry = asActor(APPLICANT, () -> approvalCommands.request(command));
+
+    assertThat(retry.id()).isEqualTo(first.id());
+    assertThat(retry.status()).isEqualTo(first.status());
+    assertThat(
+            tx.execute(
+                TENANT,
+                () ->
+                    sql.fetchOne(
+                            "select count(*) as n from approval.request where enrollment_id=? and action='ENROLLMENT_DEFER'",
+                            enrollment.id())
+                        .get("n", Long.class)))
+        .isEqualTo(1L);
+  }
+
+  @Test
+  void requestIdCannotBeReusedForDifferentApprovalContent() {
+    var enrollment = paidEnrollment(freshStudent());
+    var requestId = UUID.randomUUID();
+    asActor(
+        APPLICANT,
+        () ->
+            approvalCommands.request(
+                new CreateApprovalRequest(
+                    requestId, enrollment.id(), "ENROLLMENT_DEFER", "50.00", "延期申请")));
+
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    APPLICANT,
+                    () ->
+                        approvalCommands.request(
+                            new CreateApprovalRequest(
+                                requestId, enrollment.id(), "ENROLLMENT_DEFER", "60.00", "延期申请"))))
+        .isInstanceOf(ApprovalConflict.class)
+        .hasMessage("IDEMPOTENCY_KEY_REUSED");
+  }
+
+  @Test
+  void enrollmentChangeApprovalRequiresEnrollmentMaintenancePermission() {
+    var enrollment = paidEnrollment(freshStudent());
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    MANAGER,
+                    () ->
+                        approvalCommands.request(
+                            new CreateApprovalRequest(
+                                UUID.randomUUID(),
+                                enrollment.id(),
+                                "ENROLLMENT_TRANSFER",
+                                "100.00",
+                                "转班申请"))))
+        .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
+  }
+
+  @Test
+  void concurrentRequestRetryWithSameIdentityCreatesOneApproval() throws Exception {
+    var enrollment = paidEnrollment(freshStudent());
+    var command =
+        new CreateApprovalRequest(
+            UUID.randomUUID(), enrollment.id(), "ENROLLMENT_DEFER", "50.00", "并发重试");
+    var ready = new CountDownLatch(2);
+    var start = new CountDownLatch(1);
+    var pool = Executors.newFixedThreadPool(2);
+    try {
+      Callable<ApprovalRequestView> submit =
+          () -> {
+            ready.countDown();
+            if (!start.await(5, TimeUnit.SECONDS)) throw new IllegalStateException("start timeout");
+            return asActor(APPLICANT, () -> approvalCommands.request(command));
+          };
+      var first = pool.submit(submit);
+      var second = pool.submit(submit);
+      assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+      start.countDown();
+
+      var firstResult = first.get(10, TimeUnit.SECONDS);
+      var secondResult = second.get(10, TimeUnit.SECONDS);
+      assertThat(secondResult.id()).isEqualTo(firstResult.id());
+      assertThat(
+              tx.execute(
+                  TENANT,
+                  () ->
+                      sql.fetchOne(
+                              "select count(*) as n from approval.request where enrollment_id=? and action='ENROLLMENT_DEFER'",
+                              enrollment.id())
+                          .get("n", Long.class)))
+          .isEqualTo(1L);
+    } finally {
+      pool.shutdownNow();
+    }
+  }
+
+  @Test
+  void applicantCanWithdrawOnlyTheirOwnPendingRequestAndReapply() {
+    var enrollment = paidEnrollment(freshStudent());
+    var request = request(enrollment, "ENROLLMENT_TRANSFER", "100.00");
+    assertThat(request.status()).isEqualTo("PENDING");
+    assertThatThrownBy(
+            () ->
+                asActor(APPROVER, () -> approvalCommands.withdraw(request.id(), request.version())))
+        .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
+    assertThatThrownBy(() -> asActor(APPLICANT, () -> approvalCommands.withdraw(request.id(), 10L)))
+        .isInstanceOf(ApprovalConflict.class)
+        .hasMessage("VERSION_CONFLICT");
+
+    var withdrawn =
+        asActor(APPLICANT, () -> approvalCommands.withdraw(request.id(), request.version()));
+    assertThat(withdrawn.status()).isEqualTo("WITHDRAWN");
+    assertThat(withdrawn.version()).isEqualTo(request.version() + 1);
+    assertThat(request(enrollment, "ENROLLMENT_TRANSFER", "120.00").status()).isEqualTo("PENDING");
+  }
+
+  @Test
+  void approverCanExpireAnotherApplicantsPendingRequestWithReason() {
+    var enrollment = paidEnrollment(freshStudent());
+    var request = request(enrollment, "ENROLLMENT_DEFER", "50.00");
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    APPROVER, () -> approvalCommands.expire(request.id(), request.version(), " ")))
+        .isInstanceOf(IllegalArgumentException.class);
+    var expired =
+        asActor(
+            APPROVER, () -> approvalCommands.expire(request.id(), request.version(), "原业务不再办理"));
+    assertThat(expired.status()).isEqualTo("EXPIRED");
+    assertThat(expired.decidedBy()).isEqualTo(APPROVER);
+    assertThat(expired.decisionNote()).isEqualTo("原业务不再办理");
+    assertThat(request(enrollment, "ENROLLMENT_DEFER", "60.00").status()).isEqualTo("PENDING");
   }
 
   @Test

@@ -20,6 +20,14 @@ const capabilities = {
 
 const catalog = {
   schoolId: "school-1",
+  groups: [
+    {
+      id: "group-1",
+      name: "秋季班",
+      active: true,
+      version: 2,
+    },
+  ],
   curricula: [
     {
       id: "curriculum-1",
@@ -36,6 +44,8 @@ const catalog = {
       name: "少儿英语年卡",
       curriculumId: "curriculum-1",
       curriculumName: "少儿英语",
+      groupId: "group-1",
+      groupName: "秋季班",
       settlementMode: 1,
       active: true,
       version: 0,
@@ -80,6 +90,7 @@ it("目录展示服务端返回的字符串价格，不参与本地计算", asyn
   expect(await screen.findByText("少儿英语年卡")).toBeTruthy();
   expect(screen.getByText("1000.00 元 / 10.00 课时")).toBeTruthy();
   expect(screen.getByText("平均价格")).toBeTruthy();
+  expect(screen.getAllByText("秋季班")).toHaveLength(2);
 });
 
 it("发布价格携带版本，已发布版本不可再次发布", async () => {

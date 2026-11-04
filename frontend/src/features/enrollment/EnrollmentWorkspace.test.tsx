@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   AllocateAction,
   ApproveButton,
+  EnrollmentBatchCreator,
   EnrollmentWorkspace,
   VoidReceiptButton,
   validateCourseLines,
@@ -69,7 +70,93 @@ it("报名列表展示冻结价格与净应收字符串", async () => {
   expect(screen.getByText("1000.00")).toBeTruthy();
 });
 
+it("多产品报名提交同一学员的独立价格快照并在成功响应时刷新", async () => {
+  get.mockClear();
+  post.mockClear();
+  csrf.mockClear();
+  get.mockImplementation(async (path: string) => {
+    if (path === "/api/product/sellable")
+      return {
+        response: { ok: true, status: 200 },
+        data: [
+          {
+            priceVersionId: "price-1",
+            productName: "产品一",
+            price: "1000.00",
+            hours: "10.00",
+          },
+          {
+            priceVersionId: "price-2",
+            productName: "产品二",
+            price: "500.00",
+            hours: "5.00",
+          },
+        ],
+      };
+    if (path === "/api/archive/students")
+      return {
+        response: { ok: true, status: 200 },
+        data: {
+          items: [{ id: "student-1", studentNo: "S100", name: "学员甲" }],
+        },
+      };
+    throw new Error("unexpected path " + path);
+  });
+  csrf.mockResolvedValue({ headerName: "X-CSRF-TOKEN", token: "test" });
+  post
+    .mockResolvedValueOnce({ response: { ok: false, status: 503 } })
+    .mockResolvedValueOnce({
+      response: { ok: true, status: 201 },
+      data: { items: [] },
+    });
+  const done = vi.fn();
+  const user = userEvent.setup({ pointerEventsCheck: 0 });
+  renderWithClient(
+    <EnrollmentBatchCreator
+      schoolId="school-1"
+      onCancel={vi.fn()}
+      onCreated={done}
+      onUnauthorized={vi.fn()}
+    />,
+  );
+
+  await user.type(
+    screen.getByPlaceholderText("按姓名或学员号检索学员"),
+    "S100{enter}",
+  );
+  await user.click(screen.getByRole("combobox", { name: "选择学员" }));
+  await user.click(await screen.findByText("S100 学员甲"));
+  const products = screen.getByRole("combobox", {
+    name: "可售产品（至少两个）",
+  });
+  await user.click(products);
+  await user.click(await screen.findByText(/产品一：1000.00/));
+  await user.click(products);
+  await user.click(await screen.findByText(/产品二：500.00/));
+  await user.click(screen.getByRole("button", { name: "提交多产品报名" }));
+
+  expect(await screen.findByText(/保持表单不变/)).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: "提交多产品报名" }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+  expect(post.mock.calls[0][0]).toBe("/api/enrollment/enrollments/batch");
+  expect(post.mock.calls[0][1].body.items).toHaveLength(2);
+  expect(
+    post.mock.calls[0][1].body.items.map(
+      (item: { studentId: string }) => item.studentId,
+    ),
+  ).toEqual(["student-1", "student-1"]);
+  expect(
+    post.mock.calls[0][1].body.items.map(
+      (item: { priceVersionId: string }) => item.priceVersionId,
+    ),
+  ).toEqual(["price-1", "price-2"]);
+  expect(post.mock.calls[1][1].body).toEqual(post.mock.calls[0][1].body);
+  expect(done).toHaveBeenCalledOnce();
+});
+
 it("审核携带读取时的版本", async () => {
+  post.mockClear();
+  csrf.mockClear();
   csrf.mockResolvedValue({ headerName: "X-CSRF-TOKEN", token: "test" });
   post.mockResolvedValue({ response: { ok: true, status: 200 }, data: {} });
   const done = vi.fn();

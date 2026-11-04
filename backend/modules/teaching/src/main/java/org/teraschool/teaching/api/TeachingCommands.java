@@ -5,6 +5,12 @@ import java.util.UUID;
 public interface TeachingCommands {
   ClassView createClass(CreateClass command);
 
+  /** 结班并关闭其报名在班关系；只允许没有未结课次的班级。 */
+  ClassView closeClass(UUID classId, LessonVersion command);
+
+  /** 取消没有课次和有效报名关系的空班；保留历史记录并要求原因与版本。 */
+  ClassView cancelClass(UUID classId, CancelClass command);
+
   ClassView addMember(UUID classId, AddClassMember command);
 
   LessonView createLesson(CreateLesson command);

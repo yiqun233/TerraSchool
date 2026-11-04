@@ -19,7 +19,8 @@ public record ScheduleRule(
     String roomName,
     String topic,
     UUID teacherId,
-    UUID roomId) {
+    UUID roomId,
+    boolean autoAssignResources) {
   public ScheduleRule {
     weekdays = weekdays == null ? java.util.List.of() : java.util.List.copyOf(weekdays);
   }
@@ -45,6 +46,34 @@ public record ScheduleRule(
         roomName,
         topic,
         null,
-        null);
+        null,
+        false);
+  }
+
+  public ScheduleRule(
+      String startDate,
+      String endDate,
+      java.util.List<Integer> weekdays,
+      String startsAt,
+      String endsAt,
+      String hours,
+      String teacherName,
+      String roomName,
+      String topic,
+      UUID teacherId,
+      UUID roomId) {
+    this(
+        startDate,
+        endDate,
+        weekdays,
+        startsAt,
+        endsAt,
+        hours,
+        teacherName,
+        roomName,
+        topic,
+        teacherId,
+        roomId,
+        false);
   }
 }

@@ -33,6 +33,8 @@ public class SchedulingService implements org.teraschool.teaching.api.Scheduling
   private static final Pattern DAY = Pattern.compile("\\d{4}-\\d{2}-\\d{2}");
   private static final int MAX_DAYS = 180;
   private static final int MAX_SLOTS = 400;
+  private static final int MAX_BATCH_CLASSES = 20;
+  private static final int MAX_BATCH_SLOTS = 400;
 
   private final CurrentActor actors;
   private final TenantTransactions tx;
@@ -91,6 +93,136 @@ public class SchedulingService implements org.teraschool.teaching.api.Scheduling
             return new ScheduleResult(created, skipped.size(), skipped);
           });
     }
+  }
+
+  @Override
+  public ScheduleBatchPreview previewBatch(ScheduleBatchRequest request) {
+    if (request == null) throw new IllegalArgumentException("需要多班排课请求");
+    validateBatch(request.items());
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      var scope = actors.requireAction("TEACHING_MAINTAIN");
+      return tx.execute(
+          scope.tenantId(),
+          () -> {
+            var verified = actors.requireActionInTransaction("TEACHING_MAINTAIN");
+            var reservations = new ArrayList<Reservation>();
+            var previews = new ArrayList<SchedulePreview>();
+            var total = 0;
+            for (var item : request.items()) {
+              var plan = plan(item.classId(), item.rule(), verified, reservations);
+              total += plan.slots().size();
+              if (total > MAX_BATCH_SLOTS)
+                throw new ScheduleConflict("SCHEDULE_BATCH_TOO_MANY_SLOTS");
+              var preview = preview(plan, item.classId());
+              previews.add(preview);
+              reserve(item.classId(), plan, reservations);
+            }
+            return new ScheduleBatchPreview(previews);
+          });
+    }
+  }
+
+  @Override
+  public ScheduleBatchResult confirmBatch(ScheduleBatchRequest request) {
+    if (request == null) throw new IllegalArgumentException("需要多班排课请求");
+    validateBatch(request.items());
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      var scope = actors.requireAction("TEACHING_MAINTAIN");
+      return tx.execute(
+          scope.tenantId(),
+          () -> {
+            schools.lockTenant(scope.tenantId());
+            var verified = actors.requireActionInTransaction("TEACHING_MAINTAIN");
+            var total = 0;
+            var createdAll = 0;
+            var skippedAll = 0;
+            var results = new ArrayList<ScheduleBatchResult.ClassResult>();
+            for (var item : request.items()) {
+              var plan = plan(item.classId(), item.rule(), verified);
+              total += plan.slots().size();
+              if (total > MAX_BATCH_SLOTS)
+                throw new ScheduleConflict("SCHEDULE_BATCH_TOO_MANY_SLOTS");
+              var created = 0;
+              var skippedDates = new ArrayList<String>();
+              for (var slot : plan.slots()) {
+                if (!slot.available()) {
+                  skippedDates.add(slot.lessonDate() + ":" + slot.reason());
+                  continue;
+                }
+                sql.execute(
+                    "insert into teaching.lesson(tenant_id,class_id,lesson_date,starts_at,ends_at,"
+                        + "teacher_name,room_name,topic,hours,teacher_id,room_id)"
+                        + " values (?,?,?,?,?,?,?,?,?,?,?)",
+                    verified.tenantId(),
+                    item.classId(),
+                    LocalDate.parse(slot.lessonDate()),
+                    Time.valueOf(LocalTime.parse(slot.startsAt())),
+                    Time.valueOf(LocalTime.parse(slot.endsAt())),
+                    plan.teacherName(),
+                    plan.roomName(),
+                    plan.topic(),
+                    plan.hours(),
+                    plan.teacherId(),
+                    plan.roomId());
+                created++;
+              }
+              audit(verified, item.classId(), plan.schoolId(), created, skippedDates.size());
+              var result = new ScheduleResult(created, skippedDates.size(), skippedDates);
+              results.add(new ScheduleBatchResult.ClassResult(item.classId(), result));
+              createdAll += created;
+              skippedAll += skippedDates.size();
+            }
+            return new ScheduleBatchResult(createdAll, skippedAll, results);
+          });
+    }
+  }
+
+  private void validateBatch(List<ScheduleBatchItem> items) {
+    if (items == null || items.isEmpty() || items.size() > MAX_BATCH_CLASSES)
+      throw new ScheduleConflict("SCHEDULE_BATCH_SIZE_INVALID");
+    var ids = new HashSet<UUID>();
+    for (var item : items) {
+      if (item == null || item.classId() == null || item.rule() == null)
+        throw new IllegalArgumentException("每个排课项都需要班级和规则");
+      if (!ids.add(item.classId())) throw new ScheduleConflict("SCHEDULE_BATCH_DUPLICATE_CLASS");
+    }
+  }
+
+  private SchedulePreview preview(Plan plan, UUID classId) {
+    var available = plan.slots().stream().filter(ScheduleSlot::available).count();
+    return new SchedulePreview(
+        classId,
+        plan.slots().size(),
+        (int) available,
+        plan.slots().size() - (int) available,
+        plan.teacherName(),
+        plan.roomName(),
+        plan.slots());
+  }
+
+  private record Reservation(
+      UUID classId,
+      LocalDate date,
+      LocalTime startsAt,
+      LocalTime endsAt,
+      UUID teacherId,
+      String teacherName,
+      UUID roomId,
+      String roomName) {}
+
+  private void reserve(UUID classId, Plan plan, List<Reservation> reservations) {
+    for (var slot : plan.slots())
+      if (slot.available())
+        reservations.add(
+            new Reservation(
+                classId,
+                LocalDate.parse(slot.lessonDate()),
+                LocalTime.parse(slot.startsAt()),
+                LocalTime.parse(slot.endsAt()),
+                plan.teacherId(),
+                plan.teacherName(),
+                plan.roomId(),
+                plan.roomName()));
   }
 
   // ---------------------------------------------------------------- 资源不可用时间与策略
@@ -277,16 +409,14 @@ public class SchedulingService implements org.teraschool.teaching.api.Scheduling
 
   private SchedulePreview previewInTx(UUID classId, ScheduleRule rule, Actor actor) {
     var plan = plan(classId, rule, actor);
-    var available = plan.slots().stream().filter(ScheduleSlot::available).count();
-    return new SchedulePreview(
-        classId,
-        plan.slots().size(),
-        (int) available,
-        plan.slots().size() - (int) available,
-        plan.slots());
+    return preview(plan, classId);
   }
 
   private Plan plan(UUID classId, ScheduleRule rule, Actor actor) {
+    return plan(classId, rule, actor, List.of());
+  }
+
+  private Plan plan(UUID classId, ScheduleRule rule, Actor actor, List<Reservation> reservations) {
     if (classId == null || rule == null) throw new IllegalArgumentException("需要班级与排课规则");
     var start = date(rule.startDate(), "开始日期");
     var end = date(rule.endDate(), "结束日期");
@@ -310,9 +440,6 @@ public class SchedulingService implements org.teraschool.teaching.api.Scheduling
     if (!"ACTIVE".equals(row.get("status", String.class)))
       throw new ScheduleConflict("CLASS_NOT_ACTIVE");
     if (!schools.require(schoolId).active()) throw new AccessDeniedException("学校已停用，不能排课");
-    var teacher = resource(rule.teacherId(), "TEACHER", schoolId, rule.teacherName());
-    var room = resource(rule.roomId(), "ROOM", schoolId, rule.roomName());
-
     var dates = new ArrayList<LocalDate>();
     for (var date = start; !date.isAfter(end); date = date.plusDays(1))
       if (weekdays.contains(date.getDayOfWeek().getValue())) dates.add(date);
@@ -320,19 +447,24 @@ public class SchedulingService implements org.teraschool.teaching.api.Scheduling
     if (dates.size() > MAX_SLOTS) throw new ScheduleConflict("SCHEDULE_TOO_MANY_SLOTS");
 
     var policy = policy(schoolId);
+    var assignment =
+        selectResources(classId, schoolId, rule, dates, startsAt, endsAt, policy, reservations);
     var slots = new ArrayList<ScheduleSlot>();
     for (var date : dates) {
       var clash =
-          conflict(
-              classId,
-              date,
-              startsAt,
-              endsAt,
-              teacher.id(),
-              teacher.name(),
-              room.id(),
-              room.name(),
-              policy);
+          assignment.failureReason() == null
+              ? conflict(
+                  classId,
+                  date,
+                  startsAt,
+                  endsAt,
+                  assignment.teacher().id(),
+                  assignment.teacher().name(),
+                  assignment.room().id(),
+                  assignment.room().name(),
+                  policy,
+                  reservations)
+              : new Clash(assignment.failureReason(), "HARD");
       var hard = clash != null && "HARD".equals(clash.severity());
       slots.add(
           new ScheduleSlot(
@@ -345,7 +477,91 @@ public class SchedulingService implements org.teraschool.teaching.api.Scheduling
     }
 
     return new Plan(
-        schoolId, teacher.id(), teacher.name(), room.id(), room.name(), topic, hours, slots);
+        schoolId,
+        assignment.teacher().id(),
+        assignment.teacher().name(),
+        assignment.room().id(),
+        assignment.room().name(),
+        topic,
+        hours,
+        slots);
+  }
+
+  private record ResourceAssignment(ResourceRef teacher, ResourceRef room, String failureReason) {}
+
+  private ResourceAssignment selectResources(
+      UUID classId,
+      UUID schoolId,
+      ScheduleRule rule,
+      List<LocalDate> dates,
+      LocalTime startsAt,
+      LocalTime endsAt,
+      Policy policy,
+      List<Reservation> reservations) {
+    var fixedTeacher = resource(rule.teacherId(), "TEACHER", schoolId, rule.teacherName());
+    var fixedRoom = resource(rule.roomId(), "ROOM", schoolId, rule.roomName());
+    if (!rule.autoAssignResources()) return new ResourceAssignment(fixedTeacher, fixedRoom, null);
+
+    var teachers =
+        fixedTeacher.id() != null || fixedTeacher.name() != null
+            ? List.of(fixedTeacher)
+            : sql.fetch(
+                    "select id,name from organization.teacher where school_id=? and active order by name,id",
+                    schoolId)
+                .map(
+                    row ->
+                        new ResourceRef(row.get("id", UUID.class), row.get("name", String.class)));
+    if (teachers.isEmpty())
+      return new ResourceAssignment(fixedTeacher, fixedRoom, "NO_TEACHER_CANDIDATE");
+
+    var memberCount =
+        sql.fetchOne(
+                "select count(*) as total from teaching.enrollment_class where class_id=? and active",
+                classId)
+            .get("total", Long.class);
+    var rooms =
+        fixedRoom.id() != null || fixedRoom.name() != null
+            ? List.of(fixedRoom)
+            : sql.fetch(
+                    "select id,name from organization.room where school_id=? and active"
+                        + " and (capacity is null or capacity>=?) order by name,id",
+                    schoolId,
+                    memberCount)
+                .map(
+                    row ->
+                        new ResourceRef(row.get("id", UUID.class), row.get("name", String.class)));
+    if (rooms.isEmpty())
+      return new ResourceAssignment(fixedTeacher, fixedRoom, "NO_ROOM_CANDIDATE");
+
+    ResourceAssignment best = null;
+    int bestAvailable = -1;
+    for (var teacher : teachers) {
+      for (var room : rooms) {
+        int available = 0;
+        for (var date : dates) {
+          var clash =
+              conflict(
+                  classId,
+                  date,
+                  startsAt,
+                  endsAt,
+                  teacher.id(),
+                  teacher.name(),
+                  room.id(),
+                  room.name(),
+                  policy,
+                  reservations);
+          if (clash == null || "WARN".equals(clash.severity())) available++;
+        }
+        if (available > bestAvailable) {
+          bestAvailable = available;
+          best = new ResourceAssignment(teacher, room, null);
+        }
+      }
+    }
+    if (bestAvailable <= 0)
+      return new ResourceAssignment(fixedTeacher, fixedRoom, "NO_FEASIBLE_RESOURCE_PAIR");
+    return best;
   }
 
   /**
@@ -363,6 +579,30 @@ public class SchedulingService implements org.teraschool.teaching.api.Scheduling
       UUID roomId,
       String roomName,
       Policy policy) {
+    return conflict(
+        classId,
+        date,
+        startsAt,
+        endsAt,
+        teacherId,
+        teacherName,
+        roomId,
+        roomName,
+        policy,
+        List.of());
+  }
+
+  private Clash conflict(
+      UUID classId,
+      LocalDate date,
+      LocalTime startsAt,
+      LocalTime endsAt,
+      UUID teacherId,
+      String teacherName,
+      UUID roomId,
+      String roomName,
+      Policy policy,
+      List<Reservation> reservations) {
     var starts = Time.valueOf(startsAt);
     var ends = Time.valueOf(endsAt);
     var duplicate =
@@ -374,6 +614,24 @@ public class SchedulingService implements org.teraschool.teaching.api.Scheduling
             starts,
             ends);
     if (duplicate != null) return new Clash("DUPLICATE", "HARD");
+    for (var reservation : reservations) {
+      if (!reservation.date().equals(date)) continue;
+      var overlaps =
+          startsAt.isBefore(reservation.endsAt()) && endsAt.isAfter(reservation.startsAt());
+      if (overlaps && classId.equals(reservation.classId()))
+        return new Clash("LESSON_OVERLAP", "HARD");
+      var teacherMatches =
+          sameResource(teacherId, teacherName, reservation.teacherId(), reservation.teacherName());
+      if (overlaps && teacherMatches) return new Clash("TEACHER_CLASH", "HARD");
+      if (teacherMatches && policy.minGapMinutes() > 0) {
+        var gap = policy.minGapMinutes();
+        if (startsAt.isBefore(reservation.endsAt().plusMinutes(gap))
+            && endsAt.isAfter(reservation.startsAt().minusMinutes(gap)))
+          return new Clash("TEACHER_MIN_GAP", "HARD");
+      }
+      if (overlaps && sameResource(roomId, roomName, reservation.roomId(), reservation.roomName()))
+        return new Clash("ROOM_CLASH", "HARD");
+    }
     var classClash =
         sql.fetchOne(
             "select id from teaching.lesson where class_id=? and lesson_date=? and starts_at<?"
@@ -444,6 +702,11 @@ public class SchedulingService implements org.teraschool.teaching.api.Scheduling
         return new Clash("ROOM_UNAVAILABLE", policy.blockRoomUnavailable() ? "HARD" : "WARN");
     }
     return null;
+  }
+
+  private boolean sameResource(UUID leftId, String leftName, UUID rightId, String rightName) {
+    return (leftId != null && leftId.equals(rightId))
+        || (leftName != null && leftName.equals(rightName));
   }
 
   private record Clash(String code, String severity) {}

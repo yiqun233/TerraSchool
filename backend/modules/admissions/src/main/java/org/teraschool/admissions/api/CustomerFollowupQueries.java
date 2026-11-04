@@ -14,5 +14,17 @@ public interface CustomerFollowupQueries {
 
   record FollowupPage(List<Followup> items, int page, int size, boolean hasMore) {}
 
+  record Reminder(
+      UUID id,
+      UUID customerId,
+      String customerName,
+      String content,
+      String occurredOn,
+      String nextContactOn) {}
+
+  record ReminderPage(List<Reminder> items, int page, int size, boolean hasMore) {}
+
   FollowupPage list(UUID customerId, int page, int size);
+
+  ReminderPage reminders(UUID schoolId, String throughOn, int page, int size);
 }

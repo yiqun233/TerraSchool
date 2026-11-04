@@ -5,6 +5,10 @@ import java.util.UUID;
 
 /** 排课及资源占用的公开应用契约。 */
 public interface SchedulingOperations {
+  ScheduleBatchPreview previewBatch(ScheduleBatchRequest request);
+
+  ScheduleBatchResult confirmBatch(ScheduleBatchRequest request);
+
   SchedulePreview preview(UUID classId, ScheduleRule rule);
 
   ScheduleResult confirm(UUID classId, ScheduleRule rule);

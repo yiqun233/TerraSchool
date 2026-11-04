@@ -70,6 +70,37 @@ class AuditedChannelCommands
   }
 
   @Override
+  public Customer claim(UUID id, long expectedVersion) {
+    return invoke(
+        FailureAudit.Action.CUSTOMER_POOL_CLAIM, id, () -> customers.claim(id, expectedVersion));
+  }
+
+  @Override
+  public Customer releaseToPool(UUID id, long expectedVersion) {
+    return invoke(
+        FailureAudit.Action.CUSTOMER_POOL_RELEASE,
+        id,
+        () -> customers.releaseToPool(id, expectedVersion));
+  }
+
+  @Override
+  public CustomerMergeResult merge(
+      UUID sourceId, UUID primaryId, long expectedSourceVersion, long expectedPrimaryVersion) {
+    return invoke(
+        FailureAudit.Action.CUSTOMER_MERGE,
+        sourceId,
+        () -> customers.merge(sourceId, primaryId, expectedSourceVersion, expectedPrimaryVersion));
+  }
+
+  @Override
+  public CustomerMergeResult reverseMerge(UUID sourceId, long expectedSourceVersion) {
+    return invoke(
+        FailureAudit.Action.CUSTOMER_MERGE_REVERSE,
+        sourceId,
+        () -> customers.reverseMerge(sourceId, expectedSourceVersion));
+  }
+
+  @Override
   public CustomerFollowupQueries.Followup create(UUID customerId, FollowupCreate command) {
     return invoke(
         FailureAudit.Action.CUSTOMER_FOLLOWUP_CREATE,
@@ -83,6 +114,15 @@ class AuditedChannelCommands
         FailureAudit.Action.CUSTOMER_FOLLOWUP_READ,
         customerId,
         () -> followups.list(customerId, page, size));
+  }
+
+  @Override
+  public CustomerFollowupQueries.ReminderPage reminders(
+      UUID schoolId, String throughOn, int page, int size) {
+    return invoke(
+        FailureAudit.Action.CUSTOMER_FOLLOWUP_READ,
+        schoolId,
+        () -> followups.reminders(schoolId, throughOn, page, size));
   }
 
   private <T> T invoke(FailureAudit.Action action, UUID resource, Supplier<T> work) {

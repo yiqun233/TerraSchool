@@ -24,15 +24,71 @@ class RejectedRequestAudit {
                     .getServletPath()
                     .matches("/api/organization/employees/[^/]+/attachments/[^/]+")
                 || request.getServletPath().matches("/api/archive/students/[^/]+")
-                || request.getServletPath().matches("/api/admissions/customers/[^/]+/followups"))))
-      return;
+                || request.getServletPath().matches("/api/admissions/customers/[^/]+/followups")
+                || request.getServletPath().matches("/api/admissions/customers/[^/]+/merges")
+                || request.getServletPath().matches("/api/admissions/customers/[^/]+/student-link")
+                || request.getServletPath().equals("/api/admissions/customers/pool")))) return;
     String path = request.getServletPath();
     UUID resource = null;
     FailureAudit.Action action;
-    if (path.equals("/api/admissions/customers")) action = FailureAudit.Action.CUSTOMER_CREATE;
+    if (path.equals("/api/admissions/customers/pool") && request.getMethod().equals("GET"))
+      action = FailureAudit.Action.CUSTOMER_POOL_READ;
+    else if (request.getMethod().equals("GET")
+        && path.matches("/api/admissions/customers/[^/]+/merges")) {
+      action = FailureAudit.Action.CUSTOMER_MERGE;
+      try {
+        resource = UUID.fromString(path.split("/")[4]);
+      } catch (IllegalArgumentException invalid) {
+        /* 不记录原路径 */
+      }
+    } else if (path.matches("/api/admissions/customers/[^/]+/merge/reverse")) {
+      action = FailureAudit.Action.CUSTOMER_MERGE_REVERSE;
+      try {
+        resource = UUID.fromString(path.split("/")[4]);
+      } catch (IllegalArgumentException invalid) {
+        /* 不记录原路径 */
+      }
+    } else if (path.matches("/api/admissions/customers/[^/]+/merge")) {
+      action = FailureAudit.Action.CUSTOMER_MERGE;
+      try {
+        resource = UUID.fromString(path.split("/")[4]);
+      } catch (IllegalArgumentException invalid) {
+        /* 不记录原路径 */
+      }
+    } else if (path.matches("/api/admissions/customers/[^/]+/convert-to-student")) {
+      action = FailureAudit.Action.CUSTOMER_CONVERT_TO_STUDENT;
+      try {
+        resource = UUID.fromString(path.split("/")[4]);
+      } catch (IllegalArgumentException invalid) {
+        /* 不记录原路径 */
+      }
+    } else if (request.getMethod().equals("GET")
+        && path.matches("/api/admissions/customers/[^/]+/student-link")) {
+      action = FailureAudit.Action.CUSTOMER_CONVERT_TO_STUDENT;
+      try {
+        resource = UUID.fromString(path.split("/")[4]);
+      } catch (IllegalArgumentException invalid) {
+        /* 不记录原路径 */
+      }
+    } else if (path.equals("/api/admissions/customers"))
+      action = FailureAudit.Action.CUSTOMER_CREATE;
     else if (path.equals("/api/admissions/customers/cancel"))
       action = FailureAudit.Action.CUSTOMER_CANCEL;
-    else if (path.matches("/api/admissions/customers/[^/]+/phone")) {
+    else if (path.matches("/api/admissions/customers/[^/]+/release-to-pool")) {
+      action = FailureAudit.Action.CUSTOMER_POOL_RELEASE;
+      try {
+        resource = UUID.fromString(path.split("/")[4]);
+      } catch (IllegalArgumentException invalid) {
+        /* 不记录原路径 */
+      }
+    } else if (path.matches("/api/admissions/customers/[^/]+/claim")) {
+      action = FailureAudit.Action.CUSTOMER_POOL_CLAIM;
+      try {
+        resource = UUID.fromString(path.split("/")[4]);
+      } catch (IllegalArgumentException invalid) {
+        /* 不记录原路径 */
+      }
+    } else if (path.matches("/api/admissions/customers/[^/]+/phone")) {
       action = FailureAudit.Action.CUSTOMER_PHONE_VIEW;
       try {
         resource = UUID.fromString(path.split("/")[4]);
@@ -57,7 +113,11 @@ class RejectedRequestAudit {
       } catch (IllegalArgumentException invalid) {
         /* 不记录原路径 */
       }
-    } else if (path.matches("/api/teaching/classes/[^/]+/schedule/(preview|confirm)")) {
+    } else if (path.equals("/api/teaching/schedule/batch/preview"))
+      action = FailureAudit.Action.SCHEDULE_PREVIEW;
+    else if (path.equals("/api/teaching/schedule/batch/confirm"))
+      action = FailureAudit.Action.SCHEDULE_CONFIRM;
+    else if (path.matches("/api/teaching/classes/[^/]+/schedule/(preview|confirm)")) {
       action =
           path.endsWith("/confirm")
               ? FailureAudit.Action.SCHEDULE_CONFIRM
@@ -83,6 +143,26 @@ class RejectedRequestAudit {
             UUID.fromString(
                 path.substring(
                     "/api/approval/requests/".length(), path.length() - "/decide".length()));
+      } catch (IllegalArgumentException invalid) {
+        /* 不保存原始路径文本。 */
+      }
+    } else if (path.matches("/api/approval/requests/[^/]+/withdraw")) {
+      action = FailureAudit.Action.APPROVAL_REQUEST_WITHDRAW;
+      try {
+        resource =
+            UUID.fromString(
+                path.substring(
+                    "/api/approval/requests/".length(), path.length() - "/withdraw".length()));
+      } catch (IllegalArgumentException invalid) {
+        /* 不保存原始路径文本。 */
+      }
+    } else if (path.matches("/api/approval/requests/[^/]+/expire")) {
+      action = FailureAudit.Action.APPROVAL_REQUEST_EXPIRE;
+      try {
+        resource =
+            UUID.fromString(
+                path.substring(
+                    "/api/approval/requests/".length(), path.length() - "/expire".length()));
       } catch (IllegalArgumentException invalid) {
         /* 不保存原始路径文本。 */
       }
@@ -133,7 +213,21 @@ class RejectedRequestAudit {
         /* 不保存原始路径文本。 */
       }
     } else if (path.equals("/api/teaching/classes")) action = FailureAudit.Action.CLASS_CREATE;
-    else if (path.matches("/api/teaching/classes/[^/]+/members")) {
+    else if (path.matches("/api/teaching/classes/[^/]+/close")) {
+      action = FailureAudit.Action.CLASS_CLOSE;
+      try {
+        resource = UUID.fromString(path.split("/")[4]);
+      } catch (IllegalArgumentException invalid) {
+        /* 不记录原路径 */
+      }
+    } else if (path.matches("/api/teaching/classes/[^/]+/cancel")) {
+      action = FailureAudit.Action.CLASS_CANCEL;
+      try {
+        resource = UUID.fromString(path.split("/")[4]);
+      } catch (IllegalArgumentException invalid) {
+        /* 不记录原路径 */
+      }
+    } else if (path.matches("/api/teaching/classes/[^/]+/members")) {
       action = FailureAudit.Action.CLASS_MEMBER_ADD;
       try {
         resource =
@@ -159,7 +253,8 @@ class RejectedRequestAudit {
       } catch (IllegalArgumentException invalid) {
         /* 不保存原始路径文本。 */
       }
-    } else if (path.equals("/api/enrollment/enrollments"))
+    } else if (path.equals("/api/enrollment/enrollments")
+        || path.equals("/api/enrollment/enrollments/batch"))
       action = FailureAudit.Action.ENROLLMENT_CREATE;
     else if (path.matches("/api/enrollment/enrollments/[^/]+/approve")) {
       action = FailureAudit.Action.ENROLLMENT_APPROVE;
@@ -202,6 +297,29 @@ class RejectedRequestAudit {
             UUID.fromString(
                 path.substring(
                     "/api/product/curricula/".length(), path.length() - "/update".length()));
+      } catch (IllegalArgumentException invalid) {
+        /* 不保存原始路径文本。 */
+      }
+    } else if (path.equals("/api/product/groups"))
+      action = FailureAudit.Action.PRODUCT_GROUP_CREATE;
+    else if (path.matches("/api/product/groups/[^/]+/update")) {
+      action = FailureAudit.Action.PRODUCT_GROUP_UPDATE;
+      try {
+        resource =
+            UUID.fromString(
+                path.substring(
+                    "/api/product/groups/".length(), path.length() - "/update".length()));
+      } catch (IllegalArgumentException invalid) {
+        /* 不保存原始路径文本。 */
+      }
+    } else if (path.matches("/api/product/products/[^/]+/group(/clear)?")) {
+      action = FailureAudit.Action.PRODUCT_GROUP_ASSIGN;
+      try {
+        resource =
+            UUID.fromString(
+                path.substring(
+                    "/api/product/products/".length(),
+                    path.indexOf("/group", "/api/product/products/".length())));
       } catch (IllegalArgumentException invalid) {
         /* 不保存原始路径文本。 */
       }

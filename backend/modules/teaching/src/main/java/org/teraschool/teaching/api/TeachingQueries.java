@@ -4,7 +4,70 @@ import java.util.List;
 import java.util.UUID;
 
 public interface TeachingQueries {
+  record TeacherClassView(
+      UUID id,
+      String name,
+      String curriculumName,
+      String status,
+      boolean groupTraining,
+      int lessonCount) {}
+
+  record TeacherLessonView(
+      UUID id,
+      UUID classId,
+      String className,
+      String curriculumName,
+      String lessonDate,
+      String startsAt,
+      String endsAt,
+      String roomName,
+      String topic,
+      String status,
+      long version) {}
+
+  record TeacherWorkbench(List<TeacherClassView> classes, List<TeacherLessonView> lessons) {}
+
+  record TeacherClassWorkbench(
+      TeacherClassView classInfo, List<ClassMemberView> members, List<TeacherLessonView> lessons) {
+    public TeacherClassWorkbench {
+      members = List.copyOf(members);
+      lessons = List.copyOf(lessons);
+    }
+  }
+
+  record ResourceScheduleSlot(
+      UUID lessonId,
+      String className,
+      String lessonDate,
+      String startsAt,
+      String endsAt,
+      String teacherName,
+      String roomName,
+      String topic,
+      String status) {}
+
+  record DailyResourceSchedule(
+      String day,
+      List<ResourceScheduleSlot> lessons,
+      int missingTeacher,
+      int missingRoom,
+      long total,
+      int page,
+      int pageSize) {
+    public DailyResourceSchedule {
+      lessons = List.copyOf(lessons);
+    }
+  }
+
   TeachingCapabilities capabilities();
+
+  /** 当前账号绑定的教师在明确日期区间内的课表及所授班级。 */
+  TeacherWorkbench myWorkbench(String from, String to);
+
+  /** 当前账号绑定的教师仅能查看本人实际任教班级的名册与课次。 */
+  TeacherClassWorkbench myClass(UUID classId);
+
+  DailyResourceSchedule dailyResourceSchedule(UUID schoolId, String day, int page, int pageSize);
 
   List<ClassView> classes(UUID schoolId);
 

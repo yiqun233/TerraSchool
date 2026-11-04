@@ -11,15 +11,22 @@ import org.teraschool.finance.api.*;
 class FinanceHttp {
   private final PeriodQueries queries;
   private final PeriodCommands commands;
+  private final FinancialReportQueries reports;
 
-  FinanceHttp(PeriodQueries queries, PeriodCommands commands) {
+  FinanceHttp(PeriodQueries queries, PeriodCommands commands, FinancialReportQueries reports) {
     this.queries = queries;
     this.commands = commands;
+    this.reports = reports;
   }
 
   @GetMapping("/api/finance/capabilities")
   FinanceCapabilities capabilities() {
     return queries.capabilities();
+  }
+
+  @GetMapping("/api/finance/reports/funds-reconciliation")
+  FundsReconciliation fundsReconciliation(@RequestParam UUID schoolId) {
+    return reports.fundsReconciliation(schoolId);
   }
 
   @GetMapping("/api/finance/periods")

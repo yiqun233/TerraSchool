@@ -95,11 +95,204 @@ it("班级列表展示在班人数与状态", async () => {
           },
         ],
       };
+    if (path === "/api/teaching/me/workbench")
+      return {
+        response: { ok: true, status: 200 },
+        data: {
+          classes: [
+            {
+              id: "class-1",
+              name: "少儿英语A班",
+              curriculumName: "少儿英语",
+              lessonCount: 1,
+            },
+          ],
+          lessons: [
+            {
+              id: "lesson-own",
+              classId: "class-1",
+              className: "少儿英语A班",
+              curriculumName: "少儿英语",
+              lessonDate: "2026-11-12",
+              startsAt: "09:00",
+              endsAt: "10:00",
+              roomName: "教室甲",
+              topic: "本人授课",
+              status: "PUBLISHED",
+              version: 0,
+            },
+          ],
+        },
+      };
+    if (path === "/api/teaching/me/classes/{id}")
+      return {
+        response: { ok: true, status: 200 },
+        data: {
+          classInfo: {
+            id: "class-1",
+            name: "少儿英语A班",
+            curriculumName: "少儿英语",
+            status: "ACTIVE",
+            groupTraining: false,
+            lessonCount: 1,
+          },
+          members,
+          lessons: [
+            {
+              id: "lesson-own",
+              classId: "class-1",
+              className: "少儿英语A班",
+              curriculumName: "少儿英语",
+              lessonDate: "2026-11-12",
+              startsAt: "09:00",
+              endsAt: "10:00",
+              roomName: "教室甲",
+              topic: "本人授课",
+              status: "PUBLISHED",
+              version: 0,
+            },
+          ],
+        },
+      };
+    if (path === "/api/teaching/reports/resource-daily-schedule")
+      return {
+        response: { ok: true, status: 200 },
+        data: {
+          day: "2026-11-12",
+          missingTeacher: 0,
+          missingRoom: 1,
+          lessons: [
+            {
+              lessonId: "lesson-own",
+              className: "少儿英语A班",
+              lessonDate: "2026-11-12",
+              startsAt: "09:00",
+              endsAt: "10:00",
+              teacherName: "教师甲",
+              roomName: null,
+              topic: "资源日报课",
+              status: "PUBLISHED",
+            },
+          ],
+        },
+      };
     throw new Error("unexpected path " + path);
   });
   renderWithClient(<TeachingWorkspace onUnauthorized={vi.fn()} />);
-  expect(await screen.findByText("少儿英语A班")).toBeTruthy();
+  expect(await screen.findAllByText("少儿英语A班")).toHaveLength(4);
   expect(screen.getByText("2")).toBeTruthy();
+  expect(await screen.findByText("教师本人课表与班级工作台")).toBeTruthy();
+  expect(await screen.findByText("本人授课")).toBeTruthy();
+  expect(await screen.findByText("资源日报课")).toBeTruthy();
+  expect(screen.getByText("未分配教师 0，未分配教室 1")).toBeTruthy();
+  await userEvent
+    .setup({ pointerEventsCheck: 0 })
+    .click(await screen.findByRole("button", { name: "查看班级工作台" }));
+  expect(await screen.findByText("班级名册")).toBeTruthy();
+  expect(await screen.findByText("学员甲")).toBeTruthy();
+  expect(get).toHaveBeenCalledWith(
+    "/api/teaching/me/classes/{id}",
+    expect.objectContaining({ params: { path: { id: "class-1" } } }),
+  );
+});
+
+it("结班需确认并提交班级版本", async () => {
+  vi.clearAllMocks();
+  get.mockImplementation(async (path: string) => {
+    if (path === "/api/teaching/capabilities")
+      return { response: { ok: true, status: 200 }, data: capabilities };
+    if (path === "/api/teaching/classes")
+      return {
+        response: { ok: true, status: 200 },
+        data: [{ id: "class-1", name: "待结班", status: "ACTIVE", version: 7 }],
+      };
+    if (path === "/api/teaching/me/workbench")
+      return {
+        response: { ok: true, status: 200 },
+        data: { classes: [], lessons: [] },
+      };
+    if (path === "/api/teaching/reports/resource-daily-schedule")
+      return {
+        response: { ok: true, status: 200 },
+        data: {
+          day: "2026-11-04",
+          lessons: [],
+          missingTeacher: 0,
+          missingRoom: 0,
+        },
+      };
+    throw new Error("unexpected path " + path);
+  });
+  csrf.mockResolvedValue({ headerName: "X-CSRF-TOKEN", token: "test" });
+  post.mockResolvedValue({ response: { ok: true, status: 200 }, data: {} });
+  const user = userEvent.setup({ pointerEventsCheck: 0 });
+  renderWithClient(<TeachingWorkspace onUnauthorized={vi.fn()} />);
+  await user.click(await screen.findByRole("button", { name: /结\s*班/ }));
+  await user.click(await screen.findByRole("button", { name: "确认结班" }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+  expect(post.mock.calls[0][0]).toBe("/api/teaching/classes/{id}/close");
+  expect(post.mock.calls[0][1]).toMatchObject({
+    params: { path: { id: "class-1" } },
+    body: { expectedVersion: 7 },
+  });
+});
+
+it("空班取消需填写原因并提交版本及幂等身份", async () => {
+  vi.clearAllMocks();
+  vi.stubGlobal(
+    "prompt",
+    vi.fn(() => "招生计划调整"),
+  );
+  get.mockImplementation(async (path: string) => {
+    if (path === "/api/teaching/capabilities")
+      return { response: { ok: true, status: 200 }, data: capabilities };
+    if (path === "/api/teaching/classes")
+      return {
+        response: { ok: true, status: 200 },
+        data: [
+          {
+            id: "empty-class",
+            name: "待取消空班",
+            status: "ACTIVE",
+            memberCount: 0,
+            version: 3,
+          },
+        ],
+      };
+    if (path === "/api/teaching/me/workbench")
+      return {
+        response: { ok: true, status: 200 },
+        data: { classes: [], lessons: [] },
+      };
+    if (path === "/api/teaching/reports/resource-daily-schedule")
+      return {
+        response: { ok: true, status: 200 },
+        data: {
+          day: "2026-11-04",
+          lessons: [],
+          missingTeacher: 0,
+          missingRoom: 0,
+        },
+      };
+    throw new Error("unexpected path " + path);
+  });
+  csrf.mockResolvedValue({ headerName: "X-CSRF-TOKEN", token: "test" });
+  post.mockResolvedValue({ response: { ok: true, status: 200 }, data: {} });
+  const user = userEvent.setup({ pointerEventsCheck: 0 });
+  renderWithClient(<TeachingWorkspace onUnauthorized={vi.fn()} />);
+  await user.click(await screen.findByRole("button", { name: "取消空班" }));
+  await user.click(await screen.findByRole("button", { name: "确认取消" }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+  expect(post.mock.calls[0][0]).toBe("/api/teaching/classes/{id}/cancel");
+  expect(post.mock.calls[0][1]).toMatchObject({
+    params: { path: { id: "empty-class" } },
+    body: {
+      expectedVersion: 3,
+      reason: "招生计划调整",
+      requestId: expect.any(String),
+    },
+  });
+  vi.unstubAllGlobals();
 });
 
 it("发布课次携带读取版本", async () => {
@@ -130,7 +323,15 @@ it("考勤确认提交全部在班报名，关闭课次单独提交版本", asyn
   const user = userEvent.setup({ pointerEventsCheck: 0 });
   renderWithClient(
     <AttendanceModal
-      lesson={{ ...lesson, status: "PUBLISHED", version: 3 } as never}
+      lesson={
+        {
+          ...lesson,
+          startsAt: "09:00",
+          endsAt: "10:00",
+          status: "PUBLISHED",
+          version: 3,
+        } as never
+      }
       members={members as never}
       onCancel={vi.fn()}
       onDone={done}
@@ -139,6 +340,8 @@ it("考勤确认提交全部在班报名，关闭课次单独提交版本", asyn
   );
   await user.click(screen.getByLabelText("出勤-学员乙"));
   await user.click(screen.getAllByText("缺勤")[1]);
+  await user.click(screen.getAllByText("部分缺勤")[0]);
+  await user.type(screen.getByLabelText("实际出勤分钟-学员甲"), "30");
   await user.click(screen.getByRole("button", { name: /确认考勤/ }));
   await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
   const payload = post.mock.calls[0][1].body;
@@ -150,6 +353,11 @@ it("考勤确认提交全部在班报名，关闭课次单独提交版本", asyn
       (item: { enrollmentId: string }) => item.enrollmentId === "enrollment-2",
     ).status,
   ).toBe("ABSENT");
+  expect(
+    payload.records.find(
+      (item: { enrollmentId: string }) => item.enrollmentId === "enrollment-1",
+    ),
+  ).toMatchObject({ status: "PARTIAL", attendedMinutes: 30 });
   expect(done).toHaveBeenCalled();
 
   renderWithClient(

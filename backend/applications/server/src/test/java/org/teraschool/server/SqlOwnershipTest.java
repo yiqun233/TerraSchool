@@ -34,6 +34,10 @@ class SqlOwnershipTest {
           Map.entry(
               "funds/FundsService.java",
               Set.of("archive.student", "enrollment.hours_cancellation")),
+          Map.entry(
+              "finance/FundsReconciliationService.java",
+              Set.of(
+                  "archive.student", "funds.account_entry", "funds.allocation", "funds.receipt")),
           Map.entry("identity/AccountAuthorizations.java", Set.of("organization.unit")),
           Map.entry("identity/SchoolProvisioner.java", Set.of("organization.unit")),
           Map.entry(
@@ -53,6 +57,7 @@ class SqlOwnershipTest {
               "teaching/TeachingService.java",
               Set.of(
                   "enrollment.hours_cancellation",
+                  "organization.employee",
                   "organization.room",
                   "organization.teacher",
                   "product.curriculum")));

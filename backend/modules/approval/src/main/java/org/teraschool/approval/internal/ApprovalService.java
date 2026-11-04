@@ -2,6 +2,8 @@ package org.teraschool.approval.internal;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.*;
 import org.jooq.DSLContext;
 import org.jooq.Record;
@@ -30,7 +32,12 @@ public class ApprovalService
           "CASH_REFUND",
           "ENROLLMENT_DISCOUNT",
           "SERVICE_FEE_REFUND",
-          "SERVICE_FEE_REVERSAL");
+          "SERVICE_FEE_REVERSAL",
+          "ENROLLMENT_TRANSFER",
+          "ENROLLMENT_WITHDRAWAL",
+          "ENROLLMENT_DEFER",
+          "ENROLLMENT_REDUCTION",
+          "SERVICE_FEE_REDUCTION");
   private static final Set<String> DECISIONS = Set.of("APPROVED", "REJECTED");
   private static final java.util.regex.Pattern DECIMAL =
       java.util.regex.Pattern.compile("\\d{1,12}(\\.\\d{1,2})?");
@@ -62,7 +69,7 @@ public class ApprovalService
     var manage = schoolsOf("APPROVAL_MANAGE");
     var decide = schoolsOf("APPROVAL_DECIDE");
     if (scope.readableSchoolIds().isEmpty())
-      return new ApprovalCapabilities(true, false, false, List.of());
+      return new ApprovalCapabilities(true, false, false, scope.accountId(), List.of());
     return tx.execute(
         scope.tenantId(),
         () -> {
@@ -81,6 +88,7 @@ public class ApprovalService
               true,
               options.stream().anyMatch(ApprovalCapabilities.ApprovalSchoolOption::canManage),
               options.stream().anyMatch(ApprovalCapabilities.ApprovalSchoolOption::canDecide),
+              scope.accountId(),
               options);
         });
   }
@@ -201,18 +209,47 @@ public class ApprovalService
   }
 
   private ApprovalRequestView requestWithTrace(CreateApprovalRequest command) {
-    if (command == null || command.enrollmentId() == null)
-      throw new IllegalArgumentException("需要报名");
+    if (command == null || command.requestId() == null || command.enrollmentId() == null)
+      throw new IllegalArgumentException("需要请求标识和报名");
     var action = action(command.action());
     var amount = amount(command.amount(), "申请金额", false);
     var reason = text(command.reason(), 200, "申请原因");
-    var permission = "ENROLLMENT_DISCOUNT".equals(action) ? "ENROLLMENT_DISCOUNT" : "REFUND_APPLY";
+    var fingerprint =
+        fingerprint(
+            action,
+            command.enrollmentId().toString(),
+            amount.toPlainString(),
+            Objects.toString(reason, ""));
+    var permission = requestPermission(action);
     var apply = actors.requireAction(permission);
     return tx.execute(
         apply.tenantId(),
         () -> {
           schools.lockTenant(apply.tenantId());
+          sql.fetch(
+              "select pg_advisory_xact_lock(hashtextextended(?,0))",
+              "approval-request:"
+                  + apply.tenantId()
+                  + ":"
+                  + apply.accountId()
+                  + ":"
+                  + command.requestId());
           var verified = actors.requireActionInTransaction(permission);
+          var previous =
+              sql.fetchOne(
+                  "select fingerprint,approval_id from approval.request_command where tenant_id=? and actor_id=? and request_id=?",
+                  apply.tenantId(),
+                  apply.accountId(),
+                  command.requestId());
+          if (previous != null) {
+            if (!fingerprint.equals(previous.get("fingerprint", String.class)))
+              throw new ApprovalConflict("IDEMPOTENCY_KEY_REUSED");
+            var priorRequest = requireRequest(previous.get("approval_id", UUID.class));
+            if (!apply.accountId().equals(priorRequest.get("requested_by", UUID.class))
+                || !verified.schools().contains(priorRequest.get("school_id", UUID.class)))
+              throw new AccessDeniedException("当前无权读取原审批申请");
+            return requestView(priorRequest);
+          }
           var enrollment = enrollments.require(command.enrollmentId());
           var schoolId = enrollment.schoolId();
           if (!verified.schools().contains(schoolId))
@@ -236,6 +273,14 @@ public class ApprovalService
               amount,
               reason,
               apply.accountId());
+          sql.execute(
+              "insert into approval.request_command(tenant_id,actor_id,request_id,fingerprint,approval_id)"
+                  + " values (?,?,?,?,?)",
+              apply.tenantId(),
+              apply.accountId(),
+              command.requestId(),
+              fingerprint,
+              id);
           audit(apply, "REQUESTED", id, schoolId, amount, action);
           return requestView(requireRequest(id));
         });
@@ -290,6 +335,76 @@ public class ApprovalService
               "status");
           return requestView(requireRequest(id));
         });
+  }
+
+  @Override
+  public ApprovalRequestView withdraw(UUID id, long expectedVersion) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      if (id == null || expectedVersion < 0) throw new IllegalArgumentException("需要审批单和版本");
+      var scope = actors.requireResourceScope("APPROVAL");
+      return tx.execute(
+          scope.tenantId(),
+          () -> {
+            schools.lockTenant(scope.tenantId());
+            var actor = actors.requireIdentityInTransaction();
+            var row = requireRequestForUpdate(id);
+            if (!actor.accountId().equals(row.get("requested_by", UUID.class)))
+              throw new AccessDeniedException("仅申请人可以撤回审批单");
+            if (!"PENDING".equals(row.get("status", String.class)))
+              throw new ApprovalConflict("APPROVAL_NOT_PENDING");
+            if (!row.get("version", Long.class).equals(expectedVersion))
+              throw new ApprovalConflict("VERSION_CONFLICT");
+            int changed =
+                sql.execute(
+                    "update approval.request set status='WITHDRAWN',version=version+1 where id=? and status='PENDING' and version=?",
+                    id,
+                    expectedVersion);
+            if (changed != 1) throw new ApprovalConflict("VERSION_CONFLICT");
+            audit(
+                actor,
+                "WITHDRAWN",
+                id,
+                row.get("school_id", UUID.class),
+                row.get("amount", BigDecimal.class),
+                "status");
+            return requestView(requireRequest(id));
+          });
+    }
+  }
+
+  @Override
+  public ApprovalRequestView expire(UUID id, long expectedVersion, String reason) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      if (id == null || expectedVersion < 0) throw new IllegalArgumentException("需要审批单和版本");
+      var note = text(reason, 200, "失效原因");
+      if (note == null) throw new IllegalArgumentException("失效原因必填");
+      var decide = actors.requireAction("APPROVAL_DECIDE");
+      return tx.execute(
+          decide.tenantId(),
+          () -> {
+            schools.lockTenant(decide.tenantId());
+            var actor = actors.requireActionInTransaction("APPROVAL_DECIDE");
+            var row = requireRequestForUpdate(id);
+            var schoolId = row.get("school_id", UUID.class);
+            if (!actor.schools().contains(schoolId)) throw new AccessDeniedException("无该学校的审批权限");
+            if (!"PENDING".equals(row.get("status", String.class)))
+              throw new ApprovalConflict("APPROVAL_NOT_PENDING");
+            if (!row.get("version", Long.class).equals(expectedVersion))
+              throw new ApprovalConflict("VERSION_CONFLICT");
+            if (decide.accountId().equals(row.get("requested_by", UUID.class)))
+              throw new ApprovalConflict("APPROVAL_SELF_DECISION");
+            int changed =
+                sql.execute(
+                    "update approval.request set status='EXPIRED',decided_by=?,decision_note=?,decided_at=CURRENT_TIMESTAMP,version=version+1 where id=? and status='PENDING' and version=?",
+                    decide.accountId(),
+                    note,
+                    id,
+                    expectedVersion);
+            if (changed != 1) throw new ApprovalConflict("VERSION_CONFLICT");
+            audit(actor, "EXPIRED", id, schoolId, row.get("amount", BigDecimal.class), "status");
+            return requestView(requireRequest(id));
+          });
+    }
   }
 
   // ---------------------------------------------------------------- 闸门
@@ -420,6 +535,21 @@ public class ApprovalService
     return text;
   }
 
+  private String requestPermission(String action) {
+    return switch (action) {
+      case "ENROLLMENT_TRANSFER", "ENROLLMENT_WITHDRAWAL", "ENROLLMENT_DEFER" ->
+          "ENROLLMENT_MAINTAIN";
+      case "ENROLLMENT_DISCOUNT", "ENROLLMENT_REDUCTION" -> "ENROLLMENT_DISCOUNT";
+      case "REFUND_HOURS",
+          "CASH_REFUND",
+          "SERVICE_FEE_REFUND",
+          "SERVICE_FEE_REVERSAL",
+          "SERVICE_FEE_REDUCTION" ->
+          "REFUND_APPLY";
+      default -> throw new IllegalArgumentException("审批动作无对应申请权限");
+    };
+  }
+
   private BigDecimal amount(String value, String label, boolean allowZero) {
     if (value == null || value.isBlank()) throw new IllegalArgumentException(label + "必填");
     var text = value.strip();
@@ -441,6 +571,17 @@ public class ApprovalService
 
   private String money(BigDecimal value) {
     return value == null ? null : value.setScale(2, RoundingMode.UNNECESSARY).toPlainString();
+  }
+
+  private String fingerprint(String... parts) {
+    var value = String.join("\u001f", parts);
+    try {
+      return HexFormat.of()
+          .formatHex(
+              MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));
+    } catch (java.security.NoSuchAlgorithmException impossible) {
+      throw new IllegalStateException(impossible);
+    }
   }
 
   private void audit(

@@ -15,6 +15,7 @@ const capabilities = {
   canRead: true,
   canManage: true,
   canDecide: true,
+  currentAccountId: "user-a",
   schools: [
     { id: "school-1", name: "测试学校", canManage: true, canDecide: true },
   ],
@@ -62,7 +63,7 @@ it("待审批列表展示金额与动作，通过时携带版本", async () => {
             amount: "200.00",
             reason: "部分退课",
             status: "PENDING",
-            requestedBy: "user-a",
+            requestedBy: "user-b",
             version: 0,
           },
         ],
@@ -118,4 +119,81 @@ it("调整免批额度时提交版本，冲突提示重新读取", async () => {
     expectedVersion: 4,
   });
   await screen.findByText(/策略已被他人修改/);
+});
+
+it("申请人可以按版本撤回自己的待审批申请", async () => {
+  vi.clearAllMocks();
+  get.mockImplementation(async (path: string) => {
+    if (path === "/api/approval/capabilities")
+      return { response: { ok: true, status: 200 }, data: capabilities };
+    if (path === "/api/approval/policies")
+      return { response: { ok: true, status: 200 }, data: [] };
+    if (path === "/api/approval/requests")
+      return {
+        response: { ok: true, status: 200 },
+        data: [
+          {
+            id: "request-2",
+            schoolId: "school-1",
+            action: "ENROLLMENT_DEFER",
+            enrollmentId: "enrollment-1",
+            amount: "50.00",
+            reason: "延期申请",
+            status: "PENDING",
+            requestedBy: "user-a",
+            version: 3,
+          },
+        ],
+      };
+    throw new Error("unexpected path " + path);
+  });
+  csrf.mockResolvedValue({ headerName: "X-CSRF-TOKEN", token: "test" });
+  post.mockResolvedValue({ response: { ok: true, status: 200 }, data: {} });
+  const user = userEvent.setup({ pointerEventsCheck: 0 });
+  renderWithClient(<ApprovalInbox onUnauthorized={vi.fn()} />);
+  await user.click(await screen.findByRole("button", { name: /撤\s*回/ }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+  expect(post.mock.calls[0][0]).toBe("/api/approval/requests/{id}/withdraw");
+  expect(post.mock.calls[0][1].params.path.id).toBe("request-2");
+  expect(post.mock.calls[0][1].body).toEqual({ expectedVersion: 3 });
+});
+
+it("审批申请遭遇网络中断后重试复用同一请求标识", async () => {
+  vi.clearAllMocks();
+  get.mockImplementation(async (path: string) => {
+    if (path === "/api/approval/capabilities")
+      return { response: { ok: true, status: 200 }, data: capabilities };
+    if (path === "/api/approval/policies")
+      return { response: { ok: true, status: 200 }, data: [] };
+    if (path === "/api/approval/requests")
+      return { response: { ok: true, status: 200 }, data: [] };
+    throw new Error("unexpected path " + path);
+  });
+  csrf.mockResolvedValue({ headerName: "X-CSRF-TOKEN", token: "test" });
+  post
+    .mockRejectedValueOnce(new Error("network timeout"))
+    .mockResolvedValueOnce({ response: { ok: true, status: 201 }, data: {} });
+  const user = userEvent.setup({ pointerEventsCheck: 0 });
+  renderWithClient(<ApprovalInbox onUnauthorized={vi.fn()} />);
+  await user.click(await screen.findByRole("button", { name: "申请审批" }));
+  await user.click(screen.getByLabelText("动作"));
+  await user.click(await screen.findByText("延期"));
+  await user.type(screen.getByLabelText("报名编号"), "enrollment-1");
+  await user.type(screen.getByLabelText("申请金额（元）"), "50");
+  await user.click(screen.getByRole("button", { name: "提交申请" }));
+  await screen.findByText("申请审批时网络中断，请刷新后核对申请状态。");
+  await user.click(screen.getByRole("button", { name: "提交申请" }));
+
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+  const first = post.mock.calls[0][1].body;
+  const retry = post.mock.calls[1][1].body;
+  expect(first).toMatchObject({
+    action: "ENROLLMENT_DEFER",
+    enrollmentId: "enrollment-1",
+    amount: "50",
+  });
+  expect(first.requestId).toMatch(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+  );
+  expect(retry.requestId).toBe(first.requestId);
 });

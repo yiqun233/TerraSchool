@@ -15,6 +15,9 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.teraschool.approval.api.ApprovalCommands;
+import org.teraschool.approval.api.CreateApprovalRequest;
+import org.teraschool.approval.api.DecideApproval;
 import org.teraschool.enrollment.api.*;
 import org.teraschool.funds.api.*;
 import org.teraschool.product.api.*;
@@ -33,7 +36,8 @@ class SettlementModePricingTest {
       CHINESE = UUID.randomUUID(),
       MATH = UUID.randomUUID(),
       PRODUCT = UUID.randomUUID(),
-      OPS = UUID.randomUUID();
+      OPS = UUID.randomUUID(),
+      APPROVER = UUID.randomUUID();
   static final String PASSWORD = UUID.randomUUID().toString();
 
   @LocalServerPort int port;
@@ -44,6 +48,7 @@ class SettlementModePricingTest {
   @Autowired TeachingQueries teachingQueries;
   @Autowired FundsCommands funds;
   @Autowired FundsQueries fundsQueries;
+  @Autowired ApprovalCommands approvalCommands;
 
   @DynamicPropertySource
   static void config(DynamicPropertyRegistry r) {
@@ -82,6 +87,12 @@ class SettlementModePricingTest {
         TENANT,
         "pricing-ops",
         encoder.encode(PASSWORD));
+    update(
+        "insert into identity.account(id,tenant_id,login,password_hash) values (?,?,?,?)",
+        APPROVER,
+        TENANT,
+        "pricing-approver",
+        encoder.encode(PASSWORD));
     for (var action :
         new String[] {
           "PRODUCT_READ",
@@ -108,6 +119,15 @@ class SettlementModePricingTest {
           OPS,
           SCHOOL,
           action);
+    update(
+        "insert into identity.account_permission(tenant_id,account_id,school_id,action,effect)"
+            + " values (?,?,?,'APPROVAL_DECIDE','ALLOW'),(?,?,?,'APPROVAL_READ','ALLOW')",
+        TENANT,
+        APPROVER,
+        SCHOOL,
+        TENANT,
+        APPROVER,
+        SCHOOL);
   }
 
   <T> T asActor(UUID account, Supplier<T> work) {
@@ -170,6 +190,163 @@ class SettlementModePricingTest {
             OPS, () -> enrollments.approve(created.id(), new EnrollmentVersion(created.version())));
     assertThat(approved.courses()).hasSize(2);
     return approved;
+  }
+
+  @Test
+  void multiProductEnrollmentCreatesAndReplaysAllProductsTogether() throws Exception {
+    var productTwo =
+        asActor(
+            OPS,
+            () ->
+                catalog.createProduct(
+                    new CreateProduct(UUID.randomUUID(), SCHOOL, CHINESE, "第二个产品", 1)));
+    var draftOne =
+        asActor(
+            OPS,
+            () ->
+                catalog.draftPriceVersion(
+                    new DraftPriceVersion(
+                        UUID.randomUUID(),
+                        PRODUCT,
+                        "2000.00",
+                        "4.00",
+                        "0.00",
+                        1,
+                        null,
+                        "2026-01-01",
+                        null)));
+    var draftTwo =
+        asActor(
+            OPS,
+            () ->
+                catalog.draftPriceVersion(
+                    new DraftPriceVersion(
+                        UUID.randomUUID(),
+                        productTwo.id(),
+                        "500.00",
+                        "1.00",
+                        "0.00",
+                        1,
+                        null,
+                        "2026-01-01",
+                        null)));
+    var priceOne =
+        asActor(
+            OPS,
+            () ->
+                catalog.publishPriceVersion(
+                    draftOne.id(), new ExpectedVersion(draftOne.version())));
+    var priceTwo =
+        asActor(
+            OPS,
+            () ->
+                catalog.publishPriceVersion(
+                    draftTwo.id(), new ExpectedVersion(draftTwo.version())));
+    var student = UUID.randomUUID();
+    update(
+        "insert into archive.student(id,tenant_id,student_no,name,sex,school_id) values (?,?,?,?,?,?)",
+        student,
+        TENANT,
+        "M9" + student.toString().replace("-", "").substring(0, 6),
+        "多产品学员",
+        "FEMALE",
+        SCHOOL);
+    var command =
+        new CreateEnrollmentBatch(
+            List.of(
+                new CreateEnrollment(UUID.randomUUID(), student, priceOne.id(), "2026-02-10"),
+                new CreateEnrollment(UUID.randomUUID(), student, priceTwo.id(), "2026-02-10")));
+
+    var created = asActor(OPS, () -> enrollments.createBatch(command));
+    var replay = asActor(OPS, () -> enrollments.createBatch(command));
+
+    assertThat(created.items()).hasSize(2);
+    assertThat(created.items())
+        .extracting(EnrollmentView::productId)
+        .containsExactly(PRODUCT, productTwo.id());
+    assertThat(replay.items())
+        .extracting(EnrollmentView::id)
+        .containsExactlyElementsOf(created.items().stream().map(EnrollmentView::id).toList());
+  }
+
+  @Test
+  void invalidLaterProductRollsBackEarlierBatchEnrollments() throws Exception {
+    var productOne =
+        asActor(
+            OPS,
+            () ->
+                catalog.createProduct(
+                    new CreateProduct(UUID.randomUUID(), SCHOOL, CHINESE, "可售产品", 1)));
+    var productTwo =
+        asActor(
+            OPS,
+            () ->
+                catalog.createProduct(
+                    new CreateProduct(UUID.randomUUID(), SCHOOL, MATH, "未生效产品", 1)));
+    var draftOne =
+        asActor(
+            OPS,
+            () ->
+                catalog.draftPriceVersion(
+                    new DraftPriceVersion(
+                        UUID.randomUUID(),
+                        productOne.id(),
+                        "1000.00",
+                        "10.00",
+                        "0.00",
+                        1,
+                        null,
+                        "2026-01-01",
+                        null)));
+    var draftTwo =
+        asActor(
+            OPS,
+            () ->
+                catalog.draftPriceVersion(
+                    new DraftPriceVersion(
+                        UUID.randomUUID(),
+                        productTwo.id(),
+                        "500.00",
+                        "5.00",
+                        "0.00",
+                        1,
+                        null,
+                        "2027-01-01",
+                        null)));
+    var priceOne =
+        asActor(
+            OPS,
+            () ->
+                catalog.publishPriceVersion(
+                    draftOne.id(), new ExpectedVersion(draftOne.version())));
+    var priceTwo =
+        asActor(
+            OPS,
+            () ->
+                catalog.publishPriceVersion(
+                    draftTwo.id(), new ExpectedVersion(draftTwo.version())));
+    var student = UUID.randomUUID();
+    update(
+        "insert into archive.student(id,tenant_id,student_no,name,sex,school_id) values (?,?,?,?,?,?)",
+        student,
+        TENANT,
+        "R8" + student.toString().replace("-", "").substring(0, 6),
+        "回滚学员",
+        "FEMALE",
+        SCHOOL);
+    var command =
+        new CreateEnrollmentBatch(
+            List.of(
+                new CreateEnrollment(UUID.randomUUID(), student, priceOne.id(), "2026-02-10"),
+                new CreateEnrollment(UUID.randomUUID(), student, priceTwo.id(), "2026-02-10")));
+
+    assertThatThrownBy(() -> asActor(OPS, () -> enrollments.createBatch(command)))
+        .isInstanceOf(EnrollmentConflict.class)
+        .hasMessage("PRICE_VERSION_NOT_SELLABLE");
+    assertThat(
+            asActor(OPS, () -> enrollmentQueries.list(SCHOOL, "", 0, 100)).items().stream()
+                .filter(item -> student.equals(item.studentId())))
+        .isEmpty();
   }
 
   /** 每个课程建一个班并在首次使用时就加入成员；之后每节课都上在这个班里。 */
@@ -331,6 +508,57 @@ class SettlementModePricingTest {
         .containsExactly("2000.00");
     assertThat(asActor(OPS, () -> fundsQueries.balance(enrollment.studentId())).available())
         .isEqualTo("0.00");
+  }
+
+  @Test
+  void approvedDiscountConsumesItsApprovalOnce() throws Exception {
+    var enrollment = multiCourse(1);
+    update(
+        "update approval.policy set free_below=0 where school_id=? and action='ENROLLMENT_DISCOUNT'",
+        SCHOOL);
+    try {
+      var request =
+          asActor(
+              OPS,
+              () ->
+                  approvalCommands.request(
+                      new CreateApprovalRequest(
+                          UUID.randomUUID(),
+                          enrollment.id(),
+                          "ENROLLMENT_DISCOUNT",
+                          "400.00",
+                          "核准减免")));
+      var approved =
+          asActor(
+              APPROVER,
+              () ->
+                  approvalCommands.decide(
+                      request.id(), new DecideApproval(request.version(), "APPROVED", "复核通过")));
+      asActor(
+          OPS,
+          () ->
+              enrollments.applyDiscount(
+                  enrollment.id(),
+                  new ApplyDiscount(
+                      UUID.randomUUID(), "400.00", "核准减免", enrollment.version(), approved.id())));
+
+      assertThatThrownBy(
+              () ->
+                  asActor(
+                      OPS,
+                      () ->
+                          enrollments.applyDiscount(
+                              enrollment.id(),
+                              new ApplyDiscount(
+                                  UUID.randomUUID(), "400.00", "重复使用审批", null, approved.id()))))
+          .hasMessage("APPROVAL_ALREADY_USED");
+      assertThat(asActor(OPS, () -> enrollmentQueries.detail(enrollment.id())).netAmount())
+          .isEqualTo("1600.00");
+    } finally {
+      update(
+          "update approval.policy set free_below=999999999999.99 where school_id=? and action='ENROLLMENT_DISCOUNT'",
+          SCHOOL);
+    }
   }
 
   @Test

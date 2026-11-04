@@ -201,6 +201,49 @@ class ProductCatalogTest {
   }
 
   @Test
+  void productGroupsAreSchoolScopedVersionedAndDoNotRewritePriceSnapshots() {
+    var groupRequest = new CreateProductGroup(UUID.randomUUID(), SCHOOL, "秋季班");
+    var group = asActor(MAINTAINER, () -> commands.createProductGroup(groupRequest));
+    assertThat(asActor(MAINTAINER, () -> commands.createProductGroup(groupRequest)).id())
+        .isEqualTo(group.id());
+    var curriculum = curriculum("产品组测试课程");
+    var product = product("产品组测试产品", curriculum.id());
+    var draft = draft(product.id(), "900", "9", "2026-01-01", null);
+    var assigned =
+        asActor(
+            MAINTAINER,
+            () ->
+                commands.changeProductGroup(
+                    product.id(), new ChangeProductGroup(product.version(), group.id())));
+    assertThat(assigned.groupId()).isEqualTo(group.id());
+    var catalog = asActor(MAINTAINER, () -> queries.catalog(SCHOOL));
+    assertThat(catalog.groups()).extracting(ProductGroup::name).contains("秋季班");
+    assertThat(catalog.products())
+        .filteredOn(p -> p.id().equals(product.id()))
+        .singleElement()
+        .extracting(CourseProduct::groupName)
+        .isEqualTo("秋季班");
+    assertThat(asActor(MAINTAINER, () -> queries.priceVersions(product.id())))
+        .extracting(PriceVersion::id)
+        .containsExactly(draft.id());
+    var cleared =
+        asActor(
+            MAINTAINER,
+            () ->
+                commands.clearProductGroup(product.id(), new ExpectedVersion(assigned.version())));
+    assertThat(cleared.groupId()).isNull();
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    MAINTAINER,
+                    () ->
+                        commands.changeProductGroup(
+                            product.id(), new ChangeProductGroup(product.version(), null))))
+        .isInstanceOf(ProductConflict.class)
+        .hasMessage("VERSION_CONFLICT");
+  }
+
+  @Test
   void priceDraftNormalisesMoneyAndRejectsInvalidInput() {
     var curriculum = curriculum("物理");
     var product = product("物理全年班", curriculum.id());
@@ -218,6 +261,49 @@ class ProductCatalogTest {
         .isInstanceOf(IllegalArgumentException.class);
     assertThatThrownBy(() -> draft(product.id(), "-1", "10", "2026-01-01", null))
         .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
+  void priceDraftAllowsServiceFeeOnlyShapeAndRejectsZeroValueProducts() {
+    var curriculum = curriculum("纯服务费课程目录");
+    var product = product("纯服务费产品", curriculum.id());
+    var serviceOnly =
+        asActor(
+            MAINTAINER,
+            () ->
+                commands.draftPriceVersion(
+                    new DraftPriceVersion(
+                        UUID.randomUUID(),
+                        product.id(),
+                        "0",
+                        "0",
+                        "150",
+                        1,
+                        null,
+                        "2026-01-01",
+                        null)));
+    assertThat(serviceOnly.price()).isEqualTo("0.00");
+    assertThat(serviceOnly.hours()).isEqualTo("0.00");
+    assertThat(serviceOnly.serviceFee()).isEqualTo("150.00");
+
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    MAINTAINER,
+                    () ->
+                        commands.draftPriceVersion(
+                            new DraftPriceVersion(
+                                UUID.randomUUID(),
+                                product.id(),
+                                "0",
+                                "0",
+                                "0",
+                                1,
+                                null,
+                                "2026-01-01",
+                                null))))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("仅服务费");
   }
 
   @Test

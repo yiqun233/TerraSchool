@@ -27,6 +27,27 @@ class ProductHttp {
     return queries.catalog(schoolId);
   }
 
+  @PostMapping(value = "/api/product/groups", consumes = "application/json")
+  @ResponseStatus(org.springframework.http.HttpStatus.CREATED)
+  ProductGroup createProductGroup(@RequestBody CreateProductGroup command) {
+    return commands.createProductGroup(command);
+  }
+
+  @PostMapping(value = "/api/product/groups/{id}/update", consumes = "application/json")
+  ProductGroup updateProductGroup(@PathVariable UUID id, @RequestBody UpdateProductGroup command) {
+    return commands.updateProductGroup(id, command);
+  }
+
+  @PostMapping(value = "/api/product/products/{id}/group", consumes = "application/json")
+  CourseProduct changeProductGroup(@PathVariable UUID id, @RequestBody ChangeProductGroup command) {
+    return commands.changeProductGroup(id, command);
+  }
+
+  @PostMapping(value = "/api/product/products/{id}/group/clear", consumes = "application/json")
+  CourseProduct clearProductGroup(@PathVariable UUID id, @RequestBody ExpectedVersion command) {
+    return commands.clearProductGroup(id, command);
+  }
+
   @GetMapping("/api/product/price-versions")
   List<PriceVersion> priceVersions(@RequestParam UUID productId) {
     return queries.priceVersions(productId);

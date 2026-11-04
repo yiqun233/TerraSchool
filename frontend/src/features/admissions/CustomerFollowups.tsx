@@ -157,7 +157,7 @@ export function CustomerFollowups({
       footer={<Button onClick={onClose}>关闭</Button>}
     >
       <Typography.Paragraph>
-        仅创建人可查看。下次联系日期仅作记录，不会自动提醒；请勿在多个标签页同时提交相同记录。
+        仅创建人可查看。下次联系日期会进入本人客户的待回访提醒；最新一条跟进用于更新或清除旧提醒。请勿在多个标签页同时提交相同记录。
       </Typography.Paragraph>
       {rows.error ? (
         <Alert type="error" title={rows.error.message} showIcon />

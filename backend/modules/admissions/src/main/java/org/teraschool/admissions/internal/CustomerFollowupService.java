@@ -73,13 +73,68 @@ class CustomerFollowupService implements CustomerFollowupQueries {
               RequestTrace.id());
           var rows =
               sql.fetch(
-                  "select id,customer_id,content,occurred_on,next_contact_on,created_at from admissions.customer_followup where customer_id=? and author_id=? order by created_at desc,id desc limit ? offset ?",
+                  "select id,customer_id,content,occurred_on,next_contact_on,created_at from admissions.customer_followup"
+                      + " where customer_id=? or customer_id in (select id from admissions.customer where merged_into_id=?)"
+                      + " order by created_at desc,id desc limit ? offset ?",
                   customerId,
-                  verified.accountId(),
+                  customerId,
                   size + 1,
                   (long) page * size);
           return new FollowupPage(
               rows.stream().limit(size).map(this::view).toList(), page, size, rows.size() > size);
+        });
+  }
+
+  @Override
+  public ReminderPage reminders(UUID schoolId, String throughOn, int page, int size) {
+    if (org.springframework.transaction.support.TransactionSynchronizationManager
+        .isActualTransactionActive())
+      throw new CustomerConflict("CUSTOMER_REMINDERS_REQUIRE_INDEPENDENT_TRANSACTION");
+    if (schoolId == null || page < 0 || page > 100000 || size < 1 || size > 100)
+      throw new IllegalArgumentException("学校或分页无效");
+    var through = date(throughOn, false);
+    var scope = actors.requireResourceScope("CUSTOMER");
+    return tx.execute(
+        scope.tenantId(),
+        () -> {
+          schools.lockTenant(scope.tenantId());
+          var verified = actors.requireResourceScopeInTransaction("CUSTOMER");
+          if (!verified.readableSchoolIds().contains(schoolId)
+              || !actors
+                  .requireActionInTransaction("CUSTOMER_PHONE_READ")
+                  .schools()
+                  .contains(schoolId)) throw new AccessDeniedException("无该学校的客户跟进提醒查看权限");
+          var rows =
+              sql.fetch(
+                  "select f.id,f.customer_id,c.name,f.content,f.occurred_on,f.next_contact_on "
+                      + "from admissions.customer_followup f join admissions.customer c "
+                      + "on c.id=f.customer_id and c.school_id=f.school_id "
+                      + "where f.school_id=? and c.owner_id=? and c.in_pool=false and f.next_contact_on<=? "
+                      + "and not exists (select 1 from admissions.customer_followup newer "
+                      + "where newer.customer_id=f.customer_id "
+                      + "and (newer.created_at,newer.id)>(f.created_at,f.id)) "
+                      + "order by f.next_contact_on,f.created_at,f.id limit ? offset ?",
+                  schoolId,
+                  verified.accountId(),
+                  through,
+                  size + 1,
+                  (long) page * size);
+          return new ReminderPage(
+              rows.stream()
+                  .limit(size)
+                  .map(
+                      row ->
+                          new Reminder(
+                              row.get("id", UUID.class),
+                              row.get("customer_id", UUID.class),
+                              row.get("name", String.class),
+                              row.get("content", String.class),
+                              row.get("occurred_on", LocalDate.class).toString(),
+                              row.get("next_contact_on", LocalDate.class).toString()))
+                  .toList(),
+              page,
+              size,
+              rows.size() > size);
         });
   }
 

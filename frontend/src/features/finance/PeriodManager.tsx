@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   Alert,
   Button,
+  Card,
   Descriptions,
   Form,
   Input,
@@ -17,6 +18,7 @@ import { api, csrf } from "../../shared/http";
 import type { components } from "../../shared/generated/api";
 
 type PeriodView = components["schemas"]["PeriodView"];
+type FundsReconciliation = components["schemas"]["FundsReconciliation"];
 
 const YEAR = new Date().getFullYear();
 
@@ -65,6 +67,23 @@ export function PeriodManager({
         signal,
       });
       if (!response.ok || !data) return [];
+      return data;
+    },
+  });
+  const reconciliation = useQuery<FundsReconciliation | null>({
+    queryKey: ["finance-funds-reconciliation", current],
+    enabled: !!current,
+    queryFn: async ({ signal }) => {
+      const { data, response } = await api.GET(
+        "/api/finance/reports/funds-reconciliation",
+        { params: { query: { schoolId: current! } }, signal },
+      );
+      if (response.status === 401) {
+        onUnauthorized();
+        throw new Error("登录已失效，请重新登录");
+      }
+      if (response.status === 403) return null;
+      if (!response.ok || !data) throw new Error("无法读取资金总账对账");
       return data;
     },
   });
@@ -118,6 +137,54 @@ export function PeriodManager({
           收款、分配、释放、退课时、现金退款与课次关闭；按业务日期归属自然月
         </Descriptions.Item>
       </Descriptions>
+      {reconciliation.error ? (
+        <Alert
+          type="error"
+          title={reconciliation.error.message}
+          showIcon
+          style={{ marginTop: 12 }}
+        />
+      ) : null}
+      {reconciliation.data ? (
+        <Card
+          title="资金总账对账（累计）"
+          size="small"
+          loading={reconciliation.isFetching}
+          style={{ marginTop: 12 }}
+        >
+          <Descriptions size="small" column={{ xs: 1, sm: 2, lg: 3 }}>
+            <Descriptions.Item label="期初余额">
+              {reconciliation.data.openingAmount}
+            </Descriptions.Item>
+            <Descriptions.Item label="净收款">
+              {reconciliation.data.netReceiptAmount}
+            </Descriptions.Item>
+            <Descriptions.Item label="现金退款">
+              {reconciliation.data.cashRefundAmount}
+            </Descriptions.Item>
+            <Descriptions.Item label="有效分配">
+              {reconciliation.data.activeAllocatedAmount}
+            </Descriptions.Item>
+            <Descriptions.Item label="学员账户余额">
+              {reconciliation.data.accountBalanceAmount}
+            </Descriptions.Item>
+            <Descriptions.Item label="对账差额">
+              <Typography.Text
+                type={
+                  reconciliation.data.differenceAmount === "0.00"
+                    ? "success"
+                    : "danger"
+                }
+              >
+                {reconciliation.data.differenceAmount}
+              </Typography.Text>
+            </Descriptions.Item>
+          </Descriptions>
+          <Typography.Text type="secondary">
+            核对式：期初余额＋净收款－现金退款＝有效分配＋学员账户余额；该数值为全量累计，不按所选年份或财务期间筛选。
+          </Typography.Text>
+        </Card>
+      ) : null}
       <Table
         rowKey="period"
         size="small"

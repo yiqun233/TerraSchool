@@ -13,6 +13,8 @@ public record CourseProduct(
     String schoolName,
     UUID curriculumId,
     String curriculumName,
+    UUID groupId,
+    String groupName,
     String name,
     int settlementMode,
     boolean active,

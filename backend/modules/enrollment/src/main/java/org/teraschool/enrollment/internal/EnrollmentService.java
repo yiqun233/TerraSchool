@@ -216,6 +216,49 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
     }
   }
 
+  @Override
+  public EnrollmentBatch createBatch(CreateEnrollmentBatch command) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      if (command == null || command.items().size() < 2 || command.items().size() > 10)
+        throw new EnrollmentConflict("ENROLLMENT_BATCH_SIZE_INVALID");
+      var studentId =
+          command.items().getFirst() == null ? null : command.items().getFirst().studentId();
+      if (studentId == null) throw new IllegalArgumentException("多产品报名须指定同一学员");
+      var requestIds = new HashSet<UUID>();
+      var products = new HashSet<UUID>();
+      for (var item : command.items()) {
+        if (item == null
+            || item.studentId() == null
+            || item.priceVersionId() == null
+            || item.requestId() == null
+            || !studentId.equals(item.studentId()))
+          throw new IllegalArgumentException("多产品报名项必须属于同一学员并包含请求身份和价格版本");
+        if (!requestIds.add(item.requestId()))
+          throw new EnrollmentConflict("ENROLLMENT_BATCH_DUPLICATE_REQUEST");
+      }
+      var scope = actors.requireResourceScope("ENROLLMENT");
+      return tx.execute(
+          scope.tenantId(),
+          () -> {
+            schools.lockTenant(scope.tenantId());
+            var verified = actors.requireResourceScopeInTransaction("ENROLLMENT");
+            UUID batchSchoolId = null;
+            for (var item : command.items()) {
+              var snapshot = prices.require(item.priceVersionId());
+              if (!verified.maintainableSchoolIds().contains(snapshot.schoolId()))
+                throw new AccessDeniedException("无该学校的报名登记权限");
+              if (batchSchoolId != null && !batchSchoolId.equals(snapshot.schoolId()))
+                throw new EnrollmentConflict("ENROLLMENT_BATCH_SCHOOL_MISMATCH");
+              batchSchoolId = snapshot.schoolId();
+              if (!products.add(snapshot.productId()))
+                throw new EnrollmentConflict("ENROLLMENT_BATCH_DUPLICATE_PRODUCT");
+            }
+            return new EnrollmentBatch(
+                command.items().stream().map(this::createWithTrace).toList());
+          });
+    }
+  }
+
   private EnrollmentView createWithTrace(CreateEnrollment command) {
     if (command == null
         || command.requestId() == null
@@ -462,6 +505,12 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
     var totalHours = new BigDecimal(snapshot.hours());
     var totalAmount = new BigDecimal(snapshot.price());
     var normalized = new ArrayList<CourseLine>();
+    if (totalHours.signum() == 0 && totalAmount.signum() == 0) {
+      if (new BigDecimal(snapshot.serviceFee()).signum() <= 0
+          || (lines != null && !lines.isEmpty()))
+        throw new IllegalArgumentException("仅服务费报名必须没有课程明细且服务费大于零");
+      return;
+    }
     if (lines == null || lines.isEmpty()) {
       normalized.add(new CourseLine(snapshot.curriculumId(), snapshot.hours(), snapshot.price()));
     } else {
@@ -775,6 +824,8 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
           if (!schools.require(schoolId).active()) throw new AccessDeniedException("学校已停用，不能登记减免");
           if (!"ACTIVE".equals(row.get("status", String.class)))
             throw new EnrollmentConflict("ENROLLMENT_NOT_ACTIVE");
+          if (row.get("hours", BigDecimal.class).signum() == 0)
+            throw new EnrollmentConflict("SERVICE_FEE_ONLY_DISCOUNT_NOT_SUPPORTED");
           var digest =
               fingerprint(
                   "DISCOUNT",

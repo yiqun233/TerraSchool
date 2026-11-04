@@ -225,6 +225,57 @@ class EnrollmentAndReceiptTest {
   }
 
   @Test
+  void serviceFeeOnlyEnrollmentHasNoCourseRowsAndBalancesOnlyTheFee() throws Exception {
+    var student = freshStudent();
+    var productId = UUID.randomUUID();
+    var priceId = UUID.randomUUID();
+    update(
+        "insert into product.product(id,tenant_id,school_id,curriculum_id,name,settlement_mode)"
+            + " values (?,?,?,?, '纯服务费报名产品',1)",
+        productId,
+        TENANT,
+        SCHOOL,
+        CURRICULUM);
+    update(
+        "insert into product.price_version(id,tenant_id,product_id,version_no,status,price,hours,"
+            + "service_fee,settlement_mode,effective_from)"
+            + " values (?,?,?,1,'PUBLISHED',0,0,120,1,'2026-01-01')",
+        priceId,
+        TENANT,
+        productId);
+
+    var enrollment =
+        asActor(
+            CLERK,
+            () ->
+                enrollmentCommands.create(
+                    new CreateEnrollment(UUID.randomUUID(), student, priceId, "2026-02-10")));
+    assertThat(enrollment.price()).isEqualTo("0.00");
+    assertThat(enrollment.hours()).isEqualTo("0.00");
+    assertThat(enrollment.serviceFee()).isEqualTo("120.00");
+    assertThat(enrollment.netAmount()).isEqualTo("120.00");
+    assertThat(
+            tx.execute(
+                TENANT,
+                () ->
+                    sql.fetchOne(
+                            "select count(*) as n from enrollment.enrollment_course where enrollment_id=?",
+                            enrollment.id())
+                        .get("n", Long.class)))
+        .isZero();
+
+    var approved =
+        asActor(
+            APPROVER,
+            () ->
+                enrollmentCommands.approve(
+                    enrollment.id(), new EnrollmentVersion(enrollment.version())));
+    var receipt = receipt(student, "120.00");
+    var allocation = allocate(receipt.id(), approved.id(), "120.00");
+    assertThat(allocation.amount()).isEqualTo("120.00");
+  }
+
+  @Test
   void unsellablePriceAndWindowRejected() throws Exception {
     var student = freshStudent();
     var draftPrice = UUID.randomUUID();
