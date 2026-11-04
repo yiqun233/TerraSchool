@@ -26,6 +26,7 @@ import type { components } from "../../shared/generated/api";
 
 type LessonView = components["schemas"]["LessonView"];
 type ClassMemberView = components["schemas"]["ClassMemberView"];
+type EnrollmentView = components["schemas"]["EnrollmentView"];
 type Curriculum = components["schemas"]["Curriculum"];
 type TeacherWorkbench = components["schemas"]["TeacherWorkbench"];
 type TeacherClassWorkbench = components["schemas"]["TeacherClassWorkbench"];
@@ -74,6 +75,10 @@ export function TeachingWorkspace({
   const [classId, setClassId] = useState<string>();
   const [transferTargetClassId, setTransferTargetClassId] = useState<string>();
   const [transferApprovalId, setTransferApprovalId] = useState("");
+  const [addingMembersOpen, setAddingMembersOpen] = useState(false);
+  const [memberEnrollmentId, setMemberEnrollmentId] = useState<string>();
+  const [enrollmentPage, setEnrollmentPage] = useState(0);
+  const [addingMemberBusy, setAddingMemberBusy] = useState(false);
   const [creatingClass, setCreatingClass] = useState(false);
   const [creatingLesson, setCreatingLesson] = useState(false);
   const [scheduling, setScheduling] = useState(false);
@@ -183,6 +188,39 @@ export function TeachingWorkspace({
       return data;
     },
   });
+  const enrollments = useQuery({
+    queryKey: ["teaching-add-member-enrollments", current, enrollmentPage],
+    enabled: addingMembersOpen && !!current && !!selectedClass?.id,
+    queryFn: async ({ signal }) => {
+      const { data, response } = await api.GET("/api/enrollment/enrollments", {
+        params: {
+          query: {
+            schoolId: current!,
+            status: "ACTIVE",
+            page: enrollmentPage,
+            size: 100,
+          },
+        },
+        signal,
+      });
+      if (response.status === 401) {
+        onUnauthorized();
+        throw new Error("登录已失效，请重新登录");
+      }
+      if (response.status === 403)
+        throw new Error(
+          "需要报名读取权限才能选择已有报名；请联系管理员开通 ENROLLMENT 读取权限。",
+        );
+      if (!response.ok || !data) throw new Error("无法读取有效报名列表");
+      return data;
+    },
+  });
+  const joinedEnrollmentIds = new Set(
+    (members.data ?? []).map((item) => item.enrollmentId).filter(Boolean),
+  );
+  const availableEnrollments = (enrollments.data?.items ?? []).filter(
+    (item) => item.id && !joinedEnrollmentIds.has(item.id),
+  );
   const teacherWorkbench = useQuery({
     queryKey: ["teacher-workbench", workbenchFrom, workbenchTo],
     enabled: !!capabilities.data?.canRead,
@@ -435,6 +473,49 @@ export function TeachingWorkspace({
       ]);
     } catch {
       setError("退班结果暂时未知，请使用相同参数重试或刷新名册核对。");
+    }
+  }
+
+  async function addClassMember() {
+    if (!classId || !memberEnrollmentId || addingMemberBusy) return;
+    setAddingMemberBusy(true);
+    setError("");
+    try {
+      const token = await csrf();
+      const { response } = await api.POST(
+        "/api/teaching/classes/{id}/members",
+        {
+          params: { path: { id: classId } },
+          headers: { [token.headerName!]: token.token! },
+          body: { enrollmentId: memberEnrollmentId },
+        },
+      );
+      if (response.status === 401) {
+        onUnauthorized();
+        return;
+      }
+      if (!response.ok) {
+        setError(
+          response.status === 403
+            ? "加入班级失败：需要教务维护权限；同时请确认报名读取权限和审批要求。"
+            : "加入班级失败：请确认报名仍有效、班级可维护且符合当前业务规则。",
+        );
+        return;
+      }
+      setAddingMembersOpen(false);
+      setMemberEnrollmentId(undefined);
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: ["teaching-members", classId],
+        }),
+        queryClient.invalidateQueries({ queryKey: ["teaching-classes"] }),
+      ]);
+    } catch {
+      setError(
+        "加入班级结果暂时未知；刷新名册核对后可使用相同报名重试。重复加入由服务端按报名和班级幂等处理。",
+      );
+    } finally {
+      setAddingMemberBusy(false);
     }
   }
 
@@ -984,6 +1065,15 @@ export function TeachingWorkspace({
             </Typography.Text>
             {school?.maintainable ? (
               <>
+                <Button
+                  onClick={() => {
+                    setEnrollmentPage(0);
+                    setMemberEnrollmentId(undefined);
+                    setAddingMembersOpen(true);
+                  }}
+                >
+                  加入已有报名
+                </Button>
                 <select
                   aria-label="转入目标班级"
                   className="ant-input"
@@ -1123,6 +1213,69 @@ export function TeachingWorkspace({
           />
         </Card>
       ) : null}
+      <Modal
+        title={`加入已有报名${selectedClass?.name ? ` · ${selectedClass.name}` : ""}`}
+        open={addingMembersOpen}
+        onCancel={() => setAddingMembersOpen(false)}
+        onOk={() => void addClassMember()}
+        okText="加入班级"
+        cancelText="取消"
+        okButtonProps={{
+          disabled:
+            !memberEnrollmentId || !school?.maintainable || addingMemberBusy,
+        }}
+        confirmLoading={addingMemberBusy}
+        destroyOnHidden
+      >
+        <Typography.Paragraph type="secondary">
+          选择本校有效报名加入当前班级。现有规则与审批要求仍以服务端校验为准。
+        </Typography.Paragraph>
+        {enrollments.error ? (
+          <Alert
+            type="error"
+            showIcon
+            message={enrollments.error.message}
+            style={{ marginBottom: 12 }}
+          />
+        ) : null}
+        <Select
+          showSearch
+          optionFilterProp="label"
+          placeholder="搜索并选择有效报名"
+          loading={enrollments.isLoading}
+          value={memberEnrollmentId}
+          onChange={setMemberEnrollmentId}
+          options={availableEnrollments.map((item: EnrollmentView) => ({
+            value: item.id!,
+            label: `${item.studentName ?? "未命名学员"} · ${item.productName ?? "产品未命名"} · ${item.curriculumName ?? "课程未命名"}`,
+          }))}
+          style={{ width: "100%" }}
+          notFoundContent={
+            enrollments.isLoading ? "正在读取…" : "本页没有可加入的有效报名"
+          }
+        />
+        <Space style={{ marginTop: 12 }}>
+          <Button
+            size="small"
+            disabled={enrollmentPage === 0}
+            onClick={() => setEnrollmentPage((page) => Math.max(0, page - 1))}
+          >
+            上一页
+          </Button>
+          <Typography.Text type="secondary">
+            第 {enrollmentPage + 1} 页 · 共 {enrollments.data?.total ?? 0} 条
+          </Typography.Text>
+          <Button
+            size="small"
+            disabled={
+              (enrollmentPage + 1) * 100 >= (enrollments.data?.total ?? 0)
+            }
+            onClick={() => setEnrollmentPage((page) => page + 1)}
+          >
+            下一页
+          </Button>
+        </Space>
+      </Modal>
       {creatingClass && current ? (
         <ClassCreator
           schoolId={current}
