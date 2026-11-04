@@ -212,7 +212,7 @@ export function StudentDirectory({
           {
             title: "负责人",
             dataIndex: "ownerAccountId",
-            render: (owner: string | null) => owner ?? "未分派",
+            render: (owner: string | null) => (owner ? "已分派" : "未分派"),
           },
           {
             title: "状态",
@@ -604,7 +604,11 @@ export function StudentDetail({
           ) : null}
           <Descriptions column={1} size="small" bordered>
             <Descriptions.Item label="当前负责人">
-              {detail.data.ownerAccountId ?? "未分派"}
+              {detail.data.ownerAccountId
+                ? (assignees.data?.find(
+                    (item) => item.accountId === detail.data.ownerAccountId,
+                  )?.name ?? "已分派")
+                : "未分派"}
             </Descriptions.Item>
             <Descriptions.Item label="姓名">
               {detail.data.name}

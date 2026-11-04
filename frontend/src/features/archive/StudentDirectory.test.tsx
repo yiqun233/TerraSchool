@@ -50,6 +50,7 @@ it("列表按服务端脱敏值展示，详情提示当前为脱敏值", async (
               phone: "138****5678",
               schoolId: "school-1",
               schoolName: "测试学校",
+              ownerAccountId: "account-owner",
               status: "ACTIVE",
               version: 0,
               contactCount: 1,
@@ -100,6 +101,7 @@ it("列表按服务端脱敏值展示，详情提示当前为脱敏值", async (
   renderPage(<StudentDirectory onUnauthorized={vi.fn()} />);
   expect(await screen.findByText("S000001")).toBeTruthy();
   expect(screen.getByText("138****5678")).toBeTruthy();
+  expect(screen.getByText("已分派")).toBeTruthy();
   await user.click(screen.getByText("学员甲"));
   expect(await screen.findByText("当前显示脱敏值")).toBeTruthy();
   expect(screen.getByText("家长甲")).toBeTruthy();
