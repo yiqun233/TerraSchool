@@ -13,6 +13,7 @@ import org.jooq.DSLContext;
 import org.jooq.Record;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
+import org.teraschool.approval.api.ApprovalGate;
 import org.teraschool.archive.api.StudentAccess;
 import org.teraschool.enrollment.api.EnrollmentAccess;
 import org.teraschool.enrollment.api.EnrollmentQueries;
@@ -46,6 +47,7 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
   private final EnrollmentQueries enrollmentQueries;
   private final CurriculumAccess curricula;
   private final StudentAccess students;
+  private final ApprovalGate approvals;
   private final PeriodGate periods;
 
   public TeachingService(
@@ -57,6 +59,7 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
       EnrollmentQueries enrollmentQueries,
       CurriculumAccess curricula,
       StudentAccess students,
+      ApprovalGate approvals,
       PeriodGate periods) {
     this.actors = actors;
     this.tx = tx;
@@ -66,6 +69,7 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
     this.enrollmentQueries = enrollmentQueries;
     this.curricula = curricula;
     this.students = students;
+    this.approvals = approvals;
     this.periods = periods;
   }
 
@@ -802,6 +806,131 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
           audit(scope, "CLASS_MEMBER_ADDED", classId, schoolId, "members");
           return classView(requireClass(verified, classId), schools.require(schoolId).name());
         });
+  }
+
+  @Override
+  public ClassView transferMember(UUID enrollmentId, TransferClassMember command) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      if (enrollmentId == null
+          || command == null
+          || command.requestId() == null
+          || command.expectedFromClassId() == null
+          || command.toClassId() == null
+          || command.expectedFromClassId().equals(command.toClassId()))
+        throw new IllegalArgumentException("需要请求身份、原班、新班和报名");
+      var reason = text(command.reason(), 200, "转班原因");
+      if (reason == null) throw new IllegalArgumentException("转班原因必填");
+      var scope = actors.requireAction("TEACHING_MAINTAIN");
+      var resourceScope = actors.requireResourceScope("TEACHING");
+      if (!scope.tenantId().equals(resourceScope.tenantId())
+          || !scope.accountId().equals(resourceScope.accountId()))
+        throw new AccessDeniedException("无教务转班权限");
+      var requestFingerprint =
+          fingerprint(
+              "ENROLLMENT_CLASS_TRANSFER",
+              enrollmentId.toString(),
+              command.expectedFromClassId().toString(),
+              command.toClassId().toString(),
+              Objects.toString(command.approvalId(), ""),
+              reason);
+      return tx.execute(
+          scope.tenantId(),
+          () -> {
+            schools.lockTenant(scope.tenantId());
+            var verified = actors.requireActionInTransaction("TEACHING_MAINTAIN");
+            var verifiedTeaching = actors.requireResourceScopeInTransaction("TEACHING");
+            var previous =
+                previousRequest(
+                    verifiedTeaching, command.requestId(), "CLASS_TRANSFER", requestFingerprint);
+            if (previous != null) {
+              var previousClass = requireClass(verifiedTeaching, previous);
+              return classView(
+                  previousClass,
+                  schools.require(previousClass.get("school_id", UUID.class)).name());
+            }
+
+            var source = requireClass(verifiedTeaching, command.expectedFromClassId());
+            var target = requireClass(verifiedTeaching, command.toClassId());
+            var schoolId = source.get("school_id", UUID.class);
+            if (!verified.schools().contains(schoolId)
+                || !schoolId.equals(target.get("school_id", UUID.class)))
+              throw new AccessDeniedException("转班仅支持同校班级");
+            if (!schools.require(schoolId).active()) throw new AccessDeniedException("学校已停用，不能转班");
+            if (!"ACTIVE".equals(source.get("status", String.class))
+                || !"ACTIVE".equals(target.get("status", String.class)))
+              throw new TeachingConflict("CLASS_NOT_ACTIVE");
+            var enrollment = enrollments.require(enrollmentId);
+            if (!schoolId.equals(enrollment.schoolId()))
+              throw new AccessDeniedException("报名不属于该学校");
+            if (!"ACTIVE".equals(enrollment.status()))
+              throw new TeachingConflict("ENROLLMENT_NOT_ACTIVE");
+            if (!Objects.equals(
+                source.get("curriculum_id", UUID.class), target.get("curriculum_id", UUID.class)))
+              throw new TeachingConflict("TRANSFER_CURRICULUM_MISMATCH");
+            resolveAutoMode(enrollment, command.toClassId());
+            var membership =
+                sql.fetchOne(
+                    "select 1 from teaching.enrollment_class where enrollment_id=? and class_id=?"
+                        + " and active for update",
+                    enrollmentId,
+                    command.expectedFromClassId());
+            if (membership == null) throw new TeachingConflict("SOURCE_CLASS_MEMBERSHIP_CHANGED");
+            var targetMembership =
+                sql.fetchOne(
+                    "select 1 from teaching.enrollment_class where enrollment_id=? and class_id=?"
+                        + " and active for update",
+                    enrollmentId,
+                    command.toClassId());
+            if (targetMembership != null) throw new TeachingConflict("TARGET_CLASS_ALREADY_ACTIVE");
+
+            approvals.consume(
+                "ENROLLMENT_TRANSFER",
+                schoolId,
+                enrollmentId,
+                BigDecimal.ZERO,
+                command.approvalId());
+            sql.execute(
+                "update teaching.enrollment_class set active=false where enrollment_id=?"
+                    + " and class_id=? and active",
+                enrollmentId,
+                command.expectedFromClassId());
+            int joined =
+                sql.execute(
+                    "insert into teaching.enrollment_class(tenant_id,enrollment_id,class_id,joined_on)"
+                        + " values (?,?,?,CURRENT_DATE) on conflict (enrollment_id,class_id)"
+                        + " do update set active=true,joined_on=excluded.joined_on"
+                        + " where not teaching.enrollment_class.active",
+                    scope.tenantId(),
+                    enrollmentId,
+                    command.toClassId());
+            if (joined != 1) throw new TeachingConflict("TARGET_CLASS_ALREADY_ACTIVE");
+            sql.execute(
+                "insert into teaching.class_transfer(tenant_id,enrollment_id,from_class_id,to_class_id,"
+                    + "approval_id,reason,actor_id) values (?,?,?,?,?,?,?)",
+                scope.tenantId(),
+                enrollmentId,
+                command.expectedFromClassId(),
+                command.toClassId(),
+                command.approvalId(),
+                reason,
+                scope.accountId());
+            rememberRequest(
+                verifiedTeaching,
+                command.requestId(),
+                "CLASS_TRANSFER",
+                command.toClassId(),
+                requestFingerprint);
+            audit(
+                scope,
+                "ENROLLMENT_CLASS_TRANSFERRED",
+                enrollmentId,
+                schoolId,
+                command.expectedFromClassId() + "->" + command.toClassId());
+            return classView(
+                requireClass(verifiedTeaching, command.toClassId()),
+                schools.require(schoolId).name());
+          });
+    }
   }
 
   // ---------------------------------------------------------------- 课次

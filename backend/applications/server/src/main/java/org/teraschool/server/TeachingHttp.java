@@ -137,6 +137,11 @@ class TeachingHttp {
     return commands.addMember(id, command);
   }
 
+  @PostMapping(value = "/api/teaching/enrollments/{id}/transfer", consumes = "application/json")
+  ClassView transferMember(@PathVariable UUID id, @RequestBody TransferClassMember command) {
+    return commands.transferMember(id, command);
+  }
+
   @PostMapping(value = "/api/teaching/lessons", consumes = "application/json")
   @ResponseStatus(org.springframework.http.HttpStatus.CREATED)
   LessonView createLesson(@RequestBody CreateLesson command) {

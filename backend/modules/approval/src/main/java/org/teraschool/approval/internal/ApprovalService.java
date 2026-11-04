@@ -212,7 +212,12 @@ public class ApprovalService
     if (command == null || command.requestId() == null || command.enrollmentId() == null)
       throw new IllegalArgumentException("需要请求标识和报名");
     var action = action(command.action());
-    var amount = amount(command.amount(), "申请金额", false);
+    var amount =
+        amount(
+            command.amount(),
+            "申请金额",
+            Set.of("ENROLLMENT_TRANSFER", "ENROLLMENT_WITHDRAWAL", "ENROLLMENT_DEFER")
+                .contains(action));
     var reason = text(command.reason(), 200, "申请原因");
     var fingerprint =
         fingerprint(

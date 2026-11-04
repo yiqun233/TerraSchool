@@ -13,6 +13,9 @@ public interface TeachingCommands {
 
   ClassView addMember(UUID classId, AddClassMember command);
 
+  /** 经审批/免批策略后在同校同课程班级间转班；报名金额与课时留在原报名上。 */
+  ClassView transferMember(UUID enrollmentId, TransferClassMember command);
+
   LessonView createLesson(CreateLesson command);
 
   LessonView publishLesson(UUID id, LessonVersion command);

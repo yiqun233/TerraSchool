@@ -516,3 +516,101 @@ it("按课次展示考勤状态统计", async () => {
   expect(screen.getByText("部分缺勤")).toBeTruthy();
   expect(screen.getByText("10")).toBeTruthy();
 });
+
+it("同课程转班提交已批准单据和稳定请求身份", async () => {
+  vi.clearAllMocks();
+  vi.spyOn(window, "prompt").mockReturnValue("同课程调整");
+  csrf.mockResolvedValue({ headerName: "X-CSRF", token: "csrf-token" });
+  post.mockResolvedValue({ response: { ok: true, status: 200 } });
+  get.mockImplementation(async (path: string) => {
+    if (path === "/api/teaching/capabilities")
+      return { response: { ok: true, status: 200 }, data: capabilities };
+    if (path === "/api/teaching/classes")
+      return {
+        response: { ok: true, status: 200 },
+        data: [
+          {
+            id: "source-class",
+            schoolId: "school-1",
+            curriculumId: "curriculum-1",
+            name: "原班",
+            status: "ACTIVE",
+            memberCount: 1,
+          },
+          {
+            id: "target-class",
+            schoolId: "school-1",
+            curriculumId: "curriculum-1",
+            name: "目标班",
+            status: "ACTIVE",
+            memberCount: 0,
+          },
+        ],
+      };
+    if (path === "/api/teaching/me/workbench")
+      return {
+        response: { ok: true, status: 200 },
+        data: { classes: [], lessons: [] },
+      };
+    if (path === "/api/teaching/lessons")
+      return { response: { ok: true, status: 200 }, data: [] };
+    if (path === "/api/teaching/classes/{id}/members")
+      return {
+        response: { ok: true, status: 200 },
+        data: [
+          {
+            enrollmentId: "enrollment-1",
+            studentName: "转班学员",
+            joinedOn: "2026-01-01",
+            status: "ACTIVE",
+          },
+        ],
+      };
+    if (path === "/api/teaching/reports/resource-daily-schedule")
+      return {
+        response: { ok: true, status: 200 },
+        data: { lessons: [], missingTeacher: 0, missingRoom: 0 },
+      };
+    if (path === "/api/teaching/reports/student-consumption")
+      return { response: { ok: false, status: 403 } };
+    if (path === "/api/teaching/reports/attendance")
+      return {
+        response: { ok: true, status: 200 },
+        data: { from: "", to: "", lessons: [] },
+      };
+    throw new Error("unexpected path " + path);
+  });
+
+  const user = userEvent.setup({ pointerEventsCheck: 0 });
+  renderWithClient(<TeachingWorkspace onUnauthorized={vi.fn()} />);
+  await user.click(await screen.findByText("原班"));
+  await user.selectOptions(
+    await screen.findByRole("combobox", { name: "转入目标班级" }),
+    "target-class",
+  );
+  await user.type(
+    screen.getByRole("textbox", { name: "已批准转班审批单号" }),
+    "approval-1",
+  );
+  expect(await screen.findByText("转班学员")).toBeTruthy();
+  expect(screen.getByText("课时对账")).toBeTruthy();
+  expect(
+    (screen.getByRole("button", { name: /转\s*班/ }) as HTMLButtonElement)
+      .disabled,
+  ).toBe(false);
+  await user.click(await screen.findByRole("button", { name: /转\s*班/ }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+  expect(post).toHaveBeenCalledWith(
+    "/api/teaching/enrollments/{id}/transfer",
+    expect.objectContaining({
+      params: { path: { id: "enrollment-1" } },
+      body: expect.objectContaining({
+        expectedFromClassId: "source-class",
+        toClassId: "target-class",
+        approvalId: "approval-1",
+        reason: "同课程调整",
+        requestId: expect.any(String),
+      }),
+    }),
+  );
+});

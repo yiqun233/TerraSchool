@@ -5,6 +5,7 @@ import static org.teraschool.server.EngineeringTest.update;
 
 import java.time.YearMonth;
 import java.util.*;
+import java.util.concurrent.*;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -14,6 +15,7 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.teraschool.approval.api.*;
 import org.teraschool.enrollment.api.*;
 import org.teraschool.finance.api.*;
 import org.teraschool.funds.api.*;
@@ -39,9 +41,11 @@ class FinancePeriodTest {
   @Autowired PeriodQueries periodQueries;
   @Autowired FinancialReportQueries financialReports;
   @Autowired EnrollmentCommands enrollments;
+  @Autowired EnrollmentQueries enrollmentQueries;
   @Autowired FundsCommands funds;
   @Autowired TeachingCommands teaching;
   @Autowired TeachingQueries teachingQueries;
+  @Autowired ApprovalCommands approvalCommands;
   @Autowired org.jooq.DSLContext sql;
   @Autowired TenantTransactions tx;
 
@@ -110,7 +114,8 @@ class FinancePeriodTest {
           "REFUND_APPLY",
           "REFUND_PAY",
           "PERIOD_READ",
-          "PERIOD_UNLOCK"
+          "PERIOD_UNLOCK",
+          "APPROVAL_READ"
         })
       update(
           "insert into identity.account_permission(tenant_id,account_id,school_id,action,effect)"
@@ -119,7 +124,7 @@ class FinancePeriodTest {
           OPS,
           SCHOOL,
           action);
-    for (var action : new String[] {"PERIOD_READ", "PERIOD_LOCK"})
+    for (var action : new String[] {"PERIOD_READ", "PERIOD_LOCK", "APPROVAL_DECIDE"})
       update(
           "insert into identity.account_permission(tenant_id,account_id,school_id,action,effect)"
               + " values (?,?,?,?,'ALLOW')",
@@ -448,6 +453,122 @@ class FinancePeriodTest {
                     READER,
                     () -> teachingQueries.attendanceReport(SCHOOL, "2026-06-01", "2026-06-30")))
         .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
+  }
+
+  @Test
+  void approvedClassTransferMovesMembershipWithoutRewritingEnrollmentFunds() throws Exception {
+    var enrollment = activeEnrollment(freshStudent());
+    var source =
+        asActor(
+            OPS,
+            () ->
+                teaching.createClass(
+                    new CreateClass(
+                        UUID.randomUUID(), SCHOOL, CURRICULUM, "转班源" + UUID.randomUUID())));
+    var target =
+        asActor(
+            OPS,
+            () ->
+                teaching.createClass(
+                    new CreateClass(
+                        UUID.randomUUID(), SCHOOL, CURRICULUM, "转班目标" + UUID.randomUUID())));
+    asActor(OPS, () -> teaching.addMember(source.id(), new AddClassMember(enrollment.id())));
+    update(
+        "insert into approval.policy(tenant_id,school_id,action,free_below)"
+            + " values (?,?,'ENROLLMENT_TRANSFER',0)",
+        TENANT,
+        SCHOOL);
+    var approval =
+        asActor(
+            OPS,
+            () ->
+                approvalCommands.request(
+                    new CreateApprovalRequest(
+                        UUID.randomUUID(), enrollment.id(), "ENROLLMENT_TRANSFER", "0", "申请转班")));
+    assertThat(approval.amount()).isEqualTo("0.00");
+    var transfer =
+        new TransferClassMember(
+            UUID.randomUUID(), source.id(), target.id(), approval.id(), "同课程换班");
+    assertThatThrownBy(() -> asActor(OPS, () -> teaching.transferMember(enrollment.id(), transfer)))
+        .isInstanceOf(ApprovalConflict.class)
+        .hasMessage("APPROVAL_NOT_APPROVED");
+    assertThat(
+            tx.execute(
+                TENANT,
+                () ->
+                    sql.fetchOne(
+                            "select count(*) from teaching.class_transfer where enrollment_id=?",
+                            enrollment.id())
+                        .get(0, Long.class)))
+        .isZero();
+    assertThat(asActor(OPS, () -> teachingQueries.members(source.id()).getFirst().status()))
+        .isEqualTo("ACTIVE");
+    var approved =
+        asActor(
+            LOCKER,
+            () ->
+                approvalCommands.decide(
+                    approval.id(), new DecideApproval(approval.version(), "APPROVED", "同意")));
+    transfer =
+        new TransferClassMember(
+            transfer.requestId(), source.id(), target.id(), approved.id(), "同课程换班");
+
+    var ready = new CountDownLatch(2);
+    var start = new CountDownLatch(1);
+    var pool = Executors.newFixedThreadPool(2);
+    ClassView firstResult;
+    ClassView secondResult;
+    try {
+      Callable<ClassView> submit =
+          () -> {
+            ready.countDown();
+            if (!start.await(5, TimeUnit.SECONDS)) throw new IllegalStateException("start timeout");
+            return asActor(OPS, () -> teaching.transferMember(enrollment.id(), transfer));
+          };
+      var first = pool.submit(submit);
+      var second = pool.submit(submit);
+      assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+      start.countDown();
+      firstResult = first.get(10, TimeUnit.SECONDS);
+      secondResult = second.get(10, TimeUnit.SECONDS);
+    } finally {
+      pool.shutdownNow();
+    }
+    assertThat(firstResult.id()).isEqualTo(target.id());
+    assertThat(secondResult.id()).isEqualTo(target.id());
+    var memberships =
+        asActor(
+            OPS,
+            () ->
+                List.of(
+                    teachingQueries.members(source.id()).getFirst().status(),
+                    teachingQueries.members(target.id()).getFirst().status()));
+    assertThat(memberships).containsExactly("LEFT", "ACTIVE");
+    assertThat(asActor(OPS, () -> teaching.transferMember(enrollment.id(), transfer)).id())
+        .isEqualTo(target.id());
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    OPS,
+                    () ->
+                        teaching.transferMember(
+                            enrollment.id(),
+                            new TransferClassMember(
+                                transfer.requestId(), source.id(), target.id(), null, "改参重放"))))
+        .isInstanceOf(TeachingConflict.class)
+        .hasMessage("IDEMPOTENCY_MISMATCH");
+    assertThat(
+            tx.execute(
+                TENANT,
+                () ->
+                    sql.fetchOne(
+                            "select count(*) from teaching.class_transfer where enrollment_id=?",
+                            enrollment.id())
+                        .get(0, Long.class)))
+        .isEqualTo(1);
+    var afterTransfer = asActor(OPS, () -> enrollmentQueries.detail(enrollment.id()));
+    assertThat(afterTransfer.price()).isEqualTo("1000.00");
+    assertThat(afterTransfer.hours()).isEqualTo("10.00");
   }
 
   @Test

@@ -72,6 +72,8 @@ export function TeachingWorkspace({
 }) {
   const [schoolId, setSchoolId] = useState<string>();
   const [classId, setClassId] = useState<string>();
+  const [transferTargetClassId, setTransferTargetClassId] = useState<string>();
+  const [transferApprovalId, setTransferApprovalId] = useState("");
   const [creatingClass, setCreatingClass] = useState(false);
   const [creatingLesson, setCreatingLesson] = useState(false);
   const [scheduling, setScheduling] = useState(false);
@@ -90,6 +92,9 @@ export function TeachingWorkspace({
   const [consumptionPage, setConsumptionPage] = useState(1);
   const cancelRequests = useRef(
     new Map<string, { reason: string; version: number; requestId: string }>(),
+  );
+  const transferRequests = useRef(
+    new Map<string, { fingerprint: string; requestId: string }>(),
   );
   const queryClient = useQueryClient();
 
@@ -128,6 +133,14 @@ export function TeachingWorkspace({
       return data;
     },
   });
+  const selectedClass = classes.data?.find((item) => item.id === classId);
+  const transferTargets =
+    classes.data?.filter(
+      (item) =>
+        item.id !== classId &&
+        item.status === "ACTIVE" &&
+        item.curriculumId === selectedClass?.curriculumId,
+    ) ?? [];
   const curricula = useQuery({
     queryKey: ["teaching-curricula", current],
     enabled: !!current && !!school?.maintainable,
@@ -326,6 +339,56 @@ export function TeachingWorkspace({
         }
       },
     });
+  }
+
+  async function transferClassMember(enrollmentId: string) {
+    if (!classId || !transferTargetClassId) return;
+    const reason = window.prompt("请输入转班原因")?.trim();
+    if (!reason) return;
+    const fingerprint = `${classId}|${transferTargetClassId}|${transferApprovalId.trim()}|${reason}`;
+    const previous = transferRequests.current.get(enrollmentId);
+    const requestId =
+      previous?.fingerprint === fingerprint
+        ? previous.requestId
+        : crypto.randomUUID();
+    transferRequests.current.set(enrollmentId, { fingerprint, requestId });
+    setError("");
+    try {
+      const token = await csrf();
+      const { response } = await api.POST(
+        "/api/teaching/enrollments/{id}/transfer",
+        {
+          params: { path: { id: enrollmentId } },
+          headers: { [token.headerName!]: token.token! },
+          body: {
+            requestId,
+            expectedFromClassId: classId,
+            toClassId: transferTargetClassId,
+            approvalId: transferApprovalId.trim() || undefined,
+            reason,
+          },
+        },
+      );
+      if (response.status === 401) {
+        onUnauthorized();
+        return;
+      }
+      if (!response.ok) {
+        setError(
+          "转班失败：请核对目标班状态、同课条件和已批准的转班审批单。原请求可重试。",
+        );
+        return;
+      }
+      transferRequests.current.delete(enrollmentId);
+      setTransferTargetClassId(undefined);
+      setTransferApprovalId("");
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["teaching-members"] }),
+        queryClient.invalidateQueries({ queryKey: ["teaching-classes"] }),
+      ]);
+    } catch {
+      setError("转班结果暂时未知，请以相同参数重试或刷新核对班级名册。");
+    }
   }
 
   async function cancelClass(row: components["schemas"]["ClassView"]) {
@@ -872,6 +935,35 @@ export function TeachingWorkspace({
             <Typography.Text type="secondary">
               在班 {members.data?.length ?? 0} 人
             </Typography.Text>
+            {school?.maintainable ? (
+              <>
+                <select
+                  aria-label="转入目标班级"
+                  className="ant-input"
+                  value={transferTargetClassId ?? ""}
+                  onChange={(event) =>
+                    setTransferTargetClassId(event.target.value || undefined)
+                  }
+                  style={{ width: 220 }}
+                >
+                  <option value="">选择同课程目标班</option>
+                  {transferTargets.map((item) => (
+                    <option key={item.id} value={item.id!}>
+                      {item.name}
+                    </option>
+                  ))}
+                </select>
+                <Input
+                  aria-label="已批准转班审批单号"
+                  placeholder="审批策略要求时填写审批单号"
+                  value={transferApprovalId}
+                  onChange={(event) =>
+                    setTransferApprovalId(event.target.value)
+                  }
+                  style={{ width: 260 }}
+                />
+              </>
+            ) : null}
           </Space>
           <Table
             rowKey="id"
@@ -944,12 +1036,29 @@ export function TeachingWorkspace({
                 title: "操作",
                 key: "actions",
                 render: (_: unknown, member: ClassMemberView) => (
-                  <Button
-                    size="small"
-                    onClick={() => setReconcileFor(member.enrollmentId ?? null)}
-                  >
-                    课时对账
-                  </Button>
+                  <Space>
+                    <Button
+                      size="small"
+                      onClick={() =>
+                        setReconcileFor(member.enrollmentId ?? null)
+                      }
+                    >
+                      课时对账
+                    </Button>
+                    <Button
+                      size="small"
+                      disabled={
+                        !school?.maintainable ||
+                        !transferTargetClassId ||
+                        !member.enrollmentId
+                      }
+                      onClick={() =>
+                        void transferClassMember(member.enrollmentId!)
+                      }
+                    >
+                      转班
+                    </Button>
+                  </Space>
                 ),
               },
             ]}

@@ -448,8 +448,11 @@ function RequestEditor({
           name="amount"
           rules={[{ required: true }]}
         >
-          <InputNumber min={0.01} precision={2} style={{ width: "100%" }} />
+          <InputNumber min={0} precision={2} style={{ width: "100%" }} />
         </Form.Item>
+        <Typography.Text type="secondary">
+          转班、退班、延期等非金额动作可填 0；退费和减款必须填写正数金额。
+        </Typography.Text>
         <Form.Item label="原因" name="reason">
           <Input maxLength={200} />
         </Form.Item>
