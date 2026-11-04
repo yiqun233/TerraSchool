@@ -15,6 +15,7 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.teraschool.archive.api.StudentAccess;
 import org.teraschool.enrollment.api.EnrollmentAccess;
+import org.teraschool.enrollment.api.EnrollmentQueries;
 import org.teraschool.finance.api.PeriodGate;
 import org.teraschool.identity.api.Actor;
 import org.teraschool.identity.api.CurrentActor;
@@ -42,6 +43,7 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
   private final DSLContext sql;
   private final SchoolAccess schools;
   private final EnrollmentAccess enrollments;
+  private final EnrollmentQueries enrollmentQueries;
   private final CurriculumAccess curricula;
   private final StudentAccess students;
   private final PeriodGate periods;
@@ -52,6 +54,7 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
       DSLContext sql,
       SchoolAccess schools,
       EnrollmentAccess enrollments,
+      EnrollmentQueries enrollmentQueries,
       CurriculumAccess curricula,
       StudentAccess students,
       PeriodGate periods) {
@@ -60,6 +63,7 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
     this.sql = sql;
     this.schools = schools;
     this.enrollments = enrollments;
+    this.enrollmentQueries = enrollmentQueries;
     this.curricula = curricula;
     this.students = students;
     this.periods = periods;
@@ -315,6 +319,83 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
               totals.get("total", Long.class),
               page,
               pageSize);
+        });
+  }
+
+  @Override
+  public StudentConsumptionPage studentConsumption(UUID schoolId, int page, int size) {
+    if (schoolId == null) throw new IllegalArgumentException("需要学校");
+    if (page < 0 || page > 100000 || size < 1 || size > 100)
+      throw new IllegalArgumentException("分页超出范围");
+    var teachingScope = actors.requireResourceScope("TEACHING");
+    var fundsActor = actors.requireAction("FUNDS_READ");
+    if (!teachingScope.tenantId().equals(fundsActor.tenantId())
+        || !teachingScope.readableSchoolIds().contains(schoolId)
+        || !fundsActor.schools().contains(schoolId))
+      throw new AccessDeniedException("无该学校学员消费报表权限");
+    return tx.execute(
+        teachingScope.tenantId(),
+        () -> {
+          var verifiedTeaching = actors.requireResourceScopeInTransaction("TEACHING");
+          var verifiedFunds = actors.requireActionInTransaction("FUNDS_READ");
+          if (!verifiedTeaching.readableSchoolIds().contains(schoolId)
+              || !verifiedFunds.schools().contains(schoolId))
+            throw new AccessDeniedException("无该学校学员消费报表权限");
+          var bases = enrollmentQueries.consumptionBase(schoolId, page, size);
+          var studentIds =
+              bases.items().stream().map(EnrollmentQueries.ConsumptionBase::studentId).toList();
+          var studentNames = students.names(studentIds);
+          var totals = new HashMap<UUID, BigDecimal[]>();
+          if (!bases.items().isEmpty()) {
+            var placeholders = String.join(",", Collections.nCopies(bases.items().size(), "?"));
+            var ids =
+                bases.items().stream()
+                    .map(EnrollmentQueries.ConsumptionBase::enrollmentId)
+                    .toList();
+            var rows =
+                sql.fetch(
+                    "select enrollment_id,coalesce(sum(hours),0) as consumed_hours,"
+                        + "coalesce(sum(amount),0) as consumed_amount from teaching.consumption"
+                        + " where enrollment_id in ("
+                        + placeholders
+                        + ") group by enrollment_id",
+                    ids.toArray());
+            for (var row : rows)
+              totals.put(
+                  row.get("enrollment_id", UUID.class),
+                  new BigDecimal[] {
+                    row.get("consumed_hours", BigDecimal.class),
+                    row.get("consumed_amount", BigDecimal.class)
+                  });
+          }
+          var items =
+              bases.items().stream()
+                  .map(
+                      base -> {
+                        var amounts =
+                            totals.getOrDefault(
+                                base.enrollmentId(),
+                                new BigDecimal[] {BigDecimal.ZERO, BigDecimal.ZERO});
+                        var consumedHours = amounts[0];
+                        var remaining =
+                            new BigDecimal(base.purchasedHours())
+                                .subtract(consumedHours)
+                                .subtract(new BigDecimal(base.cancelledHours()));
+                        return new StudentConsumptionRow(
+                            base.enrollmentId(),
+                            base.studentId(),
+                            studentNames.getOrDefault(base.studentId(), ""),
+                            base.status(),
+                            base.settlementMode(),
+                            base.price(),
+                            base.purchasedHours(),
+                            hours(consumedHours),
+                            money(amounts[1]),
+                            base.cancelledHours(),
+                            hours(remaining));
+                      })
+                  .toList();
+          return new StudentConsumptionPage(items, bases.page(), bases.size(), bases.total());
         });
   }
 

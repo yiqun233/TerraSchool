@@ -144,6 +144,50 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
   }
 
   @Override
+  public ConsumptionBasePage consumptionBase(UUID schoolId, int page, int size) {
+    if (schoolId == null) throw new IllegalArgumentException("需要学校");
+    if (page < 0 || page > 100000 || size < 1 || size > 100)
+      throw new IllegalArgumentException("分页超出范围");
+    var scope = actors.requireResourceScope("ENROLLMENT");
+    requireReadable(scope, schoolId);
+    return tx.execute(
+        scope.tenantId(),
+        () -> {
+          var verified = actors.requireResourceScopeInTransaction("ENROLLMENT");
+          requireReadable(verified, schoolId);
+          var total =
+              sql.fetchOne(
+                      "select count(*) from enrollment.enrollment e where e.school_id=?", schoolId)
+                  .get(0, Long.class);
+          var rows =
+              sql.fetch(
+                  "select e.id,e.student_id,e.status,e.settlement_mode,e.price,e.hours,"
+                      + "coalesce(c.cancelled_hours,0) as cancelled_hours"
+                      + " from enrollment.enrollment e"
+                      + " left join lateral (select sum(h.hours) as cancelled_hours"
+                      + " from enrollment.hours_cancellation h where h.enrollment_id=e.id) c on true"
+                      + " where e.school_id=? order by e.created_at desc,e.id limit ? offset ?",
+                  schoolId,
+                  size,
+                  (long) page * size);
+          return new ConsumptionBasePage(
+              rows.map(
+                  row ->
+                      new ConsumptionBase(
+                          row.get("id", UUID.class),
+                          row.get("student_id", UUID.class),
+                          row.get("status", String.class),
+                          row.get("settlement_mode", Integer.class),
+                          money(row.get("price", BigDecimal.class)),
+                          hours(row.get("hours", BigDecimal.class)),
+                          hours(row.get("cancelled_hours", BigDecimal.class)))),
+              page,
+              size,
+              total);
+        });
+  }
+
+  @Override
   public EnrollmentView detail(UUID id) {
     if (id == null) throw new IllegalArgumentException("需要报名");
     var scope = actors.requireResourceScope("ENROLLMENT");

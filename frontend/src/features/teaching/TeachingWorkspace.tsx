@@ -36,6 +36,7 @@ type TeacherWorkbenchLesson = NonNullable<
   NonNullable<TeacherWorkbench["lessons"]>[number]
 >;
 type DailyResourceSchedule = components["schemas"]["DailyResourceSchedule"];
+type StudentConsumptionPage = components["schemas"]["StudentConsumptionPage"];
 
 function localDate(offsetDays: number) {
   const date = new Date();
@@ -83,6 +84,7 @@ export function TeachingWorkspace({
   const [workbenchTo, setWorkbenchTo] = useState(() => localDate(30));
   const [resourceDay, setResourceDay] = useState(() => localDate(0));
   const [resourcePage, setResourcePage] = useState(1);
+  const [consumptionPage, setConsumptionPage] = useState(1);
   const cancelRequests = useRef(
     new Map<string, { reason: string; version: number; requestId: string }>(),
   );
@@ -222,6 +224,28 @@ export function TeachingWorkspace({
         throw new Error("登录已失效，请重新登录");
       }
       if (!response.ok || !data) throw new Error("无法读取资源日程");
+      return data;
+    },
+  });
+  const studentConsumption = useQuery<StudentConsumptionPage | null>({
+    queryKey: ["teaching-student-consumption", current, consumptionPage],
+    enabled: !!current && !!capabilities.data?.canRead,
+    queryFn: async ({ signal }) => {
+      const { data, response } = await api.GET(
+        "/api/teaching/reports/student-consumption",
+        {
+          params: {
+            query: { schoolId: current!, page: consumptionPage - 1, size: 50 },
+          },
+          signal,
+        },
+      );
+      if (response.status === 401) {
+        onUnauthorized();
+        throw new Error("登录已失效，请重新登录");
+      }
+      if (response.status === 403) return null;
+      if (!response.ok || !data) throw new Error("无法读取学员消费对账");
       return data;
     },
   });
@@ -545,6 +569,53 @@ export function TeachingWorkspace({
           ]}
         />
       </Drawer>
+      <Card
+        title="学员消费与课时对账"
+        size="small"
+        loading={studentConsumption.isFetching}
+        style={{ marginBottom: 12 }}
+      >
+        <Typography.Text type="secondary">
+          按报名列示累计购买、已消费、已退与剩余课时；金额为实际已固化消费金额。需要同时具备教务、报名与资金读取权限。
+        </Typography.Text>
+        {studentConsumption.error ? (
+          <Alert
+            type="error"
+            title={studentConsumption.error.message}
+            showIcon
+            style={{ marginTop: 12 }}
+          />
+        ) : studentConsumption.data === null ? (
+          <Typography.Paragraph type="secondary" style={{ marginTop: 12 }}>
+            当前账号没有该校学员消费对账权限
+          </Typography.Paragraph>
+        ) : (
+          <Table
+            style={{ marginTop: 12 }}
+            size="small"
+            rowKey="enrollmentId"
+            dataSource={studentConsumption.data?.items ?? []}
+            pagination={{
+              current: consumptionPage,
+              pageSize: 50,
+              total: studentConsumption.data?.total ?? 0,
+              showTotal: (total) => `共 ${total} 条报名`,
+              onChange: (page) => setConsumptionPage(page),
+            }}
+            columns={[
+              { title: "学员", dataIndex: "studentName" },
+              { title: "报名状态", dataIndex: "enrollmentStatus" },
+              { title: "结算模式", dataIndex: "settlementMode" },
+              { title: "原始课程价", dataIndex: "price" },
+              { title: "购买课时", dataIndex: "purchasedHours" },
+              { title: "已消费课时", dataIndex: "consumedHours" },
+              { title: "已消费金额", dataIndex: "consumedAmount" },
+              { title: "已退课时", dataIndex: "cancelledHours" },
+              { title: "剩余课时", dataIndex: "remainingHours" },
+            ]}
+          />
+        )}
+      </Card>
       <Card title="资源日程日报" size="small" style={{ marginBottom: 12 }}>
         <Space wrap style={{ marginBottom: 12 }}>
           <Input

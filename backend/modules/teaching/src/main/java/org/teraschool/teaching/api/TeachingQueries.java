@@ -59,6 +59,25 @@ public interface TeachingQueries {
     }
   }
 
+  record StudentConsumptionRow(
+      UUID enrollmentId,
+      UUID studentId,
+      String studentName,
+      String enrollmentStatus,
+      int settlementMode,
+      String price,
+      String purchasedHours,
+      String consumedHours,
+      String consumedAmount,
+      String cancelledHours,
+      String remainingHours) {}
+
+  record StudentConsumptionPage(List<StudentConsumptionRow> items, int page, int size, long total) {
+    public StudentConsumptionPage {
+      items = List.copyOf(items);
+    }
+  }
+
   TeachingCapabilities capabilities();
 
   /** 当前账号绑定的教师在明确日期区间内的课表及所授班级。 */
@@ -68,6 +87,9 @@ public interface TeachingQueries {
   TeacherClassWorkbench myClass(UUID classId);
 
   DailyResourceSchedule dailyResourceSchedule(UUID schoolId, String day, int page, int pageSize);
+
+  /** 学校范围内逐报名的累计消费/退课/剩余课时，需同时具备报名、教务和资金读取权限。 */
+  StudentConsumptionPage studentConsumption(UUID schoolId, int page, int size);
 
   List<ClassView> classes(UUID schoolId);
 

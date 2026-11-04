@@ -41,6 +41,7 @@ class FinancePeriodTest {
   @Autowired EnrollmentCommands enrollments;
   @Autowired FundsCommands funds;
   @Autowired TeachingCommands teaching;
+  @Autowired TeachingQueries teachingQueries;
   @Autowired org.jooq.DSLContext sql;
   @Autowired TenantTransactions tx;
 
@@ -333,6 +334,43 @@ class FinancePeriodTest {
                     () ->
                         financialReports.receiptDailyTotals(
                             reportSchool, "2026-04-12", "2026-04-13")))
+        .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
+  }
+
+  @Test
+  void studentConsumptionReportReconcilesPurchasedConsumedCancelledAndRemaining() throws Exception {
+    var student = freshStudent();
+    var enrollment = activeEnrollment(student);
+    update(
+        "insert into teaching.consumption(id,tenant_id,enrollment_id,lesson_id,hours,amount,"
+            + "settlement_mode,price_snapshot,hours_snapshot) values (?,?,?,null,2.00,200.00,1,1000.00,10.00)",
+        UUID.randomUUID(),
+        TENANT,
+        enrollment.id());
+    update(
+        "insert into enrollment.hours_cancellation(tenant_id,enrollment_id,hours,amount,reason)"
+            + " values (?,?,1.00,100.00,'验算退课')",
+        TENANT,
+        enrollment.id());
+
+    var report = asActor(OPS, () -> teachingQueries.studentConsumption(SCHOOL, 0, 50));
+    assertThat(report.total()).isEqualTo(1);
+    assertThat(report.items())
+        .containsExactly(
+            new TeachingQueries.StudentConsumptionRow(
+                enrollment.id(),
+                student,
+                "期间学员" + student.toString().substring(0, 4),
+                "ACTIVE",
+                1,
+                "1000.00",
+                "10.00",
+                "2.00",
+                "200.00",
+                "1.00",
+                "7.00"));
+    assertThatThrownBy(
+            () -> asActor(READER, () -> teachingQueries.studentConsumption(SCHOOL, 0, 50)))
         .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
   }
 

@@ -46,6 +46,14 @@ class TeachingHttp {
     return queries.dailyResourceSchedule(schoolId, day, page, pageSize);
   }
 
+  @GetMapping("/api/teaching/reports/student-consumption")
+  TeachingQueries.StudentConsumptionPage studentConsumption(
+      @RequestParam UUID schoolId,
+      @RequestParam(defaultValue = "0") int page,
+      @RequestParam(defaultValue = "50") int size) {
+    return queries.studentConsumption(schoolId, page, size);
+  }
+
   @GetMapping("/api/teaching/classes")
   List<ClassView> classes(@RequestParam UUID schoolId) {
     return queries.classes(schoolId);

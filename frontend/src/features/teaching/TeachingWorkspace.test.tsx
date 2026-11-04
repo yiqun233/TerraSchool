@@ -176,6 +176,8 @@ it("班级列表展示在班人数与状态", async () => {
           ],
         },
       };
+    if (path === "/api/teaching/reports/student-consumption")
+      return { response: { ok: false, status: 403 } };
     throw new Error("unexpected path " + path);
   });
   renderWithClient(<TeachingWorkspace onUnauthorized={vi.fn()} />);
@@ -221,6 +223,8 @@ it("结班需确认并提交班级版本", async () => {
           missingRoom: 0,
         },
       };
+    if (path === "/api/teaching/reports/student-consumption")
+      return { response: { ok: false, status: 403 } };
     throw new Error("unexpected path " + path);
   });
   csrf.mockResolvedValue({ headerName: "X-CSRF-TOKEN", token: "test" });
@@ -274,6 +278,8 @@ it("空班取消需填写原因并提交版本及幂等身份", async () => {
           missingRoom: 0,
         },
       };
+    if (path === "/api/teaching/reports/student-consumption")
+      return { response: { ok: false, status: 403 } };
     throw new Error("unexpected path " + path);
   });
   csrf.mockResolvedValue({ headerName: "X-CSRF-TOKEN", token: "test" });
@@ -379,4 +385,62 @@ it("考勤确认提交全部在班报名，关闭课次单独提交版本", asyn
     (call) => call[0] === "/api/teaching/lessons/{id}/close",
   );
   expect(closeCall![1].body).toEqual({ expectedVersion: 4 });
+});
+
+it("展示逐报名累计消费与剩余课时对账", async () => {
+  get.mockImplementation(async (path: string) => {
+    if (path === "/api/teaching/capabilities")
+      return { response: { ok: true, status: 200 }, data: capabilities };
+    if (path === "/api/teaching/classes")
+      return { response: { ok: true, status: 200 }, data: [] };
+    if (path === "/api/teaching/me/workbench")
+      return {
+        response: { ok: true, status: 200 },
+        data: { classes: [], lessons: [] },
+      };
+    if (path === "/api/teaching/reports/resource-daily-schedule")
+      return {
+        response: { ok: true, status: 200 },
+        data: {
+          day: "2026-11-04",
+          lessons: [],
+          missingTeacher: 0,
+          missingRoom: 0,
+          total: 0,
+          page: 0,
+          pageSize: 100,
+        },
+      };
+    if (path === "/api/teaching/reports/student-consumption")
+      return {
+        response: { ok: true, status: 200 },
+        data: {
+          items: [
+            {
+              enrollmentId: "enrollment-1",
+              studentId: "student-1",
+              studentName: "学员甲",
+              enrollmentStatus: "ACTIVE",
+              settlementMode: 1,
+              price: "1000.00",
+              purchasedHours: "10.00",
+              consumedHours: "2.00",
+              consumedAmount: "200.00",
+              cancelledHours: "1.00",
+              remainingHours: "7.00",
+            },
+          ],
+          page: 0,
+          size: 50,
+          total: 1,
+        },
+      };
+    throw new Error("unexpected path " + path);
+  });
+  renderWithClient(<TeachingWorkspace onUnauthorized={vi.fn()} />);
+  expect(await screen.findByText("学员消费与课时对账")).toBeTruthy();
+  expect(await screen.findByText("学员甲")).toBeTruthy();
+  expect(screen.getByText("200.00")).toBeTruthy();
+  expect(screen.getByText("7.00")).toBeTruthy();
+  expect(screen.getByText(/教务、报名与资金读取权限/)).toBeTruthy();
 });
