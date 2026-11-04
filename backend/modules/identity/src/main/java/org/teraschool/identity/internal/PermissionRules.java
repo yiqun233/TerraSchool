@@ -20,6 +20,7 @@ final class PermissionRules {
           "PERSONNEL_MAINTAIN",
           "STUDENT_READ",
           "STUDENT_MAINTAIN",
+          "STUDENT_ASSIGN",
           "STUDENT_SENSITIVE_READ",
           "PRODUCT_READ",
           "PRODUCT_MAINTAIN",

@@ -12,6 +12,7 @@ public record StudentCapabilities(
     boolean canRead,
     boolean canMaintain,
     boolean canReadSensitive,
+    boolean canAssign,
     List<StudentSchoolOption> maintainableSchools) {
   public StudentCapabilities {
     maintainableSchools = List.copyOf(maintainableSchools);

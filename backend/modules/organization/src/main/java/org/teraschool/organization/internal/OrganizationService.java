@@ -91,4 +91,15 @@ public class OrganizationService implements OrganizationQueries {
   public boolean isActiveCustomerAssignee(java.util.UUID schoolId, java.util.UUID accountId) {
     return employeeLinks.isActiveCustomerAssignee(schoolId, accountId);
   }
+
+  @Override
+  public java.util.List<OrganizationQueries.EmployeeAssignmentOption> studentAssignmentOptions(
+      java.util.UUID schoolId) {
+    return employeeLinks.studentAssignmentOptions(schoolId);
+  }
+
+  @Override
+  public boolean isActiveStudentAssignee(java.util.UUID schoolId, java.util.UUID accountId) {
+    return employeeLinks.isActiveStudentAssignee(schoolId, accountId);
+  }
 }

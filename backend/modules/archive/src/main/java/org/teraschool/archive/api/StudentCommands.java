@@ -14,4 +14,6 @@ public interface StudentCommands {
 
   /** 只改状态，避免把脱敏值当成权威字段写回。 */
   StudentProfile changeStatus(UUID id, ChangeStudentStatus command);
+
+  StudentProfile assignOwner(UUID id, AssignStudent command);
 }

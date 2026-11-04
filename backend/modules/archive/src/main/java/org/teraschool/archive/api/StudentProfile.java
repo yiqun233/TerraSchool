@@ -18,6 +18,7 @@ public record StudentProfile(
     UUID schoolId,
     String schoolName,
     UUID campusId,
+    UUID ownerAccountId,
     String status,
     long version,
     List<StudentContact> contacts,

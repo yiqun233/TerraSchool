@@ -21,6 +21,12 @@ class StudentHttp {
     return queries.capabilities();
   }
 
+  @GetMapping("/api/archive/students/assignees")
+  java.util.List<org.teraschool.organization.api.OrganizationQueries.EmployeeAssignmentOption>
+      assignees(@RequestParam UUID schoolId) {
+    return queries.assignmentOptions(schoolId);
+  }
+
   @GetMapping("/api/archive/students")
   StudentPage list(
       @RequestParam(defaultValue = "0") int page,
@@ -50,6 +56,11 @@ class StudentHttp {
   @PostMapping(value = "/api/archive/students/{id}/status", consumes = "application/json")
   StudentProfile changeStatus(@PathVariable UUID id, @RequestBody ChangeStudentStatus command) {
     return commands.changeStatus(id, command);
+  }
+
+  @PostMapping(value = "/api/archive/students/{id}/owner", consumes = "application/json")
+  StudentProfile assignOwner(@PathVariable UUID id, @RequestBody AssignStudent command) {
+    return commands.assignOwner(id, command);
   }
 
   /** 导出学员 CSV：字段按字段级授权脱敏，导出写审计。 */

@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -11,10 +11,15 @@ const { get, post, csrf } = vi.hoisted(() => ({
 }));
 vi.mock("../../shared/http", () => ({ api: { GET: get, POST: post }, csrf }));
 
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
 const capabilities = {
   canRead: true,
   canMaintain: true,
   canReadSensitive: false,
+  canAssign: true,
   maintainableSchools: [{ id: "school-1", name: "测试学校" }],
 };
 
@@ -56,6 +61,11 @@ it("列表按服务端脱敏值展示，详情提示当前为脱敏值", async (
           total: 1,
         },
       };
+    if (path === "/api/archive/students/assignees")
+      return {
+        response: { ok: true, status: 200 },
+        data: [{ accountId: "account-owner", name: "负责人甲" }],
+      };
     if (path === "/api/archive/students/{id}")
       return {
         response: { ok: true, status: 200 },
@@ -69,6 +79,7 @@ it("列表按服务端脱敏值展示，详情提示当前为脱敏值", async (
           birthday: "2011-11",
           schoolId: "school-1",
           schoolName: "测试学校",
+          ownerAccountId: null,
           status: "ACTIVE",
           version: 0,
           contacts: [
@@ -92,6 +103,25 @@ it("列表按服务端脱敏值展示，详情提示当前为脱敏值", async (
   await user.click(screen.getByText("学员甲"));
   expect(await screen.findByText("当前显示脱敏值")).toBeTruthy();
   expect(screen.getByText("家长甲")).toBeTruthy();
+  vi.spyOn(window, "prompt").mockReturnValue("招生负责人分派");
+  csrf.mockResolvedValue({ headerName: "X-CSRF", token: "csrf-token" });
+  post.mockResolvedValue({ response: { ok: true, status: 200 } });
+  await user.click(screen.getByRole("combobox", { name: "学员负责人" }));
+  await user.click(await screen.findByText("负责人甲"));
+  await user.click(screen.getByRole("button", { name: "分派负责人" }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+  expect(post).toHaveBeenCalledWith(
+    "/api/archive/students/{id}/owner",
+    expect.objectContaining({
+      params: { path: { id: "student-1" } },
+      body: expect.objectContaining({
+        ownerAccountId: "account-owner",
+        expectedVersion: 0,
+        reason: "招生负责人分派",
+        requestId: expect.any(String),
+      }),
+    }),
+  );
 });
 
 it("新建成功后展示重复提示且不再自动合并", { timeout: 15000 }, async () => {

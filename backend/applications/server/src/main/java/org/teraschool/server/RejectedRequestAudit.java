@@ -360,9 +360,11 @@ class RejectedRequestAudit {
         /* 不保存原始路径文本。 */
       }
     } else if (path.equals("/api/archive/students")) action = FailureAudit.Action.STUDENT_CREATE;
-    else if (path.matches("/api/archive/students/[^/]+/(update|status)")) {
-      action = FailureAudit.Action.STUDENT_UPDATE;
-      String suffix = path.endsWith("/update") ? "/update" : "/status";
+    else if (path.matches("/api/archive/students/[^/]+/(update|status|owner)")) {
+      action = path.endsWith("/owner")
+          ? FailureAudit.Action.STUDENT_ASSIGN
+          : FailureAudit.Action.STUDENT_UPDATE;
+      String suffix = path.endsWith("/update") ? "/update" : path.endsWith("/owner") ? "/owner" : "/status";
       try {
         resource =
             UUID.fromString(

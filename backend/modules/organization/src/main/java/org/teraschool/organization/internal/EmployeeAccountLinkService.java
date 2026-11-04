@@ -76,6 +76,48 @@ public class EmployeeAccountLinkService {
                     accountId));
   }
 
+  public java.util.List<
+          org.teraschool.organization.api.OrganizationQueries.EmployeeAssignmentOption>
+      studentAssignmentOptions(UUID schoolId) {
+    if (schoolId == null) throw new IllegalArgumentException("需要学校");
+    var actor = actors.requireAction("STUDENT_ASSIGN");
+    if (!actor.schools().contains(schoolId)) throw new AccessDeniedException("无该校学员分派权限");
+    return tx.execute(
+        actor.tenantId(),
+        () -> {
+          var verified = actors.requireActionInTransaction("STUDENT_ASSIGN");
+          if (!verified.schools().contains(schoolId))
+            throw new AccessDeniedException("无该校学员分派权限");
+          return sql.fetch(
+                  "select e.account_id,e.name from organization.employee e join identity.account a on a.id=e.account_id and a.tenant_id=e.tenant_id join organization.unit s on s.id=e.school_id and s.tenant_id=e.tenant_id and s.active where e.tenant_id=? and e.school_id=? and e.active and e.account_id is not null and a.active order by e.name,e.id limit 200",
+                  actor.tenantId(),
+                  schoolId)
+              .map(
+                  row ->
+                      new org.teraschool.organization.api.OrganizationQueries
+                          .EmployeeAssignmentOption(
+                          row.get("account_id", UUID.class), row.get("name", String.class)));
+        });
+  }
+
+  public boolean isActiveStudentAssignee(UUID schoolId, UUID accountId) {
+    if (schoolId == null || accountId == null) return false;
+    var actor = actors.requireActionInTransaction("STUDENT_ASSIGN");
+    return actor.schools().contains(schoolId)
+        && sql.fetchExists(
+            sql.selectOne()
+                .from("organization.employee e")
+                .join("identity.account a")
+                .on("a.id=e.account_id and a.tenant_id=e.tenant_id")
+                .join("organization.unit s")
+                .on("s.id=e.school_id and s.tenant_id=e.tenant_id and s.active")
+                .where(
+                    "e.tenant_id=? and e.school_id=? and e.account_id=? and e.active and a.active",
+                    actor.tenantId(),
+                    schoolId,
+                    accountId));
+  }
+
   public AccountLink get(UUID id) {
     if (id == null) throw new IllegalArgumentException("需要员工身份");
     return linking.withAccount(

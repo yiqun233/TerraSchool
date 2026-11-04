@@ -30,7 +30,8 @@ class StudentProfileTest {
       CAMPUS = UUID.randomUUID(),
       MAINTAINER = UUID.randomUUID(),
       READER = UUID.randomUUID(),
-      SENSITIVE = UUID.randomUUID();
+      SENSITIVE = UUID.randomUUID(),
+      ASSIGNEE = UUID.randomUUID();
   static final String MAINTAINER_PASSWORD = UUID.randomUUID().toString();
 
   @LocalServerPort int port;
@@ -67,14 +68,14 @@ class StudentProfileTest {
         MAINTAINER,
         TENANT,
         encoder.encode(MAINTAINER_PASSWORD));
-    for (var id : new UUID[] {READER, SENSITIVE})
+    for (var id : new UUID[] {READER, SENSITIVE, ASSIGNEE})
       update(
           "insert into identity.account(id,tenant_id,login,password_hash) values (?,?,?,?)",
           id,
           TENANT,
           "archive-" + id,
           encoder.encode(MAINTAINER_PASSWORD));
-    for (var action : new String[] {"STUDENT_READ", "STUDENT_MAINTAIN"})
+    for (var action : new String[] {"STUDENT_READ", "STUDENT_MAINTAIN", "STUDENT_ASSIGN"})
       update(
           "insert into identity.account_permission(tenant_id,account_id,school_id,action,effect)"
               + " values (?,?,?,?,'ALLOW')",
@@ -82,6 +83,12 @@ class StudentProfileTest {
           MAINTAINER,
           SCHOOL,
           action);
+    update(
+        "insert into organization.employee(tenant_id,school_id,name,account_id) values (?,?,?,?)",
+        TENANT,
+        SCHOOL,
+        "学员负责人甲",
+        ASSIGNEE);
     update(
         "insert into identity.account_permission(tenant_id,account_id,school_id,action,effect)"
             + " values (?,?,?,'STUDENT_READ','ALLOW')",
@@ -146,6 +153,59 @@ class StudentProfileTest {
 
   long studentCount() {
     return sql.fetchOne("select count(*) from archive.student").get(0, Long.class);
+  }
+
+  @Test
+  void studentOwnerAssignmentRequiresDedicatedScopeAndIsVersionedAndIdempotent() throws Exception {
+    var created = asActor(MAINTAINER, () -> commands.create(command("归属学员", null, null)));
+    var options = asActor(MAINTAINER, () -> queries.assignmentOptions(SCHOOL));
+    assertThat(options).extracting(item -> item.accountId()).contains(ASSIGNEE);
+    var requestId = UUID.randomUUID();
+    var assignment =
+        new AssignStudent(requestId, created.profile().version(), ASSIGNEE, "分派给校区负责人");
+    assertThatThrownBy(
+            () -> asActor(READER, () -> commands.assignOwner(created.profile().id(), assignment)))
+        .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
+    var assigned = asActor(MAINTAINER, () -> commands.assignOwner(created.profile().id(), assignment));
+    assertThat(assigned.ownerAccountId()).isEqualTo(ASSIGNEE);
+    assertThat(assigned.version()).isEqualTo(created.profile().version() + 1);
+    assertThat(
+            asActor(
+                    MAINTAINER,
+                    () -> commands.assignOwner(created.profile().id(), assignment))
+                .ownerAccountId())
+        .isEqualTo(ASSIGNEE);
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    MAINTAINER,
+                    () ->
+                        commands.assignOwner(
+                            created.profile().id(),
+                            new AssignStudent(
+                                requestId, created.profile().version(), ASSIGNEE, "变更原因"))))
+        .isInstanceOf(StudentConflict.class)
+        .hasMessage("IDEMPOTENCY_MISMATCH");
+    assertThat(
+            tx.execute(
+                TENANT,
+                () ->
+                    sql.fetchOne(
+                            "select count(*) from archive.student_owner_assignment where student_id=?",
+                            created.profile().id())
+                        .get(0, Long.class)))
+        .isEqualTo(1);
+    try (var c = EngineeringTest.admin();
+        var statement =
+            c.prepareStatement(
+                "select count(*) from audit.student_event where resource_id=?"
+                    + " and action='STUDENT_ASSIGNED'")) {
+      statement.setObject(1, created.profile().id());
+      try (var result = statement.executeQuery()) {
+        result.next();
+        assertThat(result.getLong(1)).isEqualTo(1);
+      }
+    }
   }
 
   @Test

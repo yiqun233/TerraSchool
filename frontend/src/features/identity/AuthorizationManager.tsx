@@ -29,6 +29,7 @@ const actions = [
   { value: "ROOM_MAINTAIN", label: "教室维护" },
   { value: "PERSONNEL_READ", label: "人事档案查看" },
   { value: "PERSONNEL_MAINTAIN", label: "人事档案维护" },
+  { value: "STUDENT_ASSIGN", label: "学员负责人分派" },
   { value: "CHANNEL_READ", label: "招生渠道查看" },
   { value: "CHANNEL_MAINTAIN", label: "招生渠道维护" },
   { value: "CUSTOMER_READ", label: "本人客户查看" },

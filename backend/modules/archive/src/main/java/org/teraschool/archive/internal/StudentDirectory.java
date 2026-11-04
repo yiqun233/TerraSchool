@@ -44,6 +44,7 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
   private final TenantTransactions tx;
   private final DSLContext sql;
   private final SchoolAccess schools;
+  private final org.teraschool.organization.api.OrganizationQueries organizationQueries;
 
   private final org.teraschool.identity.api.FieldAccess fieldAccess;
 
@@ -52,11 +53,13 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
       TenantTransactions tx,
       DSLContext sql,
       SchoolAccess schools,
+      org.teraschool.organization.api.OrganizationQueries organizationQueries,
       org.teraschool.identity.api.FieldAccess fieldAccess) {
     this.actors = actors;
     this.tx = tx;
     this.sql = sql;
     this.schools = schools;
+    this.organizationQueries = organizationQueries;
     this.fieldAccess = fieldAccess;
   }
 
@@ -88,7 +91,7 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
           var items =
               sql.fetch(
                       "select s.id,s.student_no,s.name,s.sex,s.phone,s.school_id,s.campus_id,"
-                          + "s.status,s.version,"
+                          + "s.owner_id,s.status,s.version,"
                           + "(select count(*) from archive.student_contact c where c.student_id=s.id)"
                           + " as contact_count"
                           + filter
@@ -123,8 +126,10 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
   public StudentCapabilities capabilities() {
     var scope = actors.requireResourceScope("STUDENT");
     var maintainable = scope.maintainableSchoolIds();
+    var assignable = assignableSchoolIds();
     if (maintainable.isEmpty())
-      return new StudentCapabilities(true, false, !scope.sensitiveSchoolIds().isEmpty(), List.of());
+      return new StudentCapabilities(
+          true, false, !scope.sensitiveSchoolIds().isEmpty(), !assignable.isEmpty(), List.of());
     return tx.execute(
         scope.tenantId(),
         () -> {
@@ -137,8 +142,27 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
                   .map(key -> new StudentCapabilities.StudentSchoolOption(key, names.get(key)))
                   .toList();
           return new StudentCapabilities(
-              true, !options.isEmpty(), !scope.sensitiveSchoolIds().isEmpty(), options);
+              true,
+              !options.isEmpty(),
+              !scope.sensitiveSchoolIds().isEmpty(),
+              !assignable.isEmpty(),
+              options);
         });
+  }
+
+  @Override
+  public List<org.teraschool.organization.api.OrganizationQueries.EmployeeAssignmentOption>
+      assignmentOptions(UUID schoolId) {
+    if (schoolId == null) throw new IllegalArgumentException("需要学校");
+    return organizationQueries.studentAssignmentOptions(schoolId);
+  }
+
+  private Set<UUID> assignableSchoolIds() {
+    try {
+      return actors.requireAction("STUDENT_ASSIGN").schools();
+    } catch (AccessDeniedException denied) {
+      return Set.of();
+    }
   }
 
   // ---------------------------------------------------------------- 写入
@@ -289,6 +313,101 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
   public StudentProfile changeStatus(UUID id, ChangeStudentStatus command) {
     try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
       return changeStatusWithTrace(id, command);
+    }
+  }
+
+  @Override
+  public StudentProfile assignOwner(UUID id, AssignStudent command) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      if (id == null
+          || command == null
+          || command.requestId() == null
+          || command.expectedVersion() == null
+          || command.ownerAccountId() == null
+          || command.expectedVersion() < 0)
+        throw new IllegalArgumentException("需要学员、请求身份、版本和负责人");
+      var reason = command.reason() == null ? null : command.reason().strip();
+      if (reason == null || reason.isEmpty() || reason.length() > 200)
+        throw new IllegalArgumentException("分派原因必填且不能超过 200 字");
+      var assign = actors.requireAction("STUDENT_ASSIGN");
+      var scope = actors.requireResourceScope("STUDENT");
+      if (!assign.tenantId().equals(scope.tenantId())
+          || !assign.accountId().equals(scope.accountId()))
+        throw new AccessDeniedException("学员分派权限不匹配");
+      var fingerprint =
+          fingerprint(
+              id.toString(),
+              Long.toString(command.expectedVersion()),
+              command.ownerAccountId().toString(),
+              reason);
+      return tx.execute(
+          scope.tenantId(),
+          () -> {
+            schools.lockTenant(scope.tenantId());
+            var verifiedAssign = actors.requireActionInTransaction("STUDENT_ASSIGN");
+            var verifiedScope = actors.requireResourceScopeInTransaction("STUDENT");
+            if (!verifiedAssign.accountId().equals(verifiedScope.accountId())
+                || !verifiedAssign.tenantId().equals(verifiedScope.tenantId()))
+              throw new AccessDeniedException("学员分派权限不匹配");
+            var existing =
+                sql.fetchOne(
+                    "select student_id,fingerprint from archive.student_assignment_request"
+                        + " where tenant_id=? and actor_id=? and request_id=?",
+                    scope.tenantId(),
+                    scope.accountId(),
+                    command.requestId());
+            if (existing != null) {
+              if (!fingerprint.equals(existing.get("fingerprint", String.class)))
+                throw new StudentConflict("IDEMPOTENCY_MISMATCH");
+              var previousStudent = existing.get("student_id", UUID.class);
+              return profile(
+                  verifiedScope,
+                  previousStudent,
+                  requireReadable(verifiedScope, previousStudent));
+            }
+            var current = requireReadable(verifiedScope, id);
+            var schoolId = current.get("school_id", UUID.class);
+            if (!verifiedAssign.schools().contains(schoolId))
+              throw new AccessDeniedException("无该校学员分派权限");
+            if (!"ACTIVE".equals(current.get("status", String.class)))
+              throw new StudentConflict("STUDENT_NOT_ACTIVE");
+            if (current.get("version", Long.class) != command.expectedVersion())
+              throw new StudentConflict("VERSION_CONFLICT");
+            if (!schools.require(schoolId).active())
+              throw new AccessDeniedException("学校已停用，不能分派学员");
+            var previousOwner = current.get("owner_id", UUID.class);
+            if (command.ownerAccountId().equals(previousOwner))
+              throw new StudentConflict("OWNER_UNCHANGED");
+            if (!organizationQueries.isActiveStudentAssignee(schoolId, command.ownerAccountId()))
+              throw new StudentConflict("ASSIGNEE_NOT_ACTIVE_IN_SCHOOL");
+            int updated =
+                sql.execute(
+                    "update archive.student set owner_id=?,version=version+1,"
+                        + "updated_at=CURRENT_TIMESTAMP where id=? and version=?",
+                    command.ownerAccountId(),
+                    id,
+                    command.expectedVersion());
+            if (updated != 1) throw new StudentConflict("VERSION_CONFLICT");
+            sql.execute(
+                "insert into archive.student_owner_assignment(tenant_id,student_id,from_account_id,"
+                    + "to_account_id,reason,actor_id) values (?,?,?,?,?,?)",
+                scope.tenantId(),
+                id,
+                previousOwner,
+                command.ownerAccountId(),
+                reason,
+                scope.accountId());
+            sql.execute(
+                "insert into archive.student_assignment_request(tenant_id,actor_id,request_id,"
+                    + "student_id,fingerprint) values (?,?,?,?,?)",
+                scope.tenantId(),
+                scope.accountId(),
+                command.requestId(),
+                id,
+                fingerprint);
+            audit(scope, "STUDENT_ASSIGNED", id, schoolId, "owner_changed");
+            return profile(verifiedScope, id, requireReadable(verifiedScope, id));
+          });
     }
   }
 
@@ -533,7 +652,7 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
     var row =
         sql.fetchOne(
             "select id,student_no,name,name_english,sex,birthday,cert_type,cert_code,phone,email,"
-                + "school_id,campus_id,status,version from archive.student"
+                + "school_id,campus_id,owner_id,status,version from archive.student"
                 + " where id=? and school_id in ("
                 + marks(scope.readableSchoolIds().size())
                 + ")",
@@ -597,6 +716,7 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
         schoolId,
         names.get(schoolId),
         row.get("campus_id", UUID.class),
+        row.get("owner_id", UUID.class),
         row.get("status", String.class),
         row.get("version", Long.class),
         contacts,
@@ -618,6 +738,7 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
         row.get("school_id", UUID.class),
         schoolName,
         row.get("campus_id", UUID.class),
+        row.get("owner_id", UUID.class),
         row.get("status", String.class),
         row.get("version", Long.class),
         row.get("contact_count", Integer.class),
@@ -775,9 +896,7 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
   }
 
   private String fingerprint(Normalised input) {
-    var text =
-        String.join(
-            "\u001f",
+    return fingerprint(
             String.valueOf(input.name()),
             String.valueOf(input.nameEnglish()),
             input.sex(),
@@ -788,6 +907,10 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
             String.valueOf(input.email()),
             String.valueOf(input.campusId()),
             input.contacts().toString());
+  }
+
+  private String fingerprint(String... values) {
+    var text = String.join("\u001f", values);
     try {
       var digest =
           MessageDigest.getInstance("SHA-256").digest(text.getBytes(StandardCharsets.UTF_8));

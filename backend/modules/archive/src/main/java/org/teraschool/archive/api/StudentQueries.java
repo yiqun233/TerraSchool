@@ -9,6 +9,9 @@ public interface StudentQueries {
 
   StudentCapabilities capabilities();
 
+  java.util.List<org.teraschool.organization.api.OrganizationQueries.EmployeeAssignmentOption>
+      assignmentOptions(UUID schoolId);
+
   /**
    * 导出学员 CSV：字段按字段级授权脱敏，导出本身写审计。
    *

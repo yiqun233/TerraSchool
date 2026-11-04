@@ -16,6 +16,7 @@ public record StudentSummary(
     UUID schoolId,
     String schoolName,
     UUID campusId,
+    UUID ownerAccountId,
     String status,
     long version,
     int contactCount,

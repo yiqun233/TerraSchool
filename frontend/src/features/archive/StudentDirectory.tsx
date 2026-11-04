@@ -20,6 +20,8 @@ import type { components } from "../../shared/generated/api";
 type StudentProfile = components["schemas"]["StudentProfile"];
 type CreateStudent = components["schemas"]["CreateStudent"];
 type DuplicateHint = components["schemas"]["DuplicateHint"];
+type EmployeeAssignmentOption =
+  components["schemas"]["EmployeeAssignmentOption"];
 
 const SEX_LABEL: Record<string, string> = {
   MALE: "男",
@@ -208,6 +210,11 @@ export function StudentDirectory({
           { title: "电话", dataIndex: "phone" },
           { title: "归属学校", dataIndex: "schoolName" },
           {
+            title: "负责人",
+            dataIndex: "ownerAccountId",
+            render: (owner: string | null) => owner ?? "未分派",
+          },
+          {
             title: "状态",
             dataIndex: "status",
             render: (status: string) =>
@@ -247,6 +254,7 @@ export function StudentDirectory({
         <StudentDetail
           id={detailId}
           canMaintain={!!capabilities.data.canMaintain}
+          canAssign={!!capabilities.data.canAssign}
           onClose={() => setDetailId(null)}
           onSaved={() => void students.refetch()}
           onUnauthorized={onUnauthorized}
@@ -438,18 +446,25 @@ export function StudentCreator({
 export function StudentDetail({
   id,
   canMaintain,
+  canAssign,
   onClose,
   onSaved,
   onUnauthorized,
 }: {
   id: string;
   canMaintain: boolean;
+  canAssign: boolean;
   onClose: () => void;
   onSaved: () => void;
   onUnauthorized: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [selectedOwner, setSelectedOwner] = useState<string>();
+  const pendingAssignment = useRef<{
+    fingerprint: string;
+    requestId: string;
+  } | null>(null);
   const detail = useQuery({
     queryKey: ["archive-student", id],
     queryFn: async ({ signal }) => {
@@ -464,6 +479,25 @@ export function StudentDetail({
       if (response.status === 403)
         throw new Error("当前账号无权查看该学员档案");
       if (!response.ok || !data) throw new Error("无法读取学员档案");
+      return data;
+    },
+  });
+  const assignees = useQuery({
+    queryKey: ["archive-student-assignees", detail.data?.schoolId],
+    enabled: canAssign && !!detail.data?.schoolId,
+    queryFn: async ({ signal }) => {
+      const { data, response } = await api.GET(
+        "/api/archive/students/assignees",
+        {
+          params: { query: { schoolId: detail.data!.schoolId! } },
+          signal,
+        },
+      );
+      if (response.status === 401) {
+        onUnauthorized();
+        throw new Error("登录已失效，请重新登录");
+      }
+      if (!response.ok || !data) throw new Error("无法读取同校有效学员负责人");
       return data;
     },
   });
@@ -497,6 +531,55 @@ export function StudentDetail({
     }
   }
 
+  async function assignOwner() {
+    if (!detail.data || !selectedOwner) return;
+    const reason = window.prompt("请输入学员归属调整原因")?.trim();
+    if (!reason) return;
+    const fingerprint = `${detail.data.version}|${selectedOwner}|${reason}`;
+    const requestId =
+      pendingAssignment.current?.fingerprint === fingerprint
+        ? pendingAssignment.current.requestId
+        : crypto.randomUUID();
+    pendingAssignment.current = { fingerprint, requestId };
+    setBusy(true);
+    setError("");
+    try {
+      const token = await csrf();
+      const { response } = await api.POST("/api/archive/students/{id}/owner", {
+        params: { path: { id } },
+        headers: { [token.headerName!]: token.token! },
+        body: {
+          requestId,
+          expectedVersion: detail.data.version,
+          ownerAccountId: selectedOwner,
+          reason,
+        },
+      });
+      if (response.status === 401) {
+        onUnauthorized();
+        return;
+      }
+      if (response.status === 409) {
+        setError("学员档案或请求参数已变化，请重新读取后核对负责人。");
+        pendingAssignment.current = null;
+        await detail.refetch();
+        return;
+      }
+      if (!response.ok) {
+        setError("分派失败：请核对学员分派权限和同校有效负责人。");
+        return;
+      }
+      pendingAssignment.current = null;
+      setSelectedOwner(undefined);
+      await detail.refetch();
+      onSaved();
+    } catch {
+      setError("分派结果暂时未知，请以相同参数重试后核对负责人。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <Drawer
       title={detail.data ? `学员 ${detail.data.studentNo}` : "学员档案"}
@@ -520,6 +603,9 @@ export function StudentDetail({
             />
           ) : null}
           <Descriptions column={1} size="small" bordered>
+            <Descriptions.Item label="当前负责人">
+              {detail.data.ownerAccountId ?? "未分派"}
+            </Descriptions.Item>
             <Descriptions.Item label="姓名">
               {detail.data.name}
             </Descriptions.Item>
@@ -560,6 +646,31 @@ export function StudentDetail({
               {detail.data.status === "ACTIVE" ? "在读" : "停用"}
             </Descriptions.Item>
           </Descriptions>
+          {canAssign ? (
+            <Space style={{ marginTop: 16 }}>
+              <Select
+                aria-label="学员负责人"
+                placeholder="选择同校有效负责人"
+                value={selectedOwner ?? undefined}
+                onChange={setSelectedOwner}
+                loading={assignees.isPending}
+                options={(assignees.data ?? []).map(
+                  (item: EmployeeAssignmentOption) => ({
+                    value: item.accountId,
+                    label: item.name,
+                  }),
+                )}
+                style={{ width: 240 }}
+              />
+              <Button
+                onClick={() => void assignOwner()}
+                loading={busy}
+                disabled={busy || !selectedOwner}
+              >
+                分派负责人
+              </Button>
+            </Space>
+          ) : null}
           <Typography.Title level={5}>家长与联系人</Typography.Title>
           <Table
             rowKey="id"

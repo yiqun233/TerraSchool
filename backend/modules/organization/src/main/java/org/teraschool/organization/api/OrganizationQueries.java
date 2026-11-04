@@ -10,4 +10,8 @@ public interface OrganizationQueries {
   java.util.List<EmployeeAssignmentOption> customerAssignmentOptions(java.util.UUID schoolId);
 
   boolean isActiveCustomerAssignee(java.util.UUID schoolId, java.util.UUID accountId);
+
+  java.util.List<EmployeeAssignmentOption> studentAssignmentOptions(java.util.UUID schoolId);
+
+  boolean isActiveStudentAssignee(java.util.UUID schoolId, java.util.UUID accountId);
 }
