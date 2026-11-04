@@ -177,6 +177,17 @@ class SettlementModeActualCostTest {
 
   /** 建班（每门课程一次）并在班里上课关闭，返回累计消费金额。 */
   String consume(EnrollmentView enrollment, String hours) throws Exception {
+    return consume(enrollment, hours, new AttendanceInput(enrollment.id(), "PRESENT"));
+  }
+
+  String consumePartial(EnrollmentView enrollment, String hours, int attendedMinutes)
+      throws Exception {
+    return consume(
+        enrollment, hours, new AttendanceInput(enrollment.id(), "PARTIAL", attendedMinutes));
+  }
+
+  private String consume(EnrollmentView enrollment, String hours, AttendanceInput attendance)
+      throws Exception {
     var existing = classes.get("语文");
     if (existing == null) {
       var classView =
@@ -216,9 +227,7 @@ class SettlementModeActualCostTest {
             () ->
                 teaching.confirmAttendance(
                     published.id(),
-                    new ConfirmAttendance(
-                        published.version(),
-                        List.of(new AttendanceInput(enrollment.id(), "PRESENT")))));
+                    new ConfirmAttendance(published.version(), List.of(attendance))));
     asActor(
         OPS, () -> teaching.closeLesson(confirmed.id(), new LessonVersion(confirmed.version())));
     return asActor(OPS, () -> teachingQueries.reconciliation(enrollment.id())).consumedAmount();
@@ -424,8 +433,9 @@ class SettlementModeActualCostTest {
                         "CASH",
                         "2026-02-10")));
     asActor(OPS, () -> funds.allocate(new AllocateReceipt(receipt.id(), enrollment.id(), "800")));
-    // 人工预期：800 / 100 = 8；部分退 10 课时、200 元后，600 / 90 = 6.67。
-    assertThat(consume(enrollment, "1.00")).isEqualTo("8.00");
+    // 人工预期：首课实际出勤 30/60 分钟，消费 0.50 小时 / 4.00 元；
+    // 再退 10 小时、200 元后，总价 600 / 净课时 90 = 6.67 元/课时。
+    assertThat(consumePartial(enrollment, "1.00", 30)).isEqualTo("4.00");
     var request =
         new CancelHoursAndReturnCommand(UUID.randomUUID(), "10.00", "组合算例退课", null, null, "200.00");
     var result = asActor(OPS, () -> funds.cancelHoursAndReturnToAccount(enrollment.id(), request));
@@ -434,11 +444,12 @@ class SettlementModeActualCostTest {
     assertThat(result.amount()).isEqualTo("200.00");
     assertThat(result.netAmount()).isEqualTo("600.00");
     assertThat(result.allocated()).isEqualTo("600.00");
-    assertThat(consume(enrollment, "1.00")).isEqualTo("14.67");
+    assertThat(consume(enrollment, "1.00")).isEqualTo("10.67");
     var reconciliation = asActor(OPS, () -> teachingQueries.reconciliation(enrollment.id()));
-    assertThat(reconciliation.consumedHours()).isEqualTo("2.00");
+    assertThat(reconciliation.consumedHours()).isEqualTo("1.50");
     assertThat(reconciliation.cancelledHours()).isEqualTo("10.00");
-    assertThat(reconciliation.remainingHours()).isEqualTo("88.00");
+    assertThat(reconciliation.remainingHours()).isEqualTo("88.50");
+    assertThat(reconciliation.consumedAmount()).isEqualTo("10.67");
     var balance = asActor(OPS, () -> fundsQueries.balance(enrollment.studentId()));
     assertThat(balance.total()).isEqualTo("200.00");
     assertThat(balance.reserved()).isEqualTo("0.00");
