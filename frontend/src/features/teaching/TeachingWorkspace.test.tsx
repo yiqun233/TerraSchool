@@ -614,3 +614,81 @@ it("同课程转班提交已批准单据和稳定请求身份", async () => {
     }),
   );
 });
+
+it("退班提交已批准单据并沿用稳定请求身份", async () => {
+  vi.clearAllMocks();
+  vi.spyOn(window, "prompt")
+    .mockReturnValueOnce("withdrawal-approval")
+    .mockReturnValueOnce("家庭原因");
+  csrf.mockResolvedValue({ headerName: "X-CSRF", token: "csrf-token" });
+  post.mockResolvedValue({ response: { ok: true, status: 200 } });
+  get.mockImplementation(async (path: string) => {
+    if (path === "/api/teaching/capabilities")
+      return { response: { ok: true, status: 200 }, data: capabilities };
+    if (path === "/api/teaching/classes")
+      return {
+        response: { ok: true, status: 200 },
+        data: [
+          {
+            id: "class-1",
+            schoolId: "school-1",
+            curriculumId: "curriculum-1",
+            name: "退班测试班",
+            status: "ACTIVE",
+            memberCount: 1,
+          },
+        ],
+      };
+    if (path === "/api/teaching/me/workbench")
+      return {
+        response: { ok: true, status: 200 },
+        data: { classes: [], lessons: [] },
+      };
+    if (path === "/api/teaching/lessons")
+      return { response: { ok: true, status: 200 }, data: [] };
+    if (path === "/api/teaching/classes/{id}/members")
+      return {
+        response: { ok: true, status: 200 },
+        data: [
+          {
+            enrollmentId: "enrollment-1",
+            studentName: "退班学员",
+            joinedOn: "2026-01-01",
+            status: "ACTIVE",
+          },
+        ],
+      };
+    if (path === "/api/teaching/reports/resource-daily-schedule")
+      return {
+        response: { ok: true, status: 200 },
+        data: { lessons: [], missingTeacher: 0, missingRoom: 0 },
+      };
+    if (path === "/api/teaching/reports/student-consumption")
+      return { response: { ok: false, status: 403 } };
+    if (path === "/api/teaching/reports/attendance")
+      return {
+        response: { ok: true, status: 200 },
+        data: { from: "", to: "", lessons: [] },
+      };
+    throw new Error("unexpected path " + path);
+  });
+
+  const user = userEvent.setup({ pointerEventsCheck: 0 });
+  renderWithClient(<TeachingWorkspace onUnauthorized={vi.fn()} />);
+  await user.click(await screen.findByText("退班测试班"));
+  expect(await screen.findByText("退班学员")).toBeTruthy();
+  await user.click(await screen.findByRole("button", { name: /退\s*班/ }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+  expect(post).toHaveBeenCalledWith(
+    "/api/teaching/enrollments/{id}/withdraw",
+    expect.objectContaining({
+      params: { path: { id: "enrollment-1" } },
+      body: expect.objectContaining({
+        classId: "class-1",
+        approvalId: "withdrawal-approval",
+        reason: "家庭原因",
+        requestId: expect.any(String),
+      }),
+    }),
+  );
+});

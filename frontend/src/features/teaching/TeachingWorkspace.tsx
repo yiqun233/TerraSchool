@@ -96,6 +96,9 @@ export function TeachingWorkspace({
   const transferRequests = useRef(
     new Map<string, { fingerprint: string; requestId: string }>(),
   );
+  const withdrawalRequests = useRef(
+    new Map<string, { fingerprint: string; requestId: string }>(),
+  );
   const queryClient = useQueryClient();
 
   const capabilities = useQuery({
@@ -388,6 +391,50 @@ export function TeachingWorkspace({
       ]);
     } catch {
       setError("转班结果暂时未知，请以相同参数重试或刷新核对班级名册。");
+    }
+  }
+
+  async function withdrawClassMember(enrollmentId: string) {
+    if (!classId) return;
+    const approvalId = window.prompt("请输入已批准的退班审批单号")?.trim();
+    if (!approvalId) return;
+    const reason = window.prompt("请输入退班原因")?.trim();
+    if (!reason) return;
+    const fingerprint = `${classId}|${approvalId}|${reason}`;
+    const previous = withdrawalRequests.current.get(enrollmentId);
+    const requestId =
+      previous?.fingerprint === fingerprint
+        ? previous.requestId
+        : crypto.randomUUID();
+    withdrawalRequests.current.set(enrollmentId, { fingerprint, requestId });
+    setError("");
+    try {
+      const token = await csrf();
+      const { response } = await api.POST(
+        "/api/teaching/enrollments/{id}/withdraw",
+        {
+          params: { path: { id: enrollmentId } },
+          headers: { [token.headerName!]: token.token! },
+          body: { requestId, classId, approvalId, reason },
+        },
+      );
+      if (response.status === 401) {
+        onUnauthorized();
+        return;
+      }
+      if (!response.ok) {
+        setError(
+          "退班失败：请核对班级、在班关系和已批准的退班审批单。原请求可重试。",
+        );
+        return;
+      }
+      withdrawalRequests.current.delete(enrollmentId);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["teaching-members"] }),
+        queryClient.invalidateQueries({ queryKey: ["teaching-classes"] }),
+      ]);
+    } catch {
+      setError("退班结果暂时未知，请使用相同参数重试或刷新名册核对。");
     }
   }
 
@@ -1057,6 +1104,16 @@ export function TeachingWorkspace({
                       }
                     >
                       转班
+                    </Button>
+                    <Button
+                      size="small"
+                      danger
+                      disabled={!school?.maintainable || !member.enrollmentId}
+                      onClick={() =>
+                        void withdrawClassMember(member.enrollmentId!)
+                      }
+                    >
+                      退班
                     </Button>
                   </Space>
                 ),

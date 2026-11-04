@@ -486,10 +486,13 @@ class FinancePeriodTest {
                     new CreateApprovalRequest(
                         UUID.randomUUID(), enrollment.id(), "ENROLLMENT_TRANSFER", "0", "申请转班")));
     assertThat(approval.amount()).isEqualTo("0.00");
-    var transfer =
+    var pendingTransfer =
         new TransferClassMember(
             UUID.randomUUID(), source.id(), target.id(), approval.id(), "同课程换班");
-    assertThatThrownBy(() -> asActor(OPS, () -> teaching.transferMember(enrollment.id(), transfer)))
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    OPS, () -> teaching.transferMember(enrollment.id(), pendingTransfer)))
         .isInstanceOf(ApprovalConflict.class)
         .hasMessage("APPROVAL_NOT_APPROVED");
     assertThat(
@@ -509,9 +512,9 @@ class FinancePeriodTest {
             () ->
                 approvalCommands.decide(
                     approval.id(), new DecideApproval(approval.version(), "APPROVED", "同意")));
-    transfer =
+    var approvedTransfer =
         new TransferClassMember(
-            transfer.requestId(), source.id(), target.id(), approved.id(), "同课程换班");
+            pendingTransfer.requestId(), source.id(), target.id(), approved.id(), "同课程换班");
 
     var ready = new CountDownLatch(2);
     var start = new CountDownLatch(1);
@@ -523,7 +526,7 @@ class FinancePeriodTest {
           () -> {
             ready.countDown();
             if (!start.await(5, TimeUnit.SECONDS)) throw new IllegalStateException("start timeout");
-            return asActor(OPS, () -> teaching.transferMember(enrollment.id(), transfer));
+            return asActor(OPS, () -> teaching.transferMember(enrollment.id(), approvedTransfer));
           };
       var first = pool.submit(submit);
       var second = pool.submit(submit);
@@ -544,7 +547,7 @@ class FinancePeriodTest {
                     teachingQueries.members(source.id()).getFirst().status(),
                     teachingQueries.members(target.id()).getFirst().status()));
     assertThat(memberships).containsExactly("LEFT", "ACTIVE");
-    assertThat(asActor(OPS, () -> teaching.transferMember(enrollment.id(), transfer)).id())
+    assertThat(asActor(OPS, () -> teaching.transferMember(enrollment.id(), approvedTransfer)).id())
         .isEqualTo(target.id());
     assertThatThrownBy(
             () ->
@@ -554,7 +557,11 @@ class FinancePeriodTest {
                         teaching.transferMember(
                             enrollment.id(),
                             new TransferClassMember(
-                                transfer.requestId(), source.id(), target.id(), null, "改参重放"))))
+                                approvedTransfer.requestId(),
+                                source.id(),
+                                target.id(),
+                                null,
+                                "改参重放"))))
         .isInstanceOf(TeachingConflict.class)
         .hasMessage("IDEMPOTENCY_MISMATCH");
     assertThat(
@@ -569,6 +576,90 @@ class FinancePeriodTest {
     var afterTransfer = asActor(OPS, () -> enrollmentQueries.detail(enrollment.id()));
     assertThat(afterTransfer.price()).isEqualTo("1000.00");
     assertThat(afterTransfer.hours()).isEqualTo("10.00");
+  }
+
+  @Test
+  void approvedClassWithdrawalEndsMembershipWithoutRewritingEnrollmentFunds() throws Exception {
+    var enrollment = activeEnrollment(freshStudent());
+    var classView =
+        asActor(
+            OPS,
+            () ->
+                teaching.createClass(
+                    new CreateClass(
+                        UUID.randomUUID(), SCHOOL, CURRICULUM, "退班" + UUID.randomUUID())));
+    asActor(OPS, () -> teaching.addMember(classView.id(), new AddClassMember(enrollment.id())));
+    update(
+        "insert into approval.policy(tenant_id,school_id,action,free_below)"
+            + " values (?,?,'ENROLLMENT_WITHDRAWAL',0)",
+        TENANT,
+        SCHOOL);
+    var approval =
+        asActor(
+            OPS,
+            () ->
+                approvalCommands.request(
+                    new CreateApprovalRequest(
+                        UUID.randomUUID(), enrollment.id(), "ENROLLMENT_WITHDRAWAL", "0", "申请退班")));
+    var pendingCommand =
+        new WithdrawClassMember(UUID.randomUUID(), classView.id(), approval.id(), "家庭原因退班");
+    assertThatThrownBy(
+            () -> asActor(OPS, () -> teaching.withdrawMember(enrollment.id(), pendingCommand)))
+        .isInstanceOf(ApprovalConflict.class)
+        .hasMessage("APPROVAL_NOT_APPROVED");
+    assertThat(asActor(OPS, () -> teachingQueries.members(classView.id()).getFirst().status()))
+        .isEqualTo("ACTIVE");
+    assertThat(
+            tx.execute(
+                TENANT,
+                () ->
+                    sql.fetchOne(
+                            "select count(*) from teaching.class_withdrawal where enrollment_id=?",
+                            enrollment.id())
+                        .get(0, Long.class)))
+        .isZero();
+
+    var approved =
+        asActor(
+            LOCKER,
+            () ->
+                approvalCommands.decide(
+                    approval.id(), new DecideApproval(approval.version(), "APPROVED", "同意退班")));
+    var approvedCommand =
+        new WithdrawClassMember(
+            pendingCommand.requestId(), classView.id(), approved.id(), "家庭原因退班");
+    var result = asActor(OPS, () -> teaching.withdrawMember(enrollment.id(), approvedCommand));
+    assertThat(result.id()).isEqualTo(classView.id());
+    assertThat(asActor(OPS, () -> teachingQueries.members(classView.id()).getFirst().status()))
+        .isEqualTo("LEFT");
+    assertThat(asActor(OPS, () -> teaching.withdrawMember(enrollment.id(), approvedCommand)).id())
+        .isEqualTo(classView.id());
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    OPS,
+                    () ->
+                        teaching.withdrawMember(
+                            enrollment.id(),
+                            new WithdrawClassMember(
+                                approvedCommand.requestId(),
+                                classView.id(),
+                                approved.id(),
+                                "更改原因重放"))))
+        .isInstanceOf(TeachingConflict.class)
+        .hasMessage("IDEMPOTENCY_MISMATCH");
+    assertThat(
+            tx.execute(
+                TENANT,
+                () ->
+                    sql.fetchOne(
+                            "select count(*) from teaching.class_withdrawal where enrollment_id=?",
+                            enrollment.id())
+                        .get(0, Long.class)))
+        .isEqualTo(1);
+    var afterWithdrawal = asActor(OPS, () -> enrollmentQueries.detail(enrollment.id()));
+    assertThat(afterWithdrawal.price()).isEqualTo("1000.00");
+    assertThat(afterWithdrawal.hours()).isEqualTo("10.00");
   }
 
   @Test

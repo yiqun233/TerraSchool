@@ -933,6 +933,107 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
     }
   }
 
+  @Override
+  public ClassView withdrawMember(UUID enrollmentId, WithdrawClassMember command) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      if (enrollmentId == null
+          || command == null
+          || command.requestId() == null
+          || command.classId() == null)
+        throw new IllegalArgumentException("需要请求身份、班级和报名");
+      var reason = text(command.reason(), 200, "退班原因");
+      if (reason == null) throw new IllegalArgumentException("退班原因必填");
+      var scope = actors.requireAction("TEACHING_MAINTAIN");
+      var resourceScope = actors.requireResourceScope("TEACHING");
+      if (!scope.tenantId().equals(resourceScope.tenantId())
+          || !scope.accountId().equals(resourceScope.accountId()))
+        throw new AccessDeniedException("无教务退班权限");
+      var requestFingerprint =
+          fingerprint(
+              "ENROLLMENT_CLASS_WITHDRAWAL",
+              enrollmentId.toString(),
+              command.classId().toString(),
+              Objects.toString(command.approvalId(), ""),
+              reason);
+      return tx.execute(
+          scope.tenantId(),
+          () -> {
+            schools.lockTenant(scope.tenantId());
+            var verified = actors.requireActionInTransaction("TEACHING_MAINTAIN");
+            var verifiedTeaching = actors.requireResourceScopeInTransaction("TEACHING");
+            var previous =
+                previousRequest(
+                    verifiedTeaching,
+                    command.requestId(),
+                    "CLASS_WITHDRAWAL",
+                    requestFingerprint);
+            if (previous != null) {
+              var previousClass = requireClass(verifiedTeaching, previous);
+              return classView(
+                  previousClass,
+                  schools.require(previousClass.get("school_id", UUID.class)).name());
+            }
+
+            var classRow = requireClass(verifiedTeaching, command.classId());
+            var schoolId = classRow.get("school_id", UUID.class);
+            if (!verified.schools().contains(schoolId))
+              throw new AccessDeniedException("无权维护该校班级");
+            if (!schools.require(schoolId).active())
+              throw new AccessDeniedException("学校已停用，不能退班");
+            if (!"ACTIVE".equals(classRow.get("status", String.class)))
+              throw new TeachingConflict("CLASS_NOT_ACTIVE");
+            var enrollment = enrollments.require(enrollmentId);
+            if (!schoolId.equals(enrollment.schoolId()))
+              throw new AccessDeniedException("报名不属于该学校");
+            if (!"ACTIVE".equals(enrollment.status()))
+              throw new TeachingConflict("ENROLLMENT_NOT_ACTIVE");
+            var membership =
+                sql.fetchOne(
+                    "select 1 from teaching.enrollment_class where enrollment_id=? and class_id=?"
+                        + " and active for update",
+                    enrollmentId,
+                    command.classId());
+            if (membership == null) throw new TeachingConflict("CLASS_MEMBERSHIP_NOT_ACTIVE");
+
+            approvals.consume(
+                "ENROLLMENT_WITHDRAWAL",
+                schoolId,
+                enrollmentId,
+                BigDecimal.ZERO,
+                command.approvalId());
+            int ended =
+                sql.execute(
+                    "update teaching.enrollment_class set active=false where enrollment_id=?"
+                        + " and class_id=? and active",
+                    enrollmentId,
+                    command.classId());
+            if (ended != 1) throw new TeachingConflict("CLASS_MEMBERSHIP_CHANGED");
+            sql.execute(
+                "insert into teaching.class_withdrawal(tenant_id,enrollment_id,class_id,approval_id,reason,actor_id)"
+                    + " values (?,?,?,?,?,?)",
+                scope.tenantId(),
+                enrollmentId,
+                command.classId(),
+                command.approvalId(),
+                reason,
+                scope.accountId());
+            rememberRequest(
+                verifiedTeaching,
+                command.requestId(),
+                "CLASS_WITHDRAWAL",
+                command.classId(),
+                requestFingerprint);
+            audit(
+                scope,
+                "ENROLLMENT_CLASS_WITHDRAWN",
+                enrollmentId,
+                schoolId,
+                command.classId().toString());
+            return classView(classRow, schools.require(schoolId).name());
+          });
+    }
+  }
+
   // ---------------------------------------------------------------- 课次
 
   @Override

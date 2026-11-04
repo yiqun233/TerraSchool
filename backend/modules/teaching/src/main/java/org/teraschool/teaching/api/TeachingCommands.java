@@ -16,6 +16,9 @@ public interface TeachingCommands {
   /** 经审批/免批策略后在同校同课程班级间转班；报名金额与课时留在原报名上。 */
   ClassView transferMember(UUID enrollmentId, TransferClassMember command);
 
+  /** 经 ENROLLMENT_WITHDRAWAL 审批后结束班级成员关系，保留原报名资金/课时事实。 */
+  ClassView withdrawMember(UUID enrollmentId, WithdrawClassMember command);
+
   LessonView createLesson(CreateLesson command);
 
   LessonView publishLesson(UUID id, LessonVersion command);

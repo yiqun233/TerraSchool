@@ -142,6 +142,11 @@ class TeachingHttp {
     return commands.transferMember(id, command);
   }
 
+  @PostMapping(value = "/api/teaching/enrollments/{id}/withdraw", consumes = "application/json")
+  ClassView withdrawMember(@PathVariable UUID id, @RequestBody WithdrawClassMember command) {
+    return commands.withdrawMember(id, command);
+  }
+
   @PostMapping(value = "/api/teaching/lessons", consumes = "application/json")
   @ResponseStatus(org.springframework.http.HttpStatus.CREATED)
   LessonView createLesson(@RequestBody CreateLesson command) {
