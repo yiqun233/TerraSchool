@@ -19,6 +19,7 @@ import type { components } from "../../shared/generated/api";
 
 type PeriodView = components["schemas"]["PeriodView"];
 type FundsReconciliation = components["schemas"]["FundsReconciliation"];
+type ReceiptDailyTotal = components["schemas"]["ReceiptDailyTotal"];
 
 const YEAR = new Date().getFullYear();
 
@@ -39,6 +40,13 @@ export function PeriodManager({
     lock: boolean;
   } | null>(null);
   const [error, setError] = useState("");
+  const [receiptRange, setReceiptRange] = useState(() => {
+    const today = new Date();
+    const year = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, "0");
+    const end = new Date(year, today.getMonth() + 1, 0).getDate();
+    return { from: `${year}-${month}-01`, to: `${year}-${month}-${end}` };
+  });
 
   const capabilities = useQuery({
     queryKey: ["finance-capabilities"],
@@ -84,6 +92,37 @@ export function PeriodManager({
       }
       if (response.status === 403) return null;
       if (!response.ok || !data) throw new Error("无法读取资金总账对账");
+      return data;
+    },
+  });
+  const receiptTotals = useQuery<ReceiptDailyTotal[] | null>({
+    queryKey: [
+      "finance-receipt-daily",
+      current,
+      receiptRange.from,
+      receiptRange.to,
+    ],
+    enabled: !!current && receiptRange.from <= receiptRange.to,
+    queryFn: async ({ signal }) => {
+      const { data, response } = await api.GET(
+        "/api/finance/reports/receipt-daily",
+        {
+          params: {
+            query: {
+              schoolId: current!,
+              from: receiptRange.from,
+              to: receiptRange.to,
+            },
+          },
+          signal,
+        },
+      );
+      if (response.status === 401) {
+        onUnauthorized();
+        throw new Error("登录已失效，请重新登录");
+      }
+      if (response.status === 403) return null;
+      if (!response.ok || !data) throw new Error("无法读取收款统计");
       return data;
     },
   });
@@ -185,6 +224,81 @@ export function PeriodManager({
           </Typography.Text>
         </Card>
       ) : null}
+      <Card
+        title="按日收款统计（单据原额）"
+        size="small"
+        loading={receiptTotals.isFetching}
+        style={{ marginTop: 12 }}
+      >
+        <Space className="toolbar" wrap>
+          <label htmlFor="receipt-report-from">开始日期</label>
+          <Input
+            id="receipt-report-from"
+            aria-label="收款统计开始日期"
+            type="date"
+            value={receiptRange.from}
+            onChange={(event) =>
+              setReceiptRange((range) => ({
+                ...range,
+                from: event.target.value,
+              }))
+            }
+          />
+          <label htmlFor="receipt-report-to">结束日期</label>
+          <Input
+            id="receipt-report-to"
+            aria-label="收款统计结束日期"
+            type="date"
+            value={receiptRange.to}
+            onChange={(event) =>
+              setReceiptRange((range) => ({ ...range, to: event.target.value }))
+            }
+          />
+        </Space>
+        {receiptRange.from > receiptRange.to ? (
+          <Alert
+            type="warning"
+            title="结束日期不能早于开始日期"
+            showIcon
+            style={{ marginTop: 12 }}
+          />
+        ) : null}
+        {receiptTotals.error ? (
+          <Alert
+            type="error"
+            title={receiptTotals.error.message}
+            showIcon
+            style={{ marginTop: 12 }}
+          />
+        ) : receiptTotals.data === null ? (
+          <Typography.Text type="secondary">
+            当前账号没有该校收款统计权限
+          </Typography.Text>
+        ) : (
+          <Table
+            style={{ marginTop: 12 }}
+            size="small"
+            rowKey={(row) => `${row.day}-${row.method}-${row.status}`}
+            pagination={false}
+            dataSource={receiptTotals.data ?? []}
+            columns={[
+              { title: "发生日", dataIndex: "day" },
+              { title: "方式", dataIndex: "method" },
+              {
+                title: "单据状态",
+                dataIndex: "status",
+                render: (status: string) =>
+                  status === "VOIDED" ? "已撤销" : "已确认",
+              },
+              { title: "单据数", dataIndex: "receiptCount" },
+              { title: "收款单原额", dataIndex: "grossAmount" },
+            ]}
+          />
+        )}
+        <Typography.Text type="secondary">
+          已撤销单据单独列示；统计金额为收款单原额，不含现金退款净额或财务确收口径。
+        </Typography.Text>
+      </Card>
       <Table
         rowKey="period"
         size="small"

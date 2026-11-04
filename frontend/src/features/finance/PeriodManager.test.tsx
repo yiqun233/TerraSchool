@@ -57,6 +57,8 @@ it("列出十二个月并按状态标注，锁定月份显示解锁按钮", asyn
       };
     if (path === "/api/finance/reports/funds-reconciliation")
       return { response: { ok: false, status: 403 } };
+    if (path === "/api/finance/reports/receipt-daily")
+      return { response: { ok: true, status: 200 }, data: [] };
     throw new Error("unexpected path " + path);
   });
   renderWithClient(<PeriodManager onUnauthorized={vi.fn()} />);
@@ -87,6 +89,8 @@ it("对账卡片显示累计平衡式分项和差额", async () => {
           differenceAmount: "0.00",
         },
       };
+    if (path === "/api/finance/reports/receipt-daily")
+      return { response: { ok: true, status: 200 }, data: [] };
     throw new Error("unexpected path " + path);
   });
   renderWithClient(<PeriodManager onUnauthorized={vi.fn()} />);
@@ -94,6 +98,53 @@ it("对账卡片显示累计平衡式分项和差额", async () => {
   expect(screen.getByText("1000.00")).toBeTruthy();
   expect(screen.getByText("0.00")).toBeTruthy();
   expect(screen.getByText(/不按所选年份或财务期间筛选/)).toBeTruthy();
+});
+
+it("展示按日收款原额并把撤销单据单独列示", async () => {
+  get.mockImplementation(async (path: string) => {
+    if (path === "/api/finance/capabilities")
+      return { response: { ok: true, status: 200 }, data: capabilities };
+    if (path === "/api/finance/periods")
+      return { response: { ok: true, status: 200 }, data: [] };
+    if (path === "/api/finance/reports/funds-reconciliation")
+      return { response: { ok: false, status: 403 } };
+    if (path === "/api/finance/reports/receipt-daily")
+      return {
+        response: { ok: true, status: 200 },
+        data: [
+          {
+            day: "2026-04-12",
+            method: "CASH",
+            status: "CONFIRMED",
+            receiptCount: 2,
+            grossAmount: "150.00",
+          },
+          {
+            day: "2026-04-13",
+            method: "BANK",
+            status: "VOIDED",
+            receiptCount: 1,
+            grossAmount: "40.00",
+          },
+        ],
+      };
+    throw new Error("unexpected path " + path);
+  });
+  renderWithClient(<PeriodManager onUnauthorized={vi.fn()} />);
+  expect(await screen.findByText("按日收款统计（单据原额）")).toBeTruthy();
+  expect(await screen.findByText("2026-04-12")).toBeTruthy();
+  expect(screen.getByText("2026-04-13")).toBeTruthy();
+  expect(screen.getByText("已撤销")).toBeTruthy();
+  expect(screen.getByText("150.00")).toBeTruthy();
+  expect(screen.getByText(/不含现金退款净额或财务确收口径/)).toBeTruthy();
+  expect(get).toHaveBeenCalledWith(
+    "/api/finance/reports/receipt-daily",
+    expect.objectContaining({
+      params: expect.objectContaining({
+        query: expect.objectContaining({ schoolId: "school-1" }),
+      }),
+    }),
+  );
 });
 
 it("解锁必须填写原因并携带版本", async () => {
