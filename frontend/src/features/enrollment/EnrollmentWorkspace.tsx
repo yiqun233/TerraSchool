@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
   Button,
@@ -24,6 +24,7 @@ type EnrollmentView = components["schemas"]["EnrollmentView"];
 type StudentSummary = components["schemas"]["StudentSummary"];
 type Receipt = components["schemas"]["Receipt"];
 type Allocation = components["schemas"]["Allocation"];
+type FundsCapabilities = components["schemas"]["FundsCapabilities"];
 
 const STATUS_LABEL: Record<string, string> = {
   PENDING_AUDIT: "待审核",
@@ -44,8 +45,10 @@ export function EnrollmentWorkspace({
   const [schoolId, setSchoolId] = useState<string>();
   const [creating, setCreating] = useState(false);
   const [creatingBatch, setCreatingBatch] = useState(false);
+  const [receivingPrepayment, setReceivingPrepayment] = useState(false);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const queryClient = useQueryClient();
 
   const capabilities = useQuery({
     queryKey: ["enrollment-capabilities"],
@@ -65,6 +68,20 @@ export function EnrollmentWorkspace({
   const school = capabilities.data?.schools?.find(
     (item) => item.id === current,
   );
+  const fundsCapabilities = useQuery({
+    queryKey: ["enrollment-funds-capabilities"],
+    queryFn: async ({ signal }): Promise<FundsCapabilities> => {
+      const { data, response } = await api.GET("/api/funds/capabilities", {
+        signal,
+      });
+      if (response.status === 401) {
+        onUnauthorized();
+        throw new Error("登录已失效，请重新登录");
+      }
+      if (!response.ok || !data) throw new Error("无法读取收款权限");
+      return data;
+    },
+  });
   const enrollments = useQuery({
     queryKey: ["enrollments", current],
     enabled: !!current,
@@ -124,6 +141,18 @@ export function EnrollmentWorkspace({
               多产品报名
             </Button>
           </>
+        ) : null}
+        {fundsCapabilities.data?.schools?.some(
+          (item) => item.id === current && item.canReceipt,
+        ) ? (
+          <Button
+            onClick={() => {
+              setError("");
+              setReceivingPrepayment(true);
+            }}
+          >
+            登记学员预收款
+          </Button>
         ) : null}
         <Button
           onClick={() => void enrollments.refetch()}
@@ -216,6 +245,26 @@ export function EnrollmentWorkspace({
           onUnauthorized={onUnauthorized}
         />
       ) : null}
+      {current &&
+      fundsCapabilities.data?.schools?.some(
+        (item) => item.id === current && item.canReceipt,
+      ) ? (
+        <PrepaymentCreator
+          schoolId={current}
+          open={receivingPrepayment}
+          onCancel={() => setReceivingPrepayment(false)}
+          onUnauthorized={onUnauthorized}
+          onCreated={(studentId) => {
+            setReceivingPrepayment(false);
+            void queryClient.invalidateQueries({
+              queryKey: ["receipts", studentId],
+            });
+            void queryClient.invalidateQueries({
+              queryKey: ["balance", studentId],
+            });
+          }}
+        />
+      ) : null}
       {detailId ? (
         <EnrollmentDetail
           id={detailId}
@@ -228,6 +277,182 @@ export function EnrollmentWorkspace({
         />
       ) : null}
     </>
+  );
+}
+
+/** 先记录学员名下的未分配实收；报名成立后可在报名详情中分配抵扣应收。 */
+function PrepaymentCreator({
+  schoolId,
+  open,
+  onCancel,
+  onCreated,
+  onUnauthorized,
+}: {
+  schoolId: string;
+  open: boolean;
+  onCancel: () => void;
+  onCreated: (studentId: string) => void;
+  onUnauthorized: () => void;
+}) {
+  const [keyword, setKeyword] = useState("");
+  const [studentId, setStudentId] = useState<string>();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [form] = Form.useForm();
+  const requestRef = useRef<{ fingerprint: string; requestId: string } | null>(
+    null,
+  );
+  const students = useQuery({
+    queryKey: ["prepayment-students", schoolId, keyword.trim()],
+    enabled: open && keyword.trim().length >= 2,
+    queryFn: async ({ signal }) => {
+      const { data, response } = await api.GET("/api/archive/students", {
+        params: { query: { search: keyword.trim(), page: 0, size: 20 } },
+        signal,
+      });
+      if (response.status === 401) {
+        onUnauthorized();
+        throw new Error("登录已失效，请重新登录");
+      }
+      if (!response.ok || !data)
+        throw new Error("无法检索学员档案，请确认学员读取权限");
+      return (data.items ?? []).filter((item) => item.schoolId === schoolId);
+    },
+  });
+
+  async function save() {
+    let values: { amount: number; method: string; occurredOn: string };
+    try {
+      values = await form.validateFields();
+    } catch {
+      return;
+    }
+    if (!studentId || busy) {
+      setError("请选择本校学员");
+      return;
+    }
+    const body = {
+      schoolId,
+      studentId,
+      amount: String(values.amount),
+      method: values.method ?? "CASH",
+      occurredOn: values.occurredOn,
+    };
+    const fingerprint = JSON.stringify(body);
+    if (requestRef.current?.fingerprint !== fingerprint) {
+      requestRef.current = { fingerprint, requestId: crypto.randomUUID() };
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const token = await csrf();
+      const { response } = await api.POST("/api/funds/receipts", {
+        headers: { [token.headerName!]: token.token! },
+        body: { ...body, requestId: requestRef.current.requestId },
+      });
+      if (response.status === 401) {
+        onUnauthorized();
+        return;
+      }
+      if (!response.ok) {
+        setError(
+          response.status >= 500
+            ? "收款结果暂时未知；保持学员、金额、方式和日期不变后重试，系统将使用同一请求身份防止重复入账。"
+            : response.status === 409
+              ? "收款条件或财务期间已变化；核对后修改表单再提交。"
+              : "预收款登记失败，请核对收款权限、财务期间和金额。",
+        );
+        return;
+      }
+      requestRef.current = null;
+      onCreated(studentId);
+    } catch {
+      setError(
+        "收款结果暂时未知；保持学员、金额、方式和日期不变后重试，系统将使用同一请求身份防止重复入账。",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      title="登记学员预收款"
+      open={open}
+      onCancel={onCancel}
+      onOk={() => void save()}
+      okText="确认收款"
+      cancelText="取消"
+      confirmLoading={busy}
+      okButtonProps={{ disabled: !studentId || busy }}
+      mask={{ closable: !busy }}
+    >
+      {error ? <Alert title={error} type="error" showIcon /> : null}
+      {students.error ? (
+        <Alert title={students.error.message} type="error" showIcon />
+      ) : null}
+      <Form
+        form={form}
+        layout="vertical"
+        initialValues={{
+          method: "CASH",
+          occurredOn: new Date().toISOString().slice(0, 10),
+        }}
+      >
+        <Form.Item label="学员（输入姓名、学员号或电话检索）" required>
+          <Select
+            aria-label="学员（输入姓名、学员号或电话检索）"
+            showSearch
+            filterOption={false}
+            placeholder="输入至少 2 个字符检索本校学员"
+            searchValue={keyword}
+            onSearch={setKeyword}
+            onChange={setStudentId}
+            value={studentId}
+            loading={students.isFetching}
+            options={(students.data ?? []).map((item: StudentSummary) => ({
+              value: item.id!,
+              label: `${item.studentNo ?? ""} ${item.name ?? "未命名学员"}${item.phone ? ` · ${item.phone}` : ""}`,
+            }))}
+            notFoundContent={
+              keyword.trim().length < 2
+                ? "请输入至少 2 个字符"
+                : students.isFetching
+                  ? "正在检索…"
+                  : "没有匹配的本校学员"
+            }
+          />
+        </Form.Item>
+        <Form.Item
+          label="预收金额（元）"
+          name="amount"
+          rules={[{ required: true, message: "请输入金额" }]}
+        >
+          <InputNumber min={0.01} precision={2} style={{ width: "100%" }} />
+        </Form.Item>
+        <Form.Item label="收款方式" name="method">
+          <Select
+            options={[
+              { value: "CASH", label: "现金" },
+              { value: "BANK", label: "银行转账" },
+              { value: "OTHER", label: "其他" },
+            ]}
+          />
+        </Form.Item>
+        <Form.Item
+          label="收款日期"
+          name="occurredOn"
+          rules={[{ required: true, message: "请输入日期" }]}
+        >
+          <Input maxLength={10} />
+        </Form.Item>
+      </Form>
+      <Alert
+        type="info"
+        showIcon
+        title="该笔款项先进入学员可用余额；报名成立后，在报名详情中分配到对应报名抵扣未收金额。"
+      />
+    </Modal>
   );
 }
 

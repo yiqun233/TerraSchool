@@ -70,6 +70,85 @@ it("报名列表展示冻结价格与净应收字符串", async () => {
   expect(screen.getByText("1000.00")).toBeTruthy();
 });
 
+it("可先登记未分配预收款并在结果不确定时用相同请求重试", async () => {
+  get.mockClear();
+  post.mockClear();
+  csrf.mockClear();
+  get.mockImplementation(async (path: string) => {
+    if (path === "/api/enrollment/capabilities")
+      return { response: { ok: true, status: 200 }, data: capabilities };
+    if (path === "/api/funds/capabilities")
+      return {
+        response: { ok: true, status: 200 },
+        data: {
+          canReceipt: true,
+          schools: [{ id: "school-1", canReceipt: true }],
+        },
+      };
+    if (path === "/api/enrollment/enrollments")
+      return {
+        response: { ok: true, status: 200 },
+        data: { items: [], page: 0, size: 20, total: 0 },
+      };
+    if (path === "/api/archive/students")
+      return {
+        response: { ok: true, status: 200 },
+        data: {
+          items: [
+            {
+              id: "student-1",
+              studentNo: "S100",
+              name: "学员甲",
+              schoolId: "school-1",
+            },
+            {
+              id: "student-other-school",
+              studentNo: "S200",
+              name: "外校学员",
+              schoolId: "school-2",
+            },
+          ],
+        },
+      };
+    throw new Error("unexpected path " + path);
+  });
+  csrf.mockResolvedValue({ headerName: "X-CSRF-TOKEN", token: "test" });
+  post
+    .mockResolvedValueOnce({ response: { ok: false, status: 503 } })
+    .mockResolvedValueOnce({ response: { ok: true, status: 201 }, data: {} });
+  const user = userEvent.setup({ pointerEventsCheck: 0 });
+  renderWithClient(<EnrollmentWorkspace onUnauthorized={vi.fn()} />);
+
+  await user.click(
+    await screen.findByRole("button", { name: "登记学员预收款" }),
+  );
+  const studentSearch = screen.getByRole("combobox", {
+    name: "学员（输入姓名、学员号或电话检索）",
+  });
+  await user.type(studentSearch, "S100");
+  await user.click(await screen.findByText("S100 学员甲"));
+  expect(screen.queryByText("S200 外校学员")).toBeNull();
+  await user.type(
+    screen.getByRole("spinbutton", { name: "预收金额（元）" }),
+    "300",
+  );
+
+  await user.click(screen.getByRole("button", { name: "确认收款" }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+  expect(await screen.findByText(/结果暂时未知/)).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: /取\s*消/ }));
+  await user.click(screen.getByRole("button", { name: "登记学员预收款" }));
+  await user.click(screen.getByRole("button", { name: "确认收款" }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+  expect(post.mock.calls[0][0]).toBe("/api/funds/receipts");
+  expect(post.mock.calls[0][1].body).toMatchObject({
+    schoolId: "school-1",
+    studentId: "student-1",
+    amount: "300",
+  });
+  expect(post.mock.calls[1][1].body).toEqual(post.mock.calls[0][1].body);
+});
+
 it("多产品报名提交同一学员的独立价格快照并在成功响应时刷新", async () => {
   get.mockClear();
   post.mockClear();
