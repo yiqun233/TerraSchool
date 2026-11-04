@@ -54,6 +54,12 @@ class TeachingHttp {
     return queries.studentConsumption(schoolId, page, size);
   }
 
+  @GetMapping("/api/teaching/reports/attendance")
+  TeachingQueries.AttendanceReport attendanceReport(
+      @RequestParam UUID schoolId, @RequestParam String from, @RequestParam String to) {
+    return queries.attendanceReport(schoolId, from, to);
+  }
+
   @GetMapping("/api/teaching/classes")
   List<ClassView> classes(@RequestParam UUID schoolId) {
     return queries.classes(schoolId);

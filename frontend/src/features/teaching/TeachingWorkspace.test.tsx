@@ -178,6 +178,11 @@ it("班级列表展示在班人数与状态", async () => {
       };
     if (path === "/api/teaching/reports/student-consumption")
       return { response: { ok: false, status: 403 } };
+    if (path === "/api/teaching/reports/attendance")
+      return {
+        response: { ok: true, status: 200 },
+        data: { from: "2026-10-05", to: "2026-11-04", lessons: [] },
+      };
     throw new Error("unexpected path " + path);
   });
   renderWithClient(<TeachingWorkspace onUnauthorized={vi.fn()} />);
@@ -225,6 +230,11 @@ it("结班需确认并提交班级版本", async () => {
       };
     if (path === "/api/teaching/reports/student-consumption")
       return { response: { ok: false, status: 403 } };
+    if (path === "/api/teaching/reports/attendance")
+      return {
+        response: { ok: true, status: 200 },
+        data: { from: "2026-10-05", to: "2026-11-04", lessons: [] },
+      };
     throw new Error("unexpected path " + path);
   });
   csrf.mockResolvedValue({ headerName: "X-CSRF-TOKEN", token: "test" });
@@ -280,6 +290,11 @@ it("空班取消需填写原因并提交版本及幂等身份", async () => {
       };
     if (path === "/api/teaching/reports/student-consumption")
       return { response: { ok: false, status: 403 } };
+    if (path === "/api/teaching/reports/attendance")
+      return {
+        response: { ok: true, status: 200 },
+        data: { from: "2026-10-05", to: "2026-11-04", lessons: [] },
+      };
     throw new Error("unexpected path " + path);
   });
   csrf.mockResolvedValue({ headerName: "X-CSRF-TOKEN", token: "test" });
@@ -435,6 +450,11 @@ it("展示逐报名累计消费与剩余课时对账", async () => {
           total: 1,
         },
       };
+    if (path === "/api/teaching/reports/attendance")
+      return {
+        response: { ok: true, status: 200 },
+        data: { from: "2026-10-05", to: "2026-11-04", lessons: [] },
+      };
     throw new Error("unexpected path " + path);
   });
   renderWithClient(<TeachingWorkspace onUnauthorized={vi.fn()} />);
@@ -443,4 +463,56 @@ it("展示逐报名累计消费与剩余课时对账", async () => {
   expect(screen.getByText("200.00")).toBeTruthy();
   expect(screen.getByText("7.00")).toBeTruthy();
   expect(screen.getByText(/教务、报名与资金读取权限/)).toBeTruthy();
+});
+
+it("按课次展示考勤状态统计", async () => {
+  vi.clearAllMocks();
+  get.mockImplementation(async (path: string) => {
+    if (path === "/api/teaching/capabilities")
+      return { response: { ok: true, status: 200 }, data: capabilities };
+    if (path === "/api/teaching/classes")
+      return { response: { ok: true, status: 200 }, data: [] };
+    if (path === "/api/teaching/me/workbench")
+      return {
+        response: { ok: true, status: 200 },
+        data: { classes: [], lessons: [] },
+      };
+    if (path === "/api/teaching/reports/resource-daily-schedule")
+      return {
+        response: { ok: true, status: 200 },
+        data: { lessons: [], missingTeacher: 0, missingRoom: 0 },
+      };
+    if (path === "/api/teaching/reports/student-consumption")
+      return { response: { ok: false, status: 403 } };
+    if (path === "/api/teaching/reports/attendance")
+      return {
+        response: { ok: true, status: 200 },
+        data: {
+          from: "2026-10-05",
+          to: "2026-11-04",
+          lessons: [
+            {
+              lessonId: "report-lesson",
+              className: "统计班",
+              lessonDate: "2026-11-04",
+              startsAt: "09:00",
+              endsAt: "10:00",
+              lessonStatus: "CLOSED",
+              present: 3,
+              partial: 1,
+              absent: 4,
+              leave: 2,
+              recorded: 10,
+            },
+          ],
+        },
+      };
+    throw new Error("unexpected path " + path);
+  });
+
+  renderWithClient(<TeachingWorkspace onUnauthorized={vi.fn()} />);
+  expect(await screen.findByText("课次考勤统计")).toBeTruthy();
+  expect(await screen.findByText("统计班")).toBeTruthy();
+  expect(screen.getByText("部分缺勤")).toBeTruthy();
+  expect(screen.getByText("10")).toBeTruthy();
 });

@@ -37,6 +37,7 @@ type TeacherWorkbenchLesson = NonNullable<
 >;
 type DailyResourceSchedule = components["schemas"]["DailyResourceSchedule"];
 type StudentConsumptionPage = components["schemas"]["StudentConsumptionPage"];
+type AttendanceReport = components["schemas"]["AttendanceReport"];
 
 function localDate(offsetDays: number) {
   const date = new Date();
@@ -83,6 +84,8 @@ export function TeachingWorkspace({
   const [workbenchFrom, setWorkbenchFrom] = useState(() => localDate(0));
   const [workbenchTo, setWorkbenchTo] = useState(() => localDate(30));
   const [resourceDay, setResourceDay] = useState(() => localDate(0));
+  const [attendanceFrom, setAttendanceFrom] = useState(() => localDate(-30));
+  const [attendanceTo, setAttendanceTo] = useState(() => localDate(0));
   const [resourcePage, setResourcePage] = useState(1);
   const [consumptionPage, setConsumptionPage] = useState(1);
   const cancelRequests = useRef(
@@ -246,6 +249,36 @@ export function TeachingWorkspace({
       }
       if (response.status === 403) return null;
       if (!response.ok || !data) throw new Error("无法读取学员消费对账");
+      return data;
+    },
+  });
+  const attendanceReport = useQuery({
+    queryKey: [
+      "teaching-attendance-report",
+      current,
+      attendanceFrom,
+      attendanceTo,
+    ],
+    enabled: !!current && !!capabilities.data?.canRead,
+    queryFn: async ({ signal }): Promise<AttendanceReport> => {
+      const { data, response } = await api.GET(
+        "/api/teaching/reports/attendance",
+        {
+          params: {
+            query: {
+              schoolId: current!,
+              from: attendanceFrom,
+              to: attendanceTo,
+            },
+          },
+          signal,
+        },
+      );
+      if (response.status === 401) {
+        onUnauthorized();
+        throw new Error("登录已失效，请重新登录");
+      }
+      if (!response.ok || !data) throw new Error("无法读取考勤统计");
       return data;
     },
   });
@@ -681,6 +714,58 @@ export function TeachingWorkspace({
             },
           ]}
           locale={{ emptyText: "该日没有已排课次" }}
+        />
+      </Card>
+      <Card title="课次考勤统计" size="small" style={{ marginBottom: 12 }}>
+        <Space wrap style={{ marginBottom: 12 }}>
+          <Input
+            aria-label="考勤统计开始日期"
+            type="date"
+            value={attendanceFrom}
+            onChange={(event) => setAttendanceFrom(event.target.value)}
+            style={{ width: 170 }}
+          />
+          <Input
+            aria-label="考勤统计结束日期"
+            type="date"
+            value={attendanceTo}
+            onChange={(event) => setAttendanceTo(event.target.value)}
+            style={{ width: 170 }}
+          />
+          <Typography.Text type="secondary">
+            各状态仅统计已登记考勤；未登记课次显示为零。日期范围最多 31 天。
+          </Typography.Text>
+        </Space>
+        {attendanceReport.error ? (
+          <Alert type="error" title={attendanceReport.error.message} showIcon />
+        ) : null}
+        <Table
+          rowKey="lessonId"
+          size="small"
+          loading={attendanceReport.isFetching}
+          dataSource={attendanceReport.data?.lessons ?? []}
+          pagination={{ pageSize: 50, showSizeChanger: false }}
+          columns={[
+            { title: "日期", dataIndex: "lessonDate" },
+            {
+              title: "时间",
+              render: (
+                _: unknown,
+                row: NonNullable<AttendanceReport["lessons"]>[number],
+              ) => `${row.startsAt}–${row.endsAt}`,
+            },
+            { title: "班级", dataIndex: "className" },
+            {
+              title: "课次状态",
+              dataIndex: "lessonStatus",
+              render: (status: string) => LESSON_STATUS[status] ?? status,
+            },
+            { title: "出勤", dataIndex: "present" },
+            { title: "部分缺勤", dataIndex: "partial" },
+            { title: "缺勤", dataIndex: "absent" },
+            { title: "请假", dataIndex: "leave" },
+            { title: "已登记", dataIndex: "recorded" },
+          ]}
         />
       </Card>
       {classes.error ? (

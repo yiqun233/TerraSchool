@@ -78,6 +78,25 @@ public interface TeachingQueries {
     }
   }
 
+  record LessonAttendanceSummary(
+      UUID lessonId,
+      String className,
+      String lessonDate,
+      String startsAt,
+      String endsAt,
+      String lessonStatus,
+      long present,
+      long partial,
+      long absent,
+      long leave,
+      long recorded) {}
+
+  record AttendanceReport(String from, String to, List<LessonAttendanceSummary> lessons) {
+    public AttendanceReport {
+      lessons = List.copyOf(lessons);
+    }
+  }
+
   TeachingCapabilities capabilities();
 
   /** 当前账号绑定的教师在明确日期区间内的课表及所授班级。 */
@@ -90,6 +109,9 @@ public interface TeachingQueries {
 
   /** 学校范围内逐报名的累计消费/退课/剩余课时，需同时具备报名、教务和资金读取权限。 */
   StudentConsumptionPage studentConsumption(UUID schoolId, int page, int size);
+
+  /** 学校范围按课次和日期汇总已登记考勤；未登记课次的各状态计数为 0。 */
+  AttendanceReport attendanceReport(UUID schoolId, String from, String to);
 
   List<ClassView> classes(UUID schoolId);
 

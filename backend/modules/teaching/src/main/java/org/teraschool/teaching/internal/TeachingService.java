@@ -400,6 +400,55 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
   }
 
   @Override
+  public AttendanceReport attendanceReport(UUID schoolId, String fromText, String toText) {
+    if (schoolId == null) throw new IllegalArgumentException("需要学校");
+    var from = workbenchDate(fromText);
+    var to = workbenchDate(toText);
+    if (to.isBefore(from) || to.isAfter(from.plusDays(30)))
+      throw new IllegalArgumentException("考勤报表日期范围须为 1 至 31 天");
+    var scope = actors.requireResourceScope("TEACHING");
+    requireReadable(scope, schoolId);
+    return tx.execute(
+        scope.tenantId(),
+        () -> {
+          var verified = actors.requireResourceScopeInTransaction("TEACHING");
+          requireReadable(verified, schoolId);
+          var rows =
+              sql.fetch(
+                  "select l.id,c.name as class_name,l.lesson_date,l.starts_at,l.ends_at,l.status,"
+                      + "count(a.enrollment_id) filter (where a.status='PRESENT') as present,"
+                      + "count(a.enrollment_id) filter (where a.status='PARTIAL') as partial,"
+                      + "count(a.enrollment_id) filter (where a.status='ABSENT') as absent,"
+                      + "count(a.enrollment_id) filter (where a.status='LEAVE') as leave,"
+                      + "count(a.enrollment_id) as recorded from teaching.lesson l"
+                      + " join teaching.class c on c.id=l.class_id"
+                      + " left join teaching.attendance a on a.lesson_id=l.id"
+                      + " where c.school_id=? and l.lesson_date between ? and ?"
+                      + " group by l.id,c.name order by l.lesson_date,l.starts_at,c.name,l.id",
+                  schoolId,
+                  from,
+                  to);
+          return new AttendanceReport(
+              from.toString(),
+              to.toString(),
+              rows.map(
+                  row ->
+                      new LessonAttendanceSummary(
+                          row.get("id", UUID.class),
+                          row.get("class_name", String.class),
+                          date(row.get("lesson_date", LocalDate.class)),
+                          row.get("starts_at").toString(),
+                          row.get("ends_at").toString(),
+                          row.get("status", String.class),
+                          row.get("present", Long.class),
+                          row.get("partial", Long.class),
+                          row.get("absent", Long.class),
+                          row.get("leave", Long.class),
+                          row.get("recorded", Long.class))));
+        });
+  }
+
+  @Override
   public List<ClassView> classes(UUID schoolId) {
     var scope = actors.requireResourceScope("TEACHING");
     requireReadable(scope, schoolId);

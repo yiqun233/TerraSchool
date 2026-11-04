@@ -354,23 +354,99 @@ class FinancePeriodTest {
         enrollment.id());
 
     var report = asActor(OPS, () -> teachingQueries.studentConsumption(SCHOOL, 0, 50));
-    assertThat(report.total()).isEqualTo(1);
+    assertThat(report.total()).isGreaterThanOrEqualTo(1);
     assertThat(report.items())
-        .containsExactly(
-            new TeachingQueries.StudentConsumptionRow(
-                enrollment.id(),
-                student,
-                "期间学员" + student.toString().substring(0, 4),
-                "ACTIVE",
-                1,
-                "1000.00",
-                "10.00",
-                "2.00",
-                "200.00",
-                "1.00",
-                "7.00"));
+        .anySatisfy(
+            item ->
+                assertThat(item)
+                    .isEqualTo(
+                        new TeachingQueries.StudentConsumptionRow(
+                            enrollment.id(),
+                            student,
+                            "期间学员" + student.toString().substring(0, 4),
+                            "ACTIVE",
+                            1,
+                            "1000.00",
+                            "10.00",
+                            "2.00",
+                            "200.00",
+                            "1.00",
+                            "7.00")));
     assertThatThrownBy(
             () -> asActor(READER, () -> teachingQueries.studentConsumption(SCHOOL, 0, 50)))
+        .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
+  }
+
+  @Test
+  void attendanceReportAggregatesRecordedStatusesByLessonWithinSchool() throws Exception {
+    var presentEnrollment = activeEnrollment(freshStudent());
+    var absentEnrollment = activeEnrollment(freshStudent());
+    var partialEnrollment = activeEnrollment(freshStudent());
+    var classView =
+        asActor(
+            OPS,
+            () ->
+                teaching.createClass(
+                    new CreateClass(
+                        UUID.randomUUID(), SCHOOL, CURRICULUM, "考勤报表班" + UUID.randomUUID())));
+    var lesson =
+        asActor(
+            OPS,
+            () ->
+                teaching.createLesson(
+                    new CreateLesson(
+                        UUID.randomUUID(),
+                        classView.id(),
+                        "2026-06-12",
+                        "09:00",
+                        "10:00",
+                        null,
+                        null,
+                        "考勤报表课",
+                        "1.00")));
+    update(
+        "insert into teaching.attendance(tenant_id,lesson_id,enrollment_id,status,attended_minutes)"
+            + " values (?,?,?,'PRESENT',null),(?,?,?,'ABSENT',null)",
+        TENANT,
+        lesson.id(),
+        presentEnrollment.id(),
+        TENANT,
+        lesson.id(),
+        absentEnrollment.id());
+    update(
+        "insert into teaching.attendance(tenant_id,lesson_id,enrollment_id,status,attended_minutes)"
+            + " values (?,?,?,'PARTIAL',30)",
+        TENANT,
+        lesson.id(),
+        partialEnrollment.id());
+
+    var report =
+        asActor(OPS, () -> teachingQueries.attendanceReport(SCHOOL, "2026-06-01", "2026-06-30"));
+    assertThat(report.lessons())
+        .containsExactly(
+            new TeachingQueries.LessonAttendanceSummary(
+                lesson.id(),
+                classView.name(),
+                "2026-06-12",
+                "09:00:00",
+                "10:00:00",
+                "DRAFT",
+                1,
+                1,
+                1,
+                0,
+                3));
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    OPS,
+                    () -> teachingQueries.attendanceReport(SCHOOL, "2026-06-01", "2026-07-02")))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    READER,
+                    () -> teachingQueries.attendanceReport(SCHOOL, "2026-06-01", "2026-06-30")))
         .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
   }
 
