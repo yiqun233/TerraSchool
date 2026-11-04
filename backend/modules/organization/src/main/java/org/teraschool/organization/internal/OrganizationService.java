@@ -14,11 +14,17 @@ public class OrganizationService implements OrganizationQueries {
   private final CurrentActor actors;
   private final TenantTransactions tx;
   private final DSLContext sql;
+  private final EmployeeAccountLinkService employeeLinks;
 
-  public OrganizationService(CurrentActor actors, TenantTransactions tx, DSLContext sql) {
+  public OrganizationService(
+      CurrentActor actors,
+      TenantTransactions tx,
+      DSLContext sql,
+      EmployeeAccountLinkService employeeLinks) {
     this.actors = actors;
     this.tx = tx;
     this.sql = sql;
+    this.employeeLinks = employeeLinks;
   }
 
   public OrganizationPage list(int page, int size) {
@@ -73,5 +79,16 @@ public class OrganizationService implements OrganizationQueries {
                     r ->
                         new OrganizationUnit(
                             r.getId(), r.getSchoolId(), r.getKind(), r.getName(), r.getVersion())));
+  }
+
+  @Override
+  public java.util.List<OrganizationQueries.EmployeeAssignmentOption> customerAssignmentOptions(
+      java.util.UUID schoolId) {
+    return employeeLinks.customerAssignmentOptions(schoolId);
+  }
+
+  @Override
+  public boolean isActiveCustomerAssignee(java.util.UUID schoolId, java.util.UUID accountId) {
+    return employeeLinks.isActiveCustomerAssignee(schoolId, accountId);
   }
 }

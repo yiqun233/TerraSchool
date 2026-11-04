@@ -227,6 +227,63 @@ it("按学校公海权限展示客户，并用版本号完成认领和转入公�
   });
 });
 
+it("可按独立权限把客户转派给同校在职负责人", async () => {
+  get.mockImplementation(async (path: string) => {
+    if (path.endsWith("/capabilities"))
+      return response({
+        schools: [
+          {
+            id: "s1",
+            name: "学校一",
+            maintainable: true,
+            assignmentManageable: true,
+          },
+        ],
+      });
+    if (path.endsWith("/assignable-employees"))
+      return response([{ accountId: "account-b", name: "负责人乙" }]);
+    if (path.endsWith("/channels"))
+      return response({ items: [], hasMore: false });
+    if (path.endsWith("/reminders"))
+      return response({ items: [], hasMore: false });
+    return response({
+      items: [
+        {
+          id: "customer-1",
+          name: "待转派客户",
+          maskedPhone: "****1001",
+          version: 3,
+        },
+      ],
+      hasMore: false,
+    });
+  });
+  post.mockResolvedValue(response({ id: "customer-1", version: 4 }));
+  const user = userEvent.setup();
+  setup();
+  await user.click(await screen.findByRole("button", { name: "转派负责人" }));
+  await user.click(await screen.findByRole("combobox", { name: "新负责人" }));
+  await user.click(await screen.findByText("负责人乙"));
+  await user.type(
+    screen.getByRole("textbox", { name: "转派原因" }),
+    "调整招生负责范围",
+  );
+  await user.click(screen.getByRole("button", { name: "确认转派" }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+  expect(post.mock.calls[0][0]).toBe(
+    "/api/admissions/customers/{id}/assign-owner",
+  );
+  expect(post.mock.calls[0][1]).toMatchObject({
+    params: { path: { id: "customer-1" } },
+    body: {
+      requestId: "request-1",
+      expectedVersion: 3,
+      ownerAccountId: "account-b",
+      reason: "调整招生负责范围",
+    },
+  });
+});
+
 it("可把本人同校重复客户并入主档，并从主档记录撤销", async () => {
   let merged: Array<{
     sourceId: string;

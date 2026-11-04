@@ -891,6 +891,67 @@ class CustomerTest {
         .isEqualTo(2);
   }
 
+  @Test
+  void manualOwnerAssignmentIsScopedVersionedAuditedAndIdempotent() throws Exception {
+    grant(A, SCHOOL, "CUSTOMER_ASSIGN");
+    var employee = UUID.randomUUID();
+    update(
+        "insert into organization.employee(id,tenant_id,school_id,name,account_id) values (?,?,?,?,?)",
+        employee,
+        TENANT,
+        SCHOOL,
+        "负责人乙",
+        B);
+    var customer = created(A, input("负责人转派", "13900001771"));
+    var priorFollowup =
+        as(
+            A,
+            () ->
+                followupCommands.create(
+                    customer.id(),
+                    new CustomerFollowupCommands.FollowupCreate(
+                        UUID.randomUUID(), "转派前记录", "2026-11-03", null)));
+    assertThat(as(A, () -> queries.assignableEmployees(SCHOOL)))
+        .contains(new CustomerQueries.CustomerAssignee(B, "负责人乙"));
+
+    var requestId = UUID.randomUUID();
+    var request =
+        new CustomerCommands.CustomerAssign(requestId, customer.version(), B, "按校区调整负责范围");
+    var assigned = as(A, () -> commands.assignOwner(customer.id(), request));
+    assertThat(assigned.version()).isEqualTo(customer.version() + 1);
+    assertThat(as(A, () -> commands.assignOwner(customer.id(), request))).isEqualTo(assigned);
+    assertThat(as(A, () -> queries.list(SCHOOL, 0, 20)).items())
+        .noneMatch(row -> row.id().equals(customer.id()));
+    assertThat(as(B, () -> queries.list(SCHOOL, 0, 20)).items())
+        .anyMatch(row -> row.id().equals(customer.id()));
+    assertThat(as(B, () -> followupQueries.list(customer.id(), 0, 20)).items())
+        .contains(priorFollowup);
+    assertThatThrownBy(
+            () ->
+                as(
+                    A,
+                    () ->
+                        commands.assignOwner(
+                            customer.id(),
+                            new CustomerCommands.CustomerAssign(
+                                requestId, customer.version(), B, "不同原因"))))
+        .isInstanceOf(CustomerConflict.class)
+        .hasMessage("IDEMPOTENCY_MISMATCH");
+    assertThat(
+            count(
+                "select count(*) from audit.customer_event where tenant_id=? and customer_id=? and action='OWNER_ASSIGNED'",
+                TENANT,
+                customer.id()))
+        .isEqualTo(1);
+    assertThat(
+            scalar(
+                "select reason from admissions.customer_assignment_request where tenant_id=? and actor_id=? and request_id=?",
+                TENANT,
+                A,
+                requestId))
+        .isEqualTo("按校区调整负责范围");
+  }
+
   private long count(String query, Object... args) throws Exception {
     try (var c = EngineeringTest.admin();
         var s = c.prepareStatement(query)) {
@@ -898,6 +959,17 @@ class CustomerTest {
       try (var r = s.executeQuery()) {
         r.next();
         return r.getLong(1);
+      }
+    }
+  }
+
+  private String scalar(String query, Object... args) throws Exception {
+    try (var c = EngineeringTest.admin();
+        var s = c.prepareStatement(query)) {
+      for (int i = 0; i < args.length; i++) s.setObject(i + 1, args[i]);
+      try (var r = s.executeQuery()) {
+        r.next();
+        return r.getString(1);
       }
     }
   }

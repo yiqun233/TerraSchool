@@ -49,7 +49,8 @@ final class PermissionRules {
           "CUSTOMER_MAINTAIN",
           "CUSTOMER_PHONE_READ",
           "CUSTOMER_POOL_READ",
-          "CUSTOMER_POOL_MANAGE");
+          "CUSTOMER_POOL_MANAGE",
+          "CUSTOMER_ASSIGN");
   static final String EXPANDED =
       """
     SELECT p.account_id,p.tenant_id,p.action,p.school_id,p.effect FROM identity.account_permission p

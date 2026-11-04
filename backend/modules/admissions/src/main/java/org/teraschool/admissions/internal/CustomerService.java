@@ -12,6 +12,7 @@ import org.teraschool.admissions.api.*;
 import org.teraschool.identity.api.Actor;
 import org.teraschool.identity.api.CurrentActor;
 import org.teraschool.identity.api.ResourceScope;
+import org.teraschool.organization.api.OrganizationQueries;
 import org.teraschool.organization.api.SchoolAccess;
 import org.teraschool.platform.api.RequestTrace;
 import org.teraschool.platform.api.TenantTransactions;
@@ -23,13 +24,19 @@ class CustomerService implements CustomerQueries, CustomerCommands {
   private final TenantTransactions tx;
   private final DSLContext sql;
   private final SchoolAccess schools;
+  private final OrganizationQueries organization;
 
   CustomerService(
-      CurrentActor actors, TenantTransactions tx, DSLContext sql, SchoolAccess schools) {
+      CurrentActor actors,
+      TenantTransactions tx,
+      DSLContext sql,
+      SchoolAccess schools,
+      OrganizationQueries organization) {
     this.actors = actors;
     this.tx = tx;
     this.sql = sql;
     this.schools = schools;
+    this.organization = organization;
   }
 
   @Override
@@ -55,6 +62,12 @@ class CustomerService implements CustomerQueries, CustomerCommands {
           } catch (AccessDeniedException denied) {
             poolReadable = Set.of();
           }
+          Set<UUID> assignmentManageable;
+          try {
+            assignmentManageable = actors.requireActionInTransaction("CUSTOMER_ASSIGN").schools();
+          } catch (AccessDeniedException denied) {
+            assignmentManageable = Set.of();
+          }
           try {
             poolManageable = actors.requireActionInTransaction("CUSTOMER_POOL_MANAGE").schools();
           } catch (AccessDeniedException denied) {
@@ -62,6 +75,7 @@ class CustomerService implements CustomerQueries, CustomerCommands {
           }
           var poolReadSchools = poolReadable;
           var poolManageSchools = poolManageable;
+          var assignmentSchools = assignmentManageable;
           return new CustomerCapabilities(
               verified.readableSchoolIds().stream()
                   .filter(names::containsKey)
@@ -75,7 +89,8 @@ class CustomerService implements CustomerQueries, CustomerCommands {
                                   && schools.require(id).active(),
                               phoneSchools.contains(id),
                               poolReadSchools.contains(id),
-                              poolManageSchools.contains(id)))
+                              poolManageSchools.contains(id),
+                              assignmentSchools.contains(id)))
                   .toList());
         });
   }
@@ -136,6 +151,14 @@ class CustomerService implements CustomerQueries, CustomerCommands {
               size,
               rows.size() > size);
         });
+  }
+
+  @Override
+  public List<CustomerAssignee> assignableEmployees(UUID schoolId) {
+    if (schoolId == null) throw new IllegalArgumentException("需要学校");
+    return organization.customerAssignmentOptions(schoolId).stream()
+        .map(option -> new CustomerAssignee(option.accountId(), option.name()))
+        .toList();
   }
 
   @Override
@@ -397,6 +420,100 @@ class CustomerService implements CustomerQueries, CustomerCommands {
                   expectedVersion);
           if (changed != 1) throw new CustomerConflict("VERSION_CONFLICT");
           audit(verified, schoolId, id, null, "POOL_RELEASED", false);
+          return view(
+              sql.fetchOne(
+                  "select id,school_id,name,phone,normalized_phone,channel_id,version from admissions.customer where id=?",
+                  id),
+              canReadChannel(schoolId));
+        });
+  }
+
+  @Override
+  public Customer assignOwner(UUID id, CustomerAssign command) {
+    if (id == null
+        || command == null
+        || command.requestId() == null
+        || command.ownerAccountId() == null
+        || command.expectedVersion() < 0) throw new IllegalArgumentException("客户转派请求不完整");
+    var reason = Objects.toString(command.reason(), "").strip();
+    if (reason.isEmpty() || reason.length() > 300)
+      throw new IllegalArgumentException("请填写不超过300字的转派原因");
+    var actor = actors.requireAction("CUSTOMER_ASSIGN");
+    var digest =
+        fingerprint(
+            id.toString(),
+            command.ownerAccountId().toString(),
+            Long.toString(command.expectedVersion()),
+            reason);
+    return tx.execute(
+        actor.tenantId(),
+        () -> {
+          schools.lockTenant(actor.tenantId());
+          var verified = actors.requireActionInTransaction("CUSTOMER_ASSIGN");
+          sql.execute(
+              "select pg_advisory_xact_lock(hashtextextended(?,0))",
+              actor.accountId() + ":" + command.requestId());
+          var previous =
+              sql.fetchOne(
+                  "select customer_id,fingerprint from admissions.customer_assignment_request where tenant_id=? and actor_id=? and request_id=?",
+                  actor.tenantId(),
+                  actor.accountId(),
+                  command.requestId());
+          if (previous != null) {
+            if (!id.equals(previous.get("customer_id", UUID.class))
+                || !digest.equals(previous.get("fingerprint", String.class)))
+              throw new CustomerConflict("IDEMPOTENCY_MISMATCH");
+            var replay =
+                sql.fetchOne(
+                    "select id,school_id,name,phone,normalized_phone,channel_id,version from admissions.customer where id=?",
+                    id);
+            if (replay == null || !verified.schools().contains(replay.get("school_id", UUID.class)))
+              throw new CustomerConflict("CUSTOMER_UNAVAILABLE");
+            return view(replay, canReadChannel(replay.get("school_id", UUID.class)));
+          }
+          var row =
+              sql.fetchOne(
+                  "select id,school_id,name,phone,normalized_phone,channel_id,owner_id,in_pool,version,merged_into_id from admissions.customer where id=? for update",
+                  id);
+          if (row == null) throw new CustomerConflict("CUSTOMER_UNAVAILABLE");
+          var schoolId = row.get("school_id", UUID.class);
+          if (!verified.schools().contains(schoolId)) throw new AccessDeniedException("无该校客户转派权限");
+          if (!schools.require(schoolId).active()) throw new AccessDeniedException("学校已停用");
+          if (Boolean.TRUE.equals(row.get("in_pool", Boolean.class))
+              || row.get("merged_into_id", UUID.class) != null)
+            throw new CustomerConflict("CUSTOMER_NOT_ASSIGNABLE");
+          if (sql.fetchExists(
+              sql.selectOne().from("admissions.customer").where("merged_into_id=?", id)))
+            throw new CustomerConflict("CUSTOMER_HAS_MERGED_RECORDS");
+          if (row.get("version", Long.class) != command.expectedVersion())
+            throw new CustomerConflict("VERSION_CONFLICT");
+          var eligible = organization.isActiveCustomerAssignee(schoolId, command.ownerAccountId());
+          if (!eligible) throw new CustomerConflict("CUSTOMER_ASSIGNEE_UNAVAILABLE");
+          if (command.ownerAccountId().equals(row.get("owner_id", UUID.class)))
+            throw new CustomerConflict("CUSTOMER_ALREADY_ASSIGNED");
+          int changed =
+              sql.execute(
+                  "update admissions.customer set owner_id=?,version=version+1 where id=? and version=? and in_pool=false and merged_into_id is null",
+                  command.ownerAccountId(),
+                  id,
+                  command.expectedVersion());
+          if (changed != 1) throw new CustomerConflict("VERSION_CONFLICT");
+          sql.execute(
+              "insert into admissions.customer_assignment_request(tenant_id,actor_id,request_id,customer_id,fingerprint,reason) values (?,?,?,?,?,?)",
+              actor.tenantId(),
+              actor.accountId(),
+              command.requestId(),
+              id,
+              digest,
+              reason);
+          audit(
+              actor.tenantId(),
+              actor.accountId(),
+              schoolId,
+              id,
+              command.requestId(),
+              "OWNER_ASSIGNED",
+              false);
           return view(
               sql.fetchOne(
                   "select id,school_id,name,phone,normalized_phone,channel_id,version from admissions.customer where id=?",

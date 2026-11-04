@@ -84,6 +84,12 @@ class AuditedChannelCommands
   }
 
   @Override
+  public Customer assignOwner(UUID id, CustomerAssign command) {
+    return invoke(
+        FailureAudit.Action.CUSTOMER_ASSIGN, id, () -> customers.assignOwner(id, command));
+  }
+
+  @Override
   public CustomerMergeResult merge(
       UUID sourceId, UUID primaryId, long expectedSourceVersion, long expectedPrimaryVersion) {
     return invoke(

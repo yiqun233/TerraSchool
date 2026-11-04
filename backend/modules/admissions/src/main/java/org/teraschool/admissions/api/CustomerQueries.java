@@ -10,7 +10,10 @@ public interface CustomerQueries {
       boolean maintainable,
       boolean phoneReadable,
       boolean poolReadable,
-      boolean poolManageable) {}
+      boolean poolManageable,
+      boolean assignmentManageable) {}
+
+  record CustomerAssignee(UUID accountId, String name) {}
 
   record CustomerCapabilities(List<CustomerSchoolOption> schools) {}
 
@@ -25,4 +28,6 @@ public interface CustomerQueries {
   CustomerPage pool(UUID schoolId, int page, int size);
 
   List<MergedCustomer> mergedInto(UUID primaryId);
+
+  List<CustomerAssignee> assignableEmployees(UUID schoolId);
 }

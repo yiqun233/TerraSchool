@@ -10,6 +10,7 @@ import org.teraschool.identity.api.*;
 import org.teraschool.organization.api.EmployeeAccountLinks.*;
 import org.teraschool.organization.api.OrganizationConflict;
 import org.teraschool.platform.api.RequestTrace;
+import org.teraschool.platform.api.TenantTransactions;
 import tools.jackson.databind.json.JsonMapper;
 
 @Service
@@ -18,14 +19,61 @@ public class EmployeeAccountLinkService {
   private final CurrentActor actors;
   private final DSLContext sql;
   private final SchoolWriteGuard guard;
+  private final TenantTransactions tx;
   private final JsonMapper json = JsonMapper.builder().build();
 
   public EmployeeAccountLinkService(
-      AccountLinking linking, CurrentActor actors, DSLContext sql, SchoolWriteGuard guard) {
+      AccountLinking linking,
+      CurrentActor actors,
+      DSLContext sql,
+      SchoolWriteGuard guard,
+      TenantTransactions tx) {
     this.linking = linking;
     this.actors = actors;
     this.sql = sql;
     this.guard = guard;
+    this.tx = tx;
+  }
+
+  public java.util.List<
+          org.teraschool.organization.api.OrganizationQueries.EmployeeAssignmentOption>
+      customerAssignmentOptions(UUID schoolId) {
+    if (schoolId == null) throw new IllegalArgumentException("需要学校");
+    var actor = actors.requireAction("CUSTOMER_ASSIGN");
+    if (!actor.schools().contains(schoolId)) throw new AccessDeniedException("无该校客户转派权限");
+    return tx.execute(
+        actor.tenantId(),
+        () -> {
+          var verified = actors.requireActionInTransaction("CUSTOMER_ASSIGN");
+          if (!verified.schools().contains(schoolId)) throw new AccessDeniedException("无该校客户转派权限");
+          return sql.fetch(
+                  "select e.account_id,e.name from organization.employee e join identity.account a on a.id=e.account_id and a.tenant_id=e.tenant_id join organization.unit s on s.id=e.school_id and s.tenant_id=e.tenant_id and s.active where e.tenant_id=? and e.school_id=? and e.active and e.account_id is not null and a.active order by e.name,e.id limit 200",
+                  actor.tenantId(),
+                  schoolId)
+              .map(
+                  row ->
+                      new org.teraschool.organization.api.OrganizationQueries
+                          .EmployeeAssignmentOption(
+                          row.get("account_id", UUID.class), row.get("name", String.class)));
+        });
+  }
+
+  public boolean isActiveCustomerAssignee(UUID schoolId, UUID accountId) {
+    if (schoolId == null || accountId == null) return false;
+    var actor = actors.requireActionInTransaction("CUSTOMER_ASSIGN");
+    return actor.schools().contains(schoolId)
+        && sql.fetchExists(
+            sql.selectOne()
+                .from("organization.employee e")
+                .join("identity.account a")
+                .on("a.id=e.account_id and a.tenant_id=e.tenant_id")
+                .join("organization.unit s")
+                .on("s.id=e.school_id and s.tenant_id=e.tenant_id and s.active")
+                .where(
+                    "e.tenant_id=? and e.school_id=? and e.account_id=? and e.active and a.active",
+                    actor.tenantId(),
+                    schoolId,
+                    accountId));
   }
 
   public AccountLink get(UUID id) {

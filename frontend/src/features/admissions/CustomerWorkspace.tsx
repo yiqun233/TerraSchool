@@ -101,6 +101,12 @@ export function CustomerWorkspace({
   const [conversionResult, setConversionResult] =
     useState<CustomerConversion | null>(null);
   const [conversionBusy, setConversionBusy] = useState(false);
+  const [assignmentTarget, setAssignmentTarget] = useState<Customer | null>(
+    null,
+  );
+  const [assignmentAccount, setAssignmentAccount] = useState<string>();
+  const [assignmentReason, setAssignmentReason] = useState("");
+  const [assignmentRequestId, setAssignmentRequestId] = useState<string>();
   const conversionGuard = useRef(false);
   const [mergePrimaryId, setMergePrimaryId] = useState<string>();
   const [mergeHistoryFor, setMergeHistoryFor] = useState<string | null>(null);
@@ -240,6 +246,22 @@ export function CustomerWorkspace({
       if (response.status === 403) return null;
       if (!response.ok || !data)
         throw new Error("无法读取渠道，仍可不选择渠道录入。");
+      return data;
+    },
+  });
+  const assignees = useQuery({
+    queryKey: ["customer-assignees", current],
+    enabled: !!current && !!currentSchool?.assignmentManageable,
+    queryFn: async ({ signal }) => {
+      const { data, response } = await api.GET(
+        "/api/admissions/customers/assignable-employees",
+        { params: { query: { schoolId: current! } }, signal },
+      );
+      if (response.status === 401) {
+        onUnauthorized();
+        throw new Error("登录已失效");
+      }
+      if (!response.ok || !data) throw new Error("无法读取可转派负责人");
       return data;
     },
   });
@@ -504,6 +526,61 @@ export function CustomerWorkspace({
       ]);
     } catch {
       setNotice("操作结果未确认，请刷新本人客户和公海后核对。");
+    } finally {
+      guard.current = false;
+      setBusy(false);
+    }
+  }
+  async function assignCustomerOwner() {
+    if (
+      !assignmentTarget?.id ||
+      !assignmentAccount ||
+      !current ||
+      guard.current
+    )
+      return;
+    const cleanReason = assignmentReason.trim();
+    if (!cleanReason) return;
+    const requestId = assignmentRequestId ?? crypto.randomUUID();
+    setAssignmentRequestId(requestId);
+    guard.current = true;
+    setBusy(true);
+    setNotice("");
+    try {
+      const token = await csrf();
+      const { response } = await api.POST(
+        "/api/admissions/customers/{id}/assign-owner",
+        {
+          params: { path: { id: assignmentTarget.id } },
+          headers: { [token.headerName!]: token.token! },
+          body: {
+            requestId,
+            expectedVersion: assignmentTarget.version ?? 0,
+            ownerAccountId: assignmentAccount,
+            reason: cleanReason,
+          },
+        },
+      );
+      if (response.status === 401) {
+        onUnauthorized();
+        return;
+      }
+      if (!response.ok) {
+        setNotice(
+          response.status === 409
+            ? "客户或负责人状态已变化，请刷新后重新操作。"
+            : "转派失败，请核对权限后重试。",
+        );
+        return;
+      }
+      setAssignmentTarget(null);
+      setAssignmentRequestId(undefined);
+      setAssignmentReason("");
+      setAssignmentAccount(undefined);
+      setNotice("客户负责人已转派。");
+      await client.invalidateQueries({ queryKey: ["customers", current] });
+    } catch {
+      setNotice("转派结果未确认；保留当前请求身份后可安全重试。 ");
     } finally {
       guard.current = false;
       setBusy(false);
@@ -942,6 +1019,19 @@ export function CustomerWorkspace({
                       转入公海
                     </Button>
                   ) : null}
+                  {currentSchool?.assignmentManageable ? (
+                    <Button
+                      disabled={busy}
+                      onClick={() => {
+                        setAssignmentTarget(row);
+                        setAssignmentAccount(undefined);
+                        setAssignmentReason("");
+                        setAssignmentRequestId(crypto.randomUUID());
+                      }}
+                    >
+                      转派负责人
+                    </Button>
+                  ) : null}
                   {currentSchool?.maintainable ? (
                     <>
                       {currentSchool.phoneReadable ? (
@@ -1068,6 +1158,57 @@ export function CustomerWorkspace({
           onUnauthorized={onUnauthorized}
         />
       ) : null}
+      <Modal
+        title="转派客户负责人"
+        open={!!assignmentTarget}
+        confirmLoading={busy}
+        okText="确认转派"
+        okButtonProps={{
+          disabled:
+            !assignmentAccount ||
+            !assignmentReason.trim() ||
+            assignmentReason.trim().length > 300,
+        }}
+        onOk={() => void assignCustomerOwner()}
+        onCancel={() => {
+          setAssignmentTarget(null);
+          setAssignmentRequestId(undefined);
+        }}
+      >
+        <Typography.Paragraph>
+          将“{assignmentTarget?.name}
+          ”转派给同校在职且已绑定有效账号的员工。客户版本和跟进历史会保留。
+        </Typography.Paragraph>
+        {assignees.error ? (
+          <Alert type="error" title={assignees.error.message} showIcon />
+        ) : null}
+        <Space orientation="vertical" style={{ width: "100%" }}>
+          <Select
+            aria-label="新负责人"
+            placeholder="选择新负责人"
+            loading={assignees.isFetching}
+            value={assignmentAccount}
+            onChange={(value) => {
+              setAssignmentAccount(value);
+              setAssignmentRequestId(crypto.randomUUID());
+            }}
+            options={(assignees.data ?? []).map((employee) => ({
+              value: employee.accountId!,
+              label: employee.name,
+            }))}
+          />
+          <Input.TextArea
+            aria-label="转派原因"
+            placeholder="填写转派原因"
+            maxLength={300}
+            value={assignmentReason}
+            onChange={(event) => {
+              setAssignmentReason(event.target.value);
+              setAssignmentRequestId(crypto.randomUUID());
+            }}
+          />
+        </Space>
+      </Modal>
       <Modal
         title="客户转学员"
         open={!!conversionTarget}

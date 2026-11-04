@@ -60,6 +60,18 @@ class CustomerHttp {
     return noStore(commands.claim(id, command.expectedVersion()));
   }
 
+  @GetMapping("/assignable-employees")
+  ResponseEntity<java.util.List<CustomerQueries.CustomerAssignee>> assignableEmployees(
+      @RequestParam UUID schoolId) {
+    return noStore(queries.assignableEmployees(schoolId));
+  }
+
+  @PostMapping(value = "/{id}/assign-owner", consumes = "application/json")
+  ResponseEntity<Customer> assignOwner(
+      @PathVariable UUID id, @RequestBody CustomerCommands.CustomerAssign command) {
+    return noStore(commands.assignOwner(id, command));
+  }
+
   @GetMapping("/{id}/merges")
   ResponseEntity<java.util.List<CustomerQueries.MergedCustomer>> mergedInto(@PathVariable UUID id) {
     return noStore(queries.mergedInto(id));
