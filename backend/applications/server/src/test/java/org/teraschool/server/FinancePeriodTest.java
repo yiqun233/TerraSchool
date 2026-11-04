@@ -268,6 +268,75 @@ class FinancePeriodTest {
   }
 
   @Test
+  void receiptDailyReportGroupsGrossAmountsByDateMethodAndStatusWithinSchoolScope()
+      throws Exception {
+    var reportSchool = UUID.randomUUID();
+    var student = UUID.randomUUID();
+    update(
+        "insert into organization.unit(id,tenant_id,school_id,kind,name) values (?,?,?,'SCHOOL','收款统计学校')",
+        reportSchool,
+        TENANT,
+        reportSchool);
+    update(
+        "insert into identity.account_permission(tenant_id,account_id,school_id,action,effect)"
+            + " values (?,?,?,'FUNDS_READ','ALLOW')",
+        TENANT,
+        OPS,
+        reportSchool);
+    update(
+        "insert into archive.student(id,tenant_id,student_no,name,sex,school_id) values (?,?,?,?,?,?)",
+        student,
+        TENANT,
+        "S" + student.toString().replace("-", "").substring(0, 8),
+        "收款统计学员",
+        "FEMALE",
+        reportSchool);
+    update(
+        "insert into funds.receipt(id,tenant_id,school_id,student_id,amount,method,occurred_on,status)"
+            + " values (?,?,?,?,100.00,'CASH','2026-04-12','CONFIRMED'),"
+            + "(?,?,?,?,50.00,'CASH','2026-04-12','CONFIRMED'),"
+            + "(?,?,?,?,40.00,'BANK','2026-04-13','VOIDED')",
+        UUID.randomUUID(),
+        TENANT,
+        reportSchool,
+        student,
+        UUID.randomUUID(),
+        TENANT,
+        reportSchool,
+        student,
+        UUID.randomUUID(),
+        TENANT,
+        reportSchool,
+        student);
+
+    var totals =
+        asActor(
+            OPS,
+            () -> financialReports.receiptDailyTotals(reportSchool, "2026-04-12", "2026-04-13"));
+    assertThat(totals)
+        .containsExactly(
+            new ReceiptDailyTotal("2026-04-12", "CASH", "CONFIRMED", 2, "150.00"),
+            new ReceiptDailyTotal("2026-04-13", "BANK", "VOIDED", 1, "40.00"));
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    OPS,
+                    () ->
+                        financialReports.receiptDailyTotals(
+                            reportSchool, "2026-04-14", "2026-04-12")))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("结束日期不能早于起始日期");
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    READER,
+                    () ->
+                        financialReports.receiptDailyTotals(
+                            reportSchool, "2026-04-12", "2026-04-13")))
+        .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
+  }
+
+  @Test
   void lockedMonthBlocksReceiptButKeepsOtherMonthsOpen() {
     lock("2026-03");
     assertThatThrownBy(() -> receipt(freshStudent(), "2026-03-10"))

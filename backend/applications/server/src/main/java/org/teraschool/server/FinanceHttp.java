@@ -29,6 +29,12 @@ class FinanceHttp {
     return reports.fundsReconciliation(schoolId);
   }
 
+  @GetMapping("/api/finance/reports/receipt-daily")
+  List<ReceiptDailyTotal> receiptDailyTotals(
+      @RequestParam UUID schoolId, @RequestParam String from, @RequestParam String to) {
+    return reports.receiptDailyTotals(schoolId, from, to);
+  }
+
   @GetMapping("/api/finance/periods")
   List<PeriodView> periods(
       @RequestParam UUID schoolId, @RequestParam(defaultValue = "") String year) {

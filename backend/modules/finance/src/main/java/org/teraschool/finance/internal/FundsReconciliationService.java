@@ -2,12 +2,17 @@ package org.teraschool.finance.internal;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
+import java.time.temporal.ChronoUnit;
+import java.util.List;
 import java.util.UUID;
 import org.jooq.DSLContext;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.teraschool.finance.api.FinancialReportQueries;
 import org.teraschool.finance.api.FundsReconciliation;
+import org.teraschool.finance.api.ReceiptDailyTotal;
 import org.teraschool.identity.api.CurrentActor;
 import org.teraschool.organization.api.SchoolAccess;
 import org.teraschool.platform.api.TenantTransactions;
@@ -71,6 +76,49 @@ class FundsReconciliationService implements FinancialReportQueries {
               money(balance),
               money(difference));
         });
+  }
+
+  @Override
+  public List<ReceiptDailyTotal> receiptDailyTotals(UUID schoolId, String from, String to) {
+    if (schoolId == null) throw new IllegalArgumentException("需要学校");
+    var start = reportDate(from, "起始日期");
+    var end = reportDate(to, "结束日期");
+    if (end.isBefore(start)) throw new IllegalArgumentException("结束日期不能早于起始日期");
+    if (ChronoUnit.DAYS.between(start, end) > 366)
+      throw new IllegalArgumentException("收款统计日期范围不能超过367天");
+    var permission = actors.requireAction("FUNDS_READ");
+    if (!permission.schools().contains(schoolId)) throw new AccessDeniedException("无该学校资金报表权限");
+    return tx.execute(
+        permission.tenantId(),
+        () -> {
+          schools.lockTenant(permission.tenantId());
+          var verified = actors.requireActionInTransaction("FUNDS_READ");
+          if (!verified.schools().contains(schoolId)) throw new AccessDeniedException("无该学校资金报表权限");
+          return sql.fetch(
+                  "select occurred_on,method,status,count(*) as receipt_count,"
+                      + "coalesce(sum(amount),0) as gross_amount from funds.receipt "
+                      + "where school_id=? and occurred_on between ? and ? "
+                      + "group by occurred_on,method,status order by occurred_on,method,status",
+                  schoolId,
+                  start,
+                  end)
+              .map(
+                  row ->
+                      new ReceiptDailyTotal(
+                          row.get("occurred_on", LocalDate.class).toString(),
+                          row.get("method", String.class),
+                          row.get("status", String.class),
+                          row.get("receipt_count", Long.class),
+                          money(row.get("gross_amount", BigDecimal.class))));
+        });
+  }
+
+  private LocalDate reportDate(String value, String label) {
+    try {
+      return LocalDate.parse(value);
+    } catch (DateTimeParseException | NullPointerException error) {
+      throw new IllegalArgumentException(label + "格式无效，应为 YYYY-MM-DD");
+    }
   }
 
   private String money(BigDecimal value) {
