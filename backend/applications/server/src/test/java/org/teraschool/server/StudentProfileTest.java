@@ -31,6 +31,7 @@ class StudentProfileTest {
       MAINTAINER = UUID.randomUUID(),
       READER = UUID.randomUUID(),
       SENSITIVE = UUID.randomUUID(),
+      PHONE_ONLY = UUID.randomUUID(),
       ASSIGNEE = UUID.randomUUID();
   static final String MAINTAINER_PASSWORD = UUID.randomUUID().toString();
 
@@ -68,7 +69,7 @@ class StudentProfileTest {
         MAINTAINER,
         TENANT,
         encoder.encode(MAINTAINER_PASSWORD));
-    for (var id : new UUID[] {READER, SENSITIVE, ASSIGNEE})
+    for (var id : new UUID[] {READER, SENSITIVE, PHONE_ONLY, ASSIGNEE})
       update(
           "insert into identity.account(id,tenant_id,login,password_hash) values (?,?,?,?)",
           id,
@@ -94,6 +95,18 @@ class StudentProfileTest {
             + " values (?,?,?,'STUDENT_READ','ALLOW')",
         TENANT,
         READER,
+        SCHOOL);
+    update(
+        "insert into identity.account_permission(tenant_id,account_id,school_id,action,effect)"
+            + " values (?,?,?,'STUDENT_READ','ALLOW')",
+        TENANT,
+        PHONE_ONLY,
+        SCHOOL);
+    update(
+        "insert into identity.field_grant(tenant_id,account_id,school_id,field_key,effect)"
+            + " values (?,?,?,'STUDENT_PHONE','ALLOW')",
+        TENANT,
+        PHONE_ONLY,
         SCHOOL);
     for (var action : new String[] {"STUDENT_READ", "STUDENT_MAINTAIN", "STUDENT_SENSITIVE_READ"})
       update(
@@ -166,13 +179,12 @@ class StudentProfileTest {
     assertThatThrownBy(
             () -> asActor(READER, () -> commands.assignOwner(created.profile().id(), assignment)))
         .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
-    var assigned = asActor(MAINTAINER, () -> commands.assignOwner(created.profile().id(), assignment));
+    var assigned =
+        asActor(MAINTAINER, () -> commands.assignOwner(created.profile().id(), assignment));
     assertThat(assigned.ownerAccountId()).isEqualTo(ASSIGNEE);
     assertThat(assigned.version()).isEqualTo(created.profile().version() + 1);
     assertThat(
-            asActor(
-                    MAINTAINER,
-                    () -> commands.assignOwner(created.profile().id(), assignment))
+            asActor(MAINTAINER, () -> commands.assignOwner(created.profile().id(), assignment))
                 .ownerAccountId())
         .isEqualTo(ASSIGNEE);
     assertThatThrownBy(
@@ -205,6 +217,41 @@ class StudentProfileTest {
         result.next();
         assertThat(result.getLong(1)).isEqualTo(1);
       }
+    }
+  }
+
+  @Test
+  void phoneSearchRequiresPhoneFieldPermissionAndNormalisesSeparators() throws Exception {
+    var created = asActor(MAINTAINER, () -> commands.create(command("电话检索学员", null, null)));
+    assertThat(asActor(SENSITIVE, () -> queries.list(0, 20, "138-0000-5678")).items())
+        .extracting(StudentSummary::id)
+        .contains(created.profile().id());
+    assertThat(asActor(READER, () -> queries.list(0, 20, "138-0000-5678")).items())
+        .extracting(StudentSummary::id)
+        .doesNotContain(created.profile().id());
+    assertThat(asActor(PHONE_ONLY, () -> queries.list(0, 20, "138-0000-5678")).items())
+        .extracting(StudentSummary::id)
+        .contains(created.profile().id());
+    assertThat(asActor(PHONE_ONLY, () -> queries.list(0, 20, "567")).items())
+        .extracting(StudentSummary::id)
+        .doesNotContain(created.profile().id());
+    update(
+        "insert into identity.field_grant(tenant_id,account_id,school_id,field_key,effect)"
+            + " values (?,?,?,'STUDENT_PHONE','DENY')",
+        TENANT,
+        SENSITIVE,
+        SCHOOL);
+    try {
+      assertThat(asActor(SENSITIVE, () -> queries.list(0, 20, "138-0000-5678")).items())
+          .extracting(StudentSummary::id)
+          .doesNotContain(created.profile().id());
+    } finally {
+      update(
+          "delete from identity.field_grant where tenant_id=? and account_id=?"
+              + " and school_id=? and field_key='STUDENT_PHONE' and effect='DENY'",
+          TENANT,
+          SENSITIVE,
+          SCHOOL);
     }
   }
 

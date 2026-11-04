@@ -143,7 +143,7 @@ export function StudentDirectory({
           </Button>
         ) : null}
         <Input.Search
-          placeholder="按姓名或学员号检索"
+          placeholder="按姓名、学员号或有权限的电话检索"
           allowClear
           value={search}
           style={{ width: 260 }}

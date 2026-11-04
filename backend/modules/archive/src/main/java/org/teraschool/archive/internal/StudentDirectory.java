@@ -72,17 +72,42 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
     if (search != null && search.length() > 50) throw new IllegalArgumentException("检索条件过长");
     var scope = actors.requireResourceScope("STUDENT");
     if (scope.readableSchoolIds().isEmpty()) return new StudentPage(List.of(), page, size, 0);
-    var keyword = "%" + (search == null ? "" : search.strip()) + "%";
-    var filter =
-        " from archive.student s where s.school_id in ("
-            + marks(scope.readableSchoolIds().size())
-            + ") and (s.name ilike ? or s.student_no ilike ?)";
-    var args = new ArrayList<Object>(scope.readableSchoolIds());
-    args.add(keyword);
-    args.add(keyword);
+    var value = search == null ? "" : search.strip();
+    var keyword = "%" + value + "%";
+    var phoneDigits = value.replaceAll("[^0-9]", "");
     return tx.execute(
         scope.tenantId(),
         () -> {
+          var filter =
+              " from archive.student s where s.school_id in ("
+                  + marks(scope.readableSchoolIds().size())
+                  + ") and (s.name ilike ? or s.student_no ilike ?";
+          var args = new ArrayList<Object>(scope.readableSchoolIds());
+          args.add(keyword);
+          args.add(keyword);
+          if (phoneDigits.length() >= 4) {
+            var phoneReadableSchools =
+                scope.readableSchoolIds().stream()
+                    .filter(
+                        schoolId -> {
+                          var denied = fieldAccess.deniedFields(scope.accountId(), schoolId);
+                          return !denied.contains("STUDENT_PHONE")
+                              && (scope.sensitiveSchoolIds().contains(schoolId)
+                                  || fieldAccess
+                                      .readableFields(scope.accountId(), schoolId)
+                                      .contains("STUDENT_PHONE"));
+                        })
+                    .toList();
+            if (!phoneReadableSchools.isEmpty()) {
+              filter +=
+                  " or (s.school_id in ("
+                      + marks(phoneReadableSchools.size())
+                      + ") and regexp_replace(coalesce(s.phone,''),'[^0-9]','','g') like ?)";
+              args.addAll(phoneReadableSchools);
+              args.add("%" + phoneDigits + "%");
+            }
+          }
+          filter += ")";
           long total = sql.fetchOne("select count(*)" + filter, args.toArray()).get(0, Long.class);
           var pageArgs = new ArrayList<>(args);
           pageArgs.add(size);
@@ -324,8 +349,7 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
           || command.requestId() == null
           || command.expectedVersion() == null
           || command.ownerAccountId() == null
-          || command.expectedVersion() < 0)
-        throw new IllegalArgumentException("需要学员、请求身份、版本和负责人");
+          || command.expectedVersion() < 0) throw new IllegalArgumentException("需要学员、请求身份、版本和负责人");
       var reason = command.reason() == null ? null : command.reason().strip();
       if (reason == null || reason.isEmpty() || reason.length() > 200)
         throw new IllegalArgumentException("分派原因必填且不能超过 200 字");
@@ -361,9 +385,7 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
                 throw new StudentConflict("IDEMPOTENCY_MISMATCH");
               var previousStudent = existing.get("student_id", UUID.class);
               return profile(
-                  verifiedScope,
-                  previousStudent,
-                  requireReadable(verifiedScope, previousStudent));
+                  verifiedScope, previousStudent, requireReadable(verifiedScope, previousStudent));
             }
             var current = requireReadable(verifiedScope, id);
             var schoolId = current.get("school_id", UUID.class);
@@ -897,16 +919,16 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
 
   private String fingerprint(Normalised input) {
     return fingerprint(
-            String.valueOf(input.name()),
-            String.valueOf(input.nameEnglish()),
-            input.sex(),
-            String.valueOf(input.birthday()),
-            String.valueOf(input.certType()),
-            String.valueOf(input.certCode()),
-            String.valueOf(input.phone()),
-            String.valueOf(input.email()),
-            String.valueOf(input.campusId()),
-            input.contacts().toString());
+        String.valueOf(input.name()),
+        String.valueOf(input.nameEnglish()),
+        input.sex(),
+        String.valueOf(input.birthday()),
+        String.valueOf(input.certType()),
+        String.valueOf(input.certCode()),
+        String.valueOf(input.phone()),
+        String.valueOf(input.email()),
+        String.valueOf(input.campusId()),
+        input.contacts().toString());
   }
 
   private String fingerprint(String... values) {
