@@ -794,6 +794,12 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
                   || input.attendedMinutes() <= 0
                   || input.attendedMinutes() >= duration)
                 throw new IllegalArgumentException("部分缺勤分钟必须大于 0 且少于课次时长");
+              var billableHours =
+                  row.get("hours", BigDecimal.class)
+                      .multiply(BigDecimal.valueOf(input.attendedMinutes()))
+                      .divide(BigDecimal.valueOf(duration), 2, RoundingMode.HALF_UP);
+              if (billableHours.signum() <= 0)
+                throw new IllegalArgumentException("部分缺勤时间过短，按当前课时精度无法计费");
             } else if (input.attendedMinutes() != null) {
               throw new IllegalArgumentException("仅部分缺勤可以填写实际出勤分钟");
             }

@@ -645,6 +645,50 @@ class TeachingAndConsumptionTest {
   }
 
   @Test
+  void unbillablyShortPartialAttendanceDoesNotConfirmLesson() {
+    var classView = classWithMember("计费精度下不可确认");
+    var member = membershipOf(classView.id());
+    var draft =
+        asActor(
+            TEACHER,
+            () ->
+                commands.createLesson(
+                    new CreateLesson(
+                        UUID.randomUUID(),
+                        classView.id(),
+                        "2026-03-08",
+                        "09:00",
+                        "19:00",
+                        "教师甲",
+                        "教室甲",
+                        "长课次",
+                        "0.01",
+                        TEACHER_RESOURCE,
+                        null)));
+    var lesson =
+        asActor(
+            TEACHER, () -> commands.publishLesson(draft.id(), new LessonVersion(draft.version())));
+
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    TEACHER,
+                    () ->
+                        commands.confirmAttendance(
+                            lesson.id(),
+                            new ConfirmAttendance(
+                                lesson.version(),
+                                List.of(new AttendanceInput(member, "PARTIAL", 1))))))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("部分缺勤时间过短，按当前课时精度无法计费");
+    assertThat(asActor(TEACHER, () -> queries.lessons(classView.id())))
+        .filteredOn(item -> item.id().equals(lesson.id()))
+        .singleElement()
+        .extracting(LessonView::status)
+        .isEqualTo("PUBLISHED");
+  }
+
+  @Test
   void closingTwiceKeepsSingleConsumption() throws Exception {
     var classView = classWithMember("重复关闭班");
     var member = membershipOf(classView.id());
