@@ -125,7 +125,8 @@ public class RoleTemplates {
   }
 
   private List<RoleAction> actions(List<RoleAction> values) {
-    if (values == null || values.size() > 22) throw new IllegalArgumentException("需要完整动作集合，最多22项");
+    if (values == null || values.size() > PermissionRules.ACTIONS.size() * 2)
+      throw new IllegalArgumentException("需要完整动作集合，动作数量超出目录范围");
     for (var r : values)
       if (r == null
           || !PermissionRules.ACTIONS.contains(Objects.toString(r.action(), ""))

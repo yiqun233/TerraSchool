@@ -19,5 +19,9 @@ public interface StudentQueries {
    */
   String exportCsv(UUID schoolId);
 
+  StudentCsvExport exportCsvArtifact(UUID schoolId);
+
+  void authorizeCsvDownload(UUID schoolId, java.util.Set<String> exposedFields);
+
   java.util.List<StudentMergeHistory> mergeHistory(UUID primaryStudentId);
 }

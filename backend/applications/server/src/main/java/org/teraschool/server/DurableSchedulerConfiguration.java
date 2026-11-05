@@ -21,6 +21,7 @@ class DurableSchedulerConfiguration {
   Scheduler durableScheduler(
       @Qualifier("schedulerDataSource") DataSource source,
       CustomerAutoRecycleJob autoRecycle,
+      StudentExportTaskService exports,
       Environment environment) {
     var delay =
         Duration.ofMillis(
@@ -31,15 +32,19 @@ class DurableSchedulerConfiguration {
     RecurringTask<Void> recycleTask =
         Tasks.recurring("customer-auto-recycle-v1", FixedDelay.of(delay))
             .execute((instance, context) -> autoRecycle.scheduledSweep());
+    RecurringTask<Void> exportTask =
+        Tasks.recurring("student-export-dispatch-v1", FixedDelay.of(Duration.ofSeconds(15)))
+            .execute((instance, context) -> exports.dispatchPending());
     var builder =
-        Scheduler.create(source, recycleTask)
+        (autoRecycle.isEnabled() ? Scheduler.create(source) : Scheduler.create(source, recycleTask))
             .tableName("infra.scheduled_tasks")
-            .threads(1)
+            .threads(2)
             .pollingInterval(Duration.ofSeconds(2))
             .heartbeatInterval(Duration.ofSeconds(15))
             .missedHeartbeatsLimit(4)
             .enableImmediateExecution();
     if (autoRecycle.isEnabled()) builder.startTasks(recycleTask);
+    builder.startTasks(exportTask);
     return builder.build();
   }
 }

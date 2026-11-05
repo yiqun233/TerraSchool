@@ -21,6 +21,7 @@ final class PermissionRules {
           "STUDENT_READ",
           "STUDENT_MAINTAIN",
           "STUDENT_ASSIGN",
+          "STUDENT_EXPORT",
           "STUDENT_SENSITIVE_READ",
           "PRODUCT_READ",
           "PRODUCT_MAINTAIN",

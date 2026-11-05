@@ -236,6 +236,7 @@ class SchoolAndResourcesTest {
     var previousLevel = logger.getLevel();
     var captured =
         new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+    captured.list = new java.util.concurrent.CopyOnWriteArrayList<>();
     captured.start();
     logger.addAppender(captured);
     logger.setLevel(ch.qos.logback.classic.Level.DEBUG);

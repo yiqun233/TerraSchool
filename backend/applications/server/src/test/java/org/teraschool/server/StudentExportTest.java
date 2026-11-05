@@ -25,6 +25,7 @@ class StudentExportTest {
   static final String PASSWORD = UUID.randomUUID().toString();
 
   @Autowired StudentQueries students;
+  @Autowired StudentExportTaskService exportTasks;
 
   @DynamicPropertySource
   static void config(DynamicPropertyRegistry r) {
@@ -72,6 +73,13 @@ class StudentExportTest {
           TENANT,
           account,
           SCHOOL);
+    for (var account : List.of(READER, PHONE_ONLY))
+      update(
+          "insert into identity.account_permission(tenant_id,account_id,school_id,action,effect)"
+              + " values (?,?,?,'STUDENT_EXPORT','ALLOW')",
+          TENANT,
+          account,
+          SCHOOL);
     update(
         "insert into identity.field_grant(tenant_id,account_id,school_id,field_key,effect)"
             + " values (?,?,?,'STUDENT_PHONE','ALLOW')",
@@ -111,8 +119,105 @@ class StudentExportTest {
   }
 
   @Test
+  void persistentExportTaskReusesSameRequestAndDownloadRechecksSensitiveFields() throws Exception {
+    var request = new CreateStudentExport(SCHOOL, UUID.randomUUID());
+    var created = asActor(READER, () -> exportTasks.create(request));
+    var repeated = asActor(READER, () -> exportTasks.create(request));
+    assertThat(repeated.id()).isEqualTo(created.id());
+    assertThat(repeated.schoolId()).isEqualTo(SCHOOL);
+
+    var artifact = asActor(PHONE_ONLY, () -> students.exportCsvArtifact(SCHOOL));
+    assertThat(artifact.exposedFields()).contains("STUDENT_PHONE").doesNotContain("STUDENT_CERT");
+    asActor(
+        PHONE_ONLY,
+        () -> {
+          students.authorizeCsvDownload(SCHOOL, artifact.exposedFields());
+          return null;
+        });
+    update(
+        "delete from identity.field_grant where tenant_id=? and account_id=? and school_id=? and field_key='STUDENT_PHONE'",
+        TENANT,
+        PHONE_ONLY,
+        SCHOOL);
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    PHONE_ONLY,
+                    () -> {
+                      students.authorizeCsvDownload(SCHOOL, artifact.exposedFields());
+                      return null;
+                    }))
+        .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
+    update(
+        "insert into identity.field_grant(tenant_id,account_id,school_id,field_key,effect)"
+            + " values (?,?,?,'STUDENT_PHONE','ALLOW')",
+        TENANT,
+        PHONE_ONLY,
+        SCHOOL);
+  }
+
+  @Test
+  void persistentStudentExportRunsAndCanBeDownloadedByItsOwner() throws Exception {
+    var created =
+        asActor(
+            READER, () -> exportTasks.create(new CreateStudentExport(SCHOOL, UUID.randomUUID())));
+    var deadline = System.nanoTime() + java.time.Duration.ofSeconds(10).toNanos();
+    StudentExportTask status;
+    do {
+      exportTasks.dispatchPending();
+      status = asActor(READER, () -> exportTasks.get(created.id()));
+      if ("COMPLETED".equals(status.status())) break;
+      Thread.sleep(50);
+    } while (System.nanoTime() < deadline);
+    assertThat(status.status()).isEqualTo("COMPLETED");
+    assertThat(status.rowCount()).isEqualTo(1);
+    var content =
+        asActor(
+            READER,
+            () ->
+                new String(
+                    exportTasks.download(created.id()), java.nio.charset.StandardCharsets.UTF_8));
+    assertThat(content).contains("导出学员").contains("138****1111");
+    assertThat(content).doesNotContain("13800001111");
+  }
+
+  @Test
   void exportOutsideSchoolScopeIsRejected() {
     assertThatThrownBy(() -> asActor(READER, () -> students.exportCsv(OTHER_SCHOOL)))
         .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
+  }
+
+  @Test
+  void readPermissionAloneCannotStartAnExport() throws Exception {
+    update(
+        "delete from identity.account_permission where tenant_id=? and account_id=? and school_id=? and action='STUDENT_EXPORT'",
+        TENANT,
+        READER,
+        SCHOOL);
+    try {
+      assertThatThrownBy(
+              () ->
+                  asActor(
+                      READER,
+                      () -> exportTasks.create(new CreateStudentExport(SCHOOL, UUID.randomUUID()))))
+          .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
+      assertThat(asActor(READER, () -> students.capabilities()).canExport()).isFalse();
+    } finally {
+      update(
+          "insert into identity.account_permission(tenant_id,account_id,school_id,action,effect)"
+              + " values (?,?,?,'STUDENT_EXPORT','ALLOW')",
+          TENANT,
+          READER,
+          SCHOOL);
+    }
+  }
+
+  @Test
+  void pendingExportCanBeCancelledByItsOwner() {
+    var created =
+        asActor(
+            READER, () -> exportTasks.create(new CreateStudentExport(SCHOOL, UUID.randomUUID())));
+    var cancelled = asActor(READER, () -> exportTasks.cancel(created.id()));
+    assertThat(cancelled.status()).isEqualTo("CANCELLED");
   }
 }

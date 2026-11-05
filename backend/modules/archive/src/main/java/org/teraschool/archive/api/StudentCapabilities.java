@@ -13,9 +13,12 @@ public record StudentCapabilities(
     boolean canMaintain,
     boolean canReadSensitive,
     boolean canAssign,
-    List<StudentSchoolOption> maintainableSchools) {
+    List<StudentSchoolOption> maintainableSchools,
+    boolean canExport,
+    List<StudentSchoolOption> exportableSchools) {
   public StudentCapabilities {
     maintainableSchools = List.copyOf(maintainableSchools);
+    exportableSchools = List.copyOf(exportableSchools);
   }
 
   public record StudentSchoolOption(UUID id, String name) {}

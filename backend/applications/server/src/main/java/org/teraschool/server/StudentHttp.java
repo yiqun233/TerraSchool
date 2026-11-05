@@ -10,10 +10,12 @@ import org.teraschool.archive.api.*;
 class StudentHttp {
   private final StudentQueries queries;
   private final StudentCommands commands;
+  private final StudentExportTaskService exports;
 
-  StudentHttp(StudentQueries queries, StudentCommands commands) {
+  StudentHttp(StudentQueries queries, StudentCommands commands, StudentExportTaskService exports) {
     this.queries = queries;
     this.commands = commands;
+    this.exports = exports;
   }
 
   @GetMapping("/api/archive/capabilities")
@@ -85,5 +87,35 @@ class StudentHttp {
     return org.springframework.http.ResponseEntity.ok()
         .header("Content-Disposition", "attachment; filename=\"students-" + schoolId + ".csv\"")
         .body(csv);
+  }
+
+  @PostMapping(value = "/api/archive/student-exports", consumes = "application/json")
+  org.springframework.http.ResponseEntity<StudentExportTask> createExport(
+      @RequestBody CreateStudentExport command) {
+    return org.springframework.http.ResponseEntity.accepted().body(exports.create(command));
+  }
+
+  @GetMapping("/api/archive/student-exports/{id}")
+  StudentExportTask exportStatus(@PathVariable UUID id) {
+    return exports.get(id);
+  }
+
+  @PostMapping("/api/archive/student-exports/{id}/cancel")
+  StudentExportTask cancelExport(@PathVariable UUID id) {
+    return exports.cancel(id);
+  }
+
+  @PostMapping("/api/archive/student-exports/{id}/retry")
+  StudentExportTask retryExport(@PathVariable UUID id) {
+    return exports.retry(id);
+  }
+
+  @GetMapping(
+      value = "/api/archive/student-exports/{id}/download",
+      produces = "text/csv; charset=UTF-8")
+  org.springframework.http.ResponseEntity<byte[]> downloadExport(@PathVariable UUID id) {
+    return org.springframework.http.ResponseEntity.ok()
+        .header("Content-Disposition", "attachment; filename=\"students-" + id + ".csv\"")
+        .body(exports.download(id));
   }
 }

@@ -2,6 +2,8 @@
 from pathlib import Path
 import os,sys,subprocess,secrets,json,uuid,shutil,time
 ROOT=Path(__file__).resolve().parents[2]
+targeted_backend=next((a.split('=',1)[1] for a in sys.argv[1:] if a.startswith('--backend-test=')),None)
+if targeted_backend and not __import__('re').fullmatch(r'[A-Za-z0-9_,]+',targeted_backend):raise SystemExit('--backend-test 仅接受测试类名列表')
 sys.path.insert(0,str(ROOT/'tools/verification/core-stack'))
 from process_tree import stop_tree
 RUN=uuid.uuid4().hex[:12];OUT=ROOT/'.local/engineering'/RUN;OUT.mkdir(parents=True)
@@ -33,7 +35,7 @@ def step(label,args,cwd=ROOT/'backend'):
   finally:timer.cancel();stop_tree(p)
  if code:raise RuntimeError(label+' failed; log: '+str(OUT/(label+'.log')))
 mvn=[str(ROOT/'backend'/('mvnw.cmd' if os.name=='nt' else 'mvnw')),'-B','-ntp','-s',str(ROOT/'backend/.mvn/settings.xml'),'-gs',str(ROOT/'backend/.mvn/settings.xml'),'-Dmaven.repo.local='+str(ROOT/'.local/maven/repository')]
-container=None;report={'run_id':RUN,'status':'running','task':'CORE-001/CORE-002/ORG-001/ORG-002'}
+container=None;report={'run_id':RUN,'status':'running','task':f'targeted-backend:{targeted_backend}' if targeted_backend else 'CORE-001/CORE-002/ORG-001/ORG-002'}
 try:
  report['java']=capture([str(Path(java)/'bin'/('java.exe' if os.name=='nt' else 'java')),'--version'])
  if '25.' not in report['java'].splitlines()[0]:raise RuntimeError('正式工程要求 JDK 25')
@@ -50,16 +52,20 @@ try:
  roles='\n'.join("CREATE ROLE ts_"+kind+" LOGIN PASSWORD '"+env['TS_'+kind.upper()+'_PASSWORD']+"' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;" for kind in ['app','identity','session','audit','scheduler'])
  p=subprocess.run([docker,'exec','-i',container,'psql','-v','ON_ERROR_STOP=1','-U','postgres','-d','teraschool_test'],input=roles,text=True,capture_output=True,env=env)
  if p.returncode:raise RuntimeError(safe(p.stderr))
- step('extract',[sys.executable,str(ROOT/'tools/migration/extract_legacy.py'),'--self-check'],cwd=ROOT);step('clean',mvn+['clean']);step('migration',mvn+['-N','flyway:migrate']);step('codegen',mvn+['-N','jooq-codegen:generate']);step('format',mvn+['spotless:apply'] if '--format' in sys.argv else mvn+['spotless:check']);step('verify',mvn+['verify'])
+ step('extract',[sys.executable,str(ROOT/'tools/migration/extract_legacy.py'),'--self-check'],cwd=ROOT);step('clean',mvn+['clean']);step('migration',mvn+['-N','flyway:migrate']);step('codegen',mvn+['-N','jooq-codegen:generate']);step('format',mvn+['spotless:apply'] if '--format' in sys.argv else mvn+['spotless:check'])
+ if targeted_backend:
+  step('targeted-backend',mvn+['-pl','applications/server','-am','-Dtest='+targeted_backend,'-Dsurefire.failIfNoSpecifiedTests=false','test'])
+ else:step('verify',mvn+['verify'])
  import xml.etree.ElementTree as ET
  suites=[ET.parse(p).getroot() for p in (ROOT/'backend/applications/server/target/surefire-reports').glob('TEST-*.xml')]
  if not suites or any(int(s.get('failures','0'))+int(s.get('errors','0'))+int(s.get('skipped','0')) for s in suites):raise RuntimeError('测试必须执行且不可失败/跳过')
  report['tests']=sum(int(s.get('tests','0')) for s in suites)
- pnpm=shutil.which('pnpm.cmd' if os.name=='nt' else 'pnpm')
- if not pnpm:raise RuntimeError('需要 pnpm 11.23.0')
- frontend=ROOT/'frontend'
- step('frontend-install',[pnpm,'install','--frozen-lockfile','--ignore-scripts','--strict-peer-dependencies','--store-dir',str(ROOT/'.local/pnpm-store')],frontend)
- for label in ['generate','typecheck','lint','format:check','test','build']:step('frontend-'+label.replace(':','-'),[pnpm,'run',label],frontend)
+ if not targeted_backend:
+  pnpm=shutil.which('pnpm.cmd' if os.name=='nt' else 'pnpm')
+  if not pnpm:raise RuntimeError('需要 pnpm 11.23.0')
+  frontend=ROOT/'frontend'
+  step('frontend-install',[pnpm,'install','--frozen-lockfile','--ignore-scripts','--strict-peer-dependencies','--store-dir',str(ROOT/'.local/pnpm-store')],frontend)
+  for label in ['generate','typecheck','lint','format:check','test','build']:step('frontend-'+label.replace(':','-'),[pnpm,'run',label],frontend)
  report['status']='passed'
 except BaseException as e:report['error']=safe(str(e));report['status']='failed';raise
 finally:

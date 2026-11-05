@@ -155,27 +155,40 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
     var scope = actors.requireResourceScope("STUDENT");
     var maintainable = scope.maintainableSchoolIds();
     var assignable = assignableSchoolIds();
-    if (maintainable.isEmpty())
+    var exportable = exportableSchoolIds(scope.readableSchoolIds());
+    if (maintainable.isEmpty() && exportable.isEmpty())
       return new StudentCapabilities(
-          true, false, !scope.sensitiveSchoolIds().isEmpty(), !assignable.isEmpty(), List.of());
+          true,
+          false,
+          !scope.sensitiveSchoolIds().isEmpty(),
+          !assignable.isEmpty(),
+          List.of(),
+          false,
+          List.of());
     return tx.execute(
         scope.tenantId(),
         () -> {
           var names = schools.names(maintainable);
-          var options =
-              maintainable.stream()
-                  .filter(names::containsKey)
-                  .sorted(
-                      Comparator.comparing((UUID key) -> names.get(key)).thenComparing(key -> key))
-                  .map(key -> new StudentCapabilities.StudentSchoolOption(key, names.get(key)))
-                  .toList();
+          var options = schoolOptions(maintainable, names);
+          var exportOptions = schoolOptions(exportable, schools.names(exportable));
           return new StudentCapabilities(
               true,
               !options.isEmpty(),
               !scope.sensitiveSchoolIds().isEmpty(),
               !assignable.isEmpty(),
-              options);
+              options,
+              !exportOptions.isEmpty(),
+              exportOptions);
         });
+  }
+
+  private List<StudentCapabilities.StudentSchoolOption> schoolOptions(
+      Set<UUID> schoolIds, Map<UUID, String> names) {
+    return schoolIds.stream()
+        .filter(names::containsKey)
+        .sorted(Comparator.comparing((UUID key) -> names.get(key)).thenComparing(key -> key))
+        .map(key -> new StudentCapabilities.StudentSchoolOption(key, names.get(key)))
+        .toList();
   }
 
   @Override
@@ -188,6 +201,16 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
   private Set<UUID> assignableSchoolIds() {
     try {
       return actors.requireAction("STUDENT_ASSIGN").schools();
+    } catch (AccessDeniedException denied) {
+      return Set.of();
+    }
+  }
+
+  private Set<UUID> exportableSchoolIds(Set<UUID> readableSchools) {
+    try {
+      var result = new HashSet<>(actors.requireAction("STUDENT_EXPORT").schools());
+      result.retainAll(readableSchools);
+      return result;
     } catch (AccessDeniedException denied) {
       return Set.of();
     }
@@ -1217,13 +1240,22 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
 
   @Override
   public String exportCsv(UUID schoolId) {
+    return exportCsvArtifact(schoolId).content();
+  }
+
+  @Override
+  public StudentCsvExport exportCsvArtifact(UUID schoolId) {
     try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
       var scope = actors.requireResourceScope("STUDENT");
-      if (schoolId == null || !scope.readableSchoolIds().contains(schoolId))
-        throw new AccessDeniedException("无该学校的学员读取权限");
+      var export = actors.requireAction("STUDENT_EXPORT");
+      if (schoolId == null
+          || !scope.readableSchoolIds().contains(schoolId)
+          || !export.schools().contains(schoolId)) throw new AccessDeniedException("无该学校的学员读取权限");
       return tx.execute(
           scope.tenantId(),
           () -> {
+            if (!actors.requireActionInTransaction("STUDENT_EXPORT").schools().contains(schoolId))
+              throw new AccessDeniedException("导出权限已撤销");
             // 导出与详情用同一套字段授权：没有字段权限的列一律输出脱敏值。
             var granted = fieldAccess.readableFields(scope.accountId(), schoolId);
             var denied = fieldAccess.deniedFields(scope.accountId(), schoolId);
@@ -1237,6 +1269,11 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
                     && !denied.contains("STUDENT_BIRTHDAY");
             var emailOk =
                 (full || granted.contains("STUDENT_EMAIL")) && !denied.contains("STUDENT_EMAIL");
+            var exposedFields = new LinkedHashSet<String>();
+            if (birthdayOk) exposedFields.add("STUDENT_BIRTHDAY");
+            if (certOk) exposedFields.add("STUDENT_CERT");
+            if (phoneOk) exposedFields.add("STUDENT_PHONE");
+            if (emailOk) exposedFields.add("STUDENT_EMAIL");
             var rows =
                 sql.fetch(
                     "select student_no,name,sex,birthday,cert_code,phone,email from archive.student"
@@ -1270,7 +1307,32 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
                   .append(NEWLINE);
             }
             audit(scope, "STUDENT_EXPORTED", schoolId, schoolId, "rows=" + rows.size());
-            return csv.toString();
+            return new StudentCsvExport(csv.toString(), exposedFields);
+          });
+    }
+  }
+
+  @Override
+  public void authorizeCsvDownload(UUID schoolId, Set<String> exposedFields) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      var scope = actors.requireResourceScope("STUDENT");
+      var export = actors.requireAction("STUDENT_EXPORT");
+      if (schoolId == null
+          || !scope.readableSchoolIds().contains(schoolId)
+          || !export.schools().contains(schoolId)) throw new AccessDeniedException("无该学校的学员读取权限");
+      tx.execute(
+          scope.tenantId(),
+          () -> {
+            if (!actors.requireActionInTransaction("STUDENT_EXPORT").schools().contains(schoolId))
+              throw new AccessDeniedException("导出权限已撤销");
+            var granted = fieldAccess.readableFields(scope.accountId(), schoolId);
+            var denied = fieldAccess.deniedFields(scope.accountId(), schoolId);
+            for (var field : exposedFields) {
+              if (denied.contains(field)
+                  || !(scope.sensitiveSchoolIds().contains(schoolId) || granted.contains(field)))
+                throw new AccessDeniedException("导出文件包含当前无权读取的敏感字段");
+            }
+            return null;
           });
     }
   }

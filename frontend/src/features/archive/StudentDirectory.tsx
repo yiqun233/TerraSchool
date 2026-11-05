@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Alert,
@@ -14,7 +14,7 @@ import {
   Tag,
   Typography,
 } from "antd";
-import { api, csrf } from "../../shared/http";
+import { api, csrf, downloadCsv } from "../../shared/http";
 import type { components } from "../../shared/generated/api";
 
 type StudentProfile = components["schemas"]["StudentProfile"];
@@ -24,6 +24,23 @@ type CreateStudent = components["schemas"]["CreateStudent"];
 type DuplicateHint = components["schemas"]["DuplicateHint"];
 type EmployeeAssignmentOption =
   components["schemas"]["EmployeeAssignmentOption"];
+type StudentExportTask = {
+  id: string;
+  schoolId: string;
+  status:
+    | "PENDING"
+    | "RUNNING"
+    | "COMPLETED"
+    | "FAILED"
+    | "CANCELLED"
+    | "EXPIRED";
+  attemptCount: number;
+  rowCount: number | null;
+  errorCode: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+};
 
 const SEX_LABEL: Record<string, string> = {
   MALE: "男",
@@ -50,6 +67,7 @@ export function StudentDirectory({
 }) {
   const [page, setPage] = useState(0);
   const [exporting, setExporting] = useState(false);
+  const [exportTask, setExportTask] = useState<StudentExportTask | null>(null);
   // 导出按学校范围进行：取当前账号第一所可读学校。
   const [search, setSearch] = useState("");
   const [keyword, setKeyword] = useState("");
@@ -73,7 +91,7 @@ export function StudentDirectory({
     },
   });
   // 导出按学校范围进行：取当前账号第一所可读学校。
-  const exportSchool = capabilities.data?.maintainableSchools?.[0]?.id;
+  const exportSchool = capabilities.data?.exportableSchools?.[0]?.id;
   const students = useQuery({
     queryKey: ["archive-students", page, keyword],
     enabled: !!capabilities.data?.canRead,
@@ -92,21 +110,61 @@ export function StudentDirectory({
     },
   });
 
+  useEffect(() => {
+    if (!exportTask || !["PENDING", "RUNNING"].includes(exportTask.status))
+      return;
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await fetch(
+          `/api/archive/student-exports/${encodeURIComponent(exportTask.id)}`,
+          { credentials: "same-origin" },
+        );
+        if (response.status === 401) {
+          onUnauthorized();
+          return;
+        }
+        if (!response.ok) throw new Error("无法读取导出任务状态");
+        const next = (await response.json()) as StudentExportTask;
+        if (!cancelled) setExportTask(next);
+      } catch {
+        if (!cancelled) setError("读取导出进度失败，可点击刷新重试。");
+      }
+    }, 1000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [exportTask, onUnauthorized]);
+
   if (capabilities.error)
     return <Alert title={capabilities.error.message} type="error" />;
   if (capabilities.isPending) return <p role="status">正在读取学员档案权限…</p>;
   if (!capabilities.data?.canRead)
     return <Alert title="账号当前无学员档案读取权限" type="error" />;
 
-  /** 导出走浏览器下载，服务端已按字段权限脱敏并写审计。 */
+  /** 导出以持久任务执行；下载时服务端复核学校与敏感字段权限。 */
   async function exportCsv() {
     if (!exportSchool) return;
     setExporting(true);
     try {
-      const response = await fetch(
-        `/api/archive/students/export?schoolId=${encodeURIComponent(exportSchool)}`,
-        { credentials: "include" },
-      );
+      const token = await csrf();
+      const response = await fetch("/api/archive/student-exports", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          [token.headerName!]: token.token!,
+        },
+        body: JSON.stringify({
+          schoolId: exportSchool,
+          requestId: crypto.randomUUID(),
+        }),
+      });
+      if (response.status === 401) {
+        onUnauthorized();
+        throw new Error("登录已失效，请重新登录");
+      }
       if (!response.ok) {
         const detail = await response.json().catch(() => null);
         setError(
@@ -116,17 +174,53 @@ export function StudentDirectory({
         );
         return;
       }
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `students-${exportSchool}.csv`;
-      link.click();
-      URL.revokeObjectURL(url);
+      setExportTask((await response.json()) as StudentExportTask);
     } catch {
-      setError("导出失败，请稍后重试。");
+      setError("无法创建导出任务，请稍后重试。");
     } finally {
       setExporting(false);
+    }
+  }
+
+  async function updateExportTask(action: "cancel" | "retry") {
+    if (!exportTask) return;
+    try {
+      const token = await csrf();
+      const response = await fetch(
+        `/api/archive/student-exports/${encodeURIComponent(exportTask.id)}/${action}`,
+        {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { [token.headerName!]: token.token! },
+        },
+      );
+      if (response.status === 401) {
+        onUnauthorized();
+        return;
+      }
+      if (!response.ok) throw new Error("任务操作失败");
+      setExportTask((await response.json()) as StudentExportTask);
+    } catch {
+      setError(action === "cancel" ? "取消导出失败。" : "重试导出失败。");
+    }
+  }
+
+  async function refreshExportTask() {
+    if (!exportTask) return;
+    try {
+      const response = await fetch(
+        `/api/archive/student-exports/${encodeURIComponent(exportTask.id)}`,
+        { credentials: "same-origin" },
+      );
+      if (response.status === 401) {
+        onUnauthorized();
+        return;
+      }
+      if (!response.ok) throw new Error("任务状态不可用");
+      setExportTask((await response.json()) as StudentExportTask);
+      setError("");
+    } catch {
+      setError("读取导出进度失败，请稍后重试。");
     }
   }
 
@@ -164,10 +258,54 @@ export function StudentDirectory({
         <Button
           onClick={() => void exportCsv()}
           loading={exporting}
-          disabled={!exportSchool || exporting}
+          disabled={!capabilities.data.canExport || !exportSchool || exporting}
         >
           导出 CSV
         </Button>
+        {exportTask ? (
+          <Space>
+            <Typography.Text role="status">
+              导出任务：
+              {exportTask.status === "PENDING"
+                ? "等待执行"
+                : exportTask.status === "RUNNING"
+                  ? `处理中（第 ${exportTask.attemptCount} 次）`
+                  : exportTask.status === "COMPLETED"
+                    ? `完成，共 ${exportTask.rowCount ?? 0} 条`
+                    : exportTask.status === "FAILED"
+                      ? `失败（${exportTask.errorCode === "EXPORT_LIMIT_EXCEEDED" ? "超过 5000 条限制" : (exportTask.errorCode ?? "未知原因")}）`
+                      : exportTask.status === "CANCELLED"
+                        ? "已取消"
+                        : "文件已过期，请重新导出"}
+            </Typography.Text>
+            {exportTask.status === "PENDING" ||
+            exportTask.status === "RUNNING" ? (
+              <Button onClick={() => void refreshExportTask()}>刷新进度</Button>
+            ) : null}
+            {exportTask.status === "PENDING" ? (
+              <Button onClick={() => void updateExportTask("cancel")}>
+                取消
+              </Button>
+            ) : null}
+            {exportTask.status === "FAILED" ? (
+              <Button onClick={() => void updateExportTask("retry")}>
+                重试
+              </Button>
+            ) : null}
+            {exportTask.status === "COMPLETED" ? (
+              <Button
+                onClick={() =>
+                  void downloadCsv(
+                    `/api/archive/student-exports/${encodeURIComponent(exportTask.id)}/download`,
+                    `students-${exportTask.schoolId}.csv`,
+                  )
+                }
+              >
+                下载
+              </Button>
+            ) : null}
+          </Space>
+        ) : null}
         <Typography.Text type="secondary">
           敏感字段按当前权限脱敏显示；导出同样按字段权限脱敏
         </Typography.Text>

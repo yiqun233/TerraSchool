@@ -1,18 +1,27 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { StudentCreator, StudentDirectory } from "./StudentDirectory";
 
-const { get, post, csrf } = vi.hoisted(() => ({
+const { get, post, csrf, downloadCsv } = vi.hoisted(() => ({
   get: vi.fn(),
   post: vi.fn(),
   csrf: vi.fn(),
+  downloadCsv: vi.fn(),
 }));
-vi.mock("../../shared/http", () => ({ api: { GET: get, POST: post }, csrf }));
+vi.mock("../../shared/http", () => ({
+  api: { GET: get, POST: post },
+  csrf,
+  downloadCsv,
+}));
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 const capabilities = {
@@ -123,6 +132,76 @@ it("列表按服务端脱敏值展示，详情提示当前为脱敏值", async (
         requestId: expect.any(String),
       }),
     }),
+  );
+});
+
+it("通过持久导出任务展示进度并在完成后下载", { timeout: 10000 }, async () => {
+  get.mockImplementation(async (path: string) => {
+    if (path === "/api/archive/capabilities")
+      return {
+        response: { ok: true, status: 200 },
+        data: {
+          ...capabilities,
+          canExport: true,
+          exportableSchools: [{ id: "school-1", name: "测试学校" }],
+        },
+      };
+    if (path === "/api/archive/students")
+      return {
+        response: { ok: true, status: 200 },
+        data: { items: [], page: 0, size: 20, total: 0 },
+      };
+    throw new Error("unexpected path " + path);
+  });
+  csrf.mockResolvedValue({ headerName: "X-CSRF", token: "csrf-token" });
+  vi.stubGlobal("crypto", { randomUUID: () => "request-export-1" });
+  const task = {
+    id: "export-task-1",
+    schoolId: "school-1",
+    status: "PENDING",
+    attemptCount: 0,
+    rowCount: null,
+    errorCode: null,
+    createdAt: "2026-11-05T00:00:00Z",
+    startedAt: null,
+    finishedAt: null,
+  };
+  const completed = {
+    ...task,
+    status: "COMPLETED",
+    attemptCount: 1,
+    rowCount: 4,
+    finishedAt: "2026-11-05T00:00:02Z",
+  };
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce({
+      ok: true,
+      status: 202,
+      json: async () => task,
+    })
+    .mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => completed,
+    });
+  vi.stubGlobal("fetch", fetchMock);
+  const user = userEvent.setup({ pointerEventsCheck: 0 });
+  renderPage(<StudentDirectory onUnauthorized={vi.fn()} />);
+
+  await user.click(await screen.findByRole("button", { name: "导出 CSV" }));
+  expect(
+    await screen.findByText("导出任务：完成，共 4 条", {}, { timeout: 5000 }),
+  ).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: /下\s*载/ }));
+  expect(downloadCsv).toHaveBeenCalledWith(
+    "/api/archive/student-exports/export-task-1/download",
+    "students-school-1.csv",
+  );
+  expect(fetchMock).toHaveBeenNthCalledWith(
+    1,
+    "/api/archive/student-exports",
+    expect.objectContaining({ method: "POST" }),
   );
 });
 
