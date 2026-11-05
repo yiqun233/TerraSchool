@@ -18,6 +18,8 @@ import { api, csrf } from "../../shared/http";
 import type { components } from "../../shared/generated/api";
 
 type StudentProfile = components["schemas"]["StudentProfile"];
+type StudentSummary = components["schemas"]["StudentSummary"];
+type StudentMergeHistory = components["schemas"]["StudentMergeHistory"];
 type CreateStudent = components["schemas"]["CreateStudent"];
 type DuplicateHint = components["schemas"]["DuplicateHint"];
 type EmployeeAssignmentOption =
@@ -39,7 +41,7 @@ const RELATION_LABEL: Record<string, string> = {
  * 学员与家长档案工作区。
  *
  * 敏感字段由服务端脱敏后返回，页面只提示“当前为脱敏值”，不做二次还原；
- * 重复档案只提示核验，页面不提供自动合并入口。
+ * 重复档案只提示核验；人工合并需显式选择主档，服务端拦截已有业务事实的源档。
  */
 export function StudentDirectory({
   onUnauthorized,
@@ -255,6 +257,7 @@ export function StudentDirectory({
           id={detailId}
           canMaintain={!!capabilities.data.canMaintain}
           canAssign={!!capabilities.data.canAssign}
+          onMerged={setDetailId}
           onClose={() => setDetailId(null)}
           onSaved={() => void students.refetch()}
           onUnauthorized={onUnauthorized}
@@ -447,6 +450,7 @@ export function StudentDetail({
   id,
   canMaintain,
   canAssign,
+  onMerged,
   onClose,
   onSaved,
   onUnauthorized,
@@ -454,6 +458,7 @@ export function StudentDetail({
   id: string;
   canMaintain: boolean;
   canAssign: boolean;
+  onMerged: (studentId: string) => void;
   onClose: () => void;
   onSaved: () => void;
   onUnauthorized: () => void;
@@ -461,6 +466,10 @@ export function StudentDetail({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [selectedOwner, setSelectedOwner] = useState<string>();
+  const [mergeOpen, setMergeOpen] = useState(false);
+  const pendingReverse = useRef(
+    new Map<string, { fingerprint: string; requestId: string }>(),
+  );
   const pendingAssignment = useRef<{
     fingerprint: string;
     requestId: string;
@@ -498,6 +507,22 @@ export function StudentDetail({
         throw new Error("登录已失效，请重新登录");
       }
       if (!response.ok || !data) throw new Error("无法读取同校有效学员负责人");
+      return data;
+    },
+  });
+  const mergeHistory = useQuery({
+    queryKey: ["archive-student-merges", id],
+    enabled: !!detail.data?.id,
+    queryFn: async ({ signal }) => {
+      const { data, response } = await api.GET(
+        "/api/archive/students/{id}/merges",
+        { params: { path: { id } }, signal },
+      );
+      if (response.status === 401) {
+        onUnauthorized();
+        throw new Error("登录已失效，请重新登录");
+      }
+      if (!response.ok || !data) throw new Error("无法读取学员合并记录");
       return data;
     },
   });
@@ -580,6 +605,56 @@ export function StudentDetail({
     }
   }
 
+  async function reverseMerge(item: StudentMergeHistory) {
+    if (!item.sourceStudentId || item.sourceVersion == null) return;
+    const reason = window.prompt("请输入撤销合并原因")?.trim();
+    if (!reason) return;
+    const fingerprint = `${item.sourceVersion}|${reason}`;
+    const previous = pendingReverse.current.get(item.sourceStudentId);
+    const requestId =
+      previous?.fingerprint === fingerprint
+        ? previous.requestId
+        : crypto.randomUUID();
+    pendingReverse.current.set(item.sourceStudentId, {
+      fingerprint,
+      requestId,
+    });
+    setBusy(true);
+    setError("");
+    try {
+      const token = await csrf();
+      const { response } = await api.POST(
+        "/api/archive/students/{id}/merge/reverse",
+        {
+          params: { path: { id: item.sourceStudentId } },
+          headers: { [token.headerName!]: token.token! },
+          body: {
+            requestId,
+            expectedSourceVersion: item.sourceVersion,
+            reason,
+          },
+        },
+      );
+      if (response.status === 401) {
+        onUnauthorized();
+        return;
+      }
+      if (!response.ok) {
+        setError(
+          "撤销失败：请核对源档版本、权限及是否已有新业务关联。原请求可重试。",
+        );
+        return;
+      }
+      pendingReverse.current.delete(item.sourceStudentId);
+      await Promise.all([detail.refetch(), mergeHistory.refetch()]);
+      onSaved();
+    } catch {
+      setError("撤销结果暂时未知，请用相同原因重试或刷新合并记录核对。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <Drawer
       title={detail.data ? `学员 ${detail.data.studentNo}` : "学员档案"}
@@ -600,6 +675,13 @@ export function StudentDetail({
               showIcon
               title="当前显示脱敏值"
               description="字段级权限决定每个敏感字段是否可见；下方标「无字段权限」的项需要单独授权。"
+            />
+          ) : null}
+          {detail.data.mergedIntoStudentId ? (
+            <Alert
+              type="warning"
+              showIcon
+              title={`该档案已合并至 ${detail.data.mergedIntoStudentId}，当前只保留源档历史，不能再维护。`}
             />
           ) : null}
           <Descriptions column={1} size="small" bordered>
@@ -650,7 +732,7 @@ export function StudentDetail({
               {detail.data.status === "ACTIVE" ? "在读" : "停用"}
             </Descriptions.Item>
           </Descriptions>
-          {canAssign ? (
+          {canAssign && !detail.data.mergedIntoStudentId ? (
             <Space style={{ marginTop: 16 }}>
               <Select
                 aria-label="学员负责人"
@@ -675,6 +757,57 @@ export function StudentDetail({
               </Button>
             </Space>
           ) : null}
+          {canMaintain && !detail.data.mergedIntoStudentId ? (
+            <Space style={{ marginTop: 16 }}>
+              <Button disabled={busy} onClick={() => setMergeOpen(true)}>
+                合并重复档案
+              </Button>
+              <Typography.Text type="secondary">
+                仅同校同负责人且无报名、资金或客户来源事实的源档可合并；不搬迁联系人和历史。
+              </Typography.Text>
+            </Space>
+          ) : null}
+          {(mergeHistory.data?.length ?? 0) > 0 ? (
+            <>
+              <Typography.Title level={5} style={{ marginTop: 16 }}>
+                合并记录
+              </Typography.Title>
+              <Table
+                rowKey="mergeId"
+                size="small"
+                pagination={false}
+                dataSource={mergeHistory.data ?? []}
+                columns={[
+                  { title: "源学员号", dataIndex: "sourceStudentNo" },
+                  { title: "源档姓名", dataIndex: "sourceName" },
+                  { title: "合并时间", dataIndex: "mergedAt" },
+                  {
+                    title: "状态",
+                    dataIndex: "reversedAt",
+                    render: (value: string | null) =>
+                      value ? (
+                        <Tag>已撤销</Tag>
+                      ) : (
+                        <Tag color="blue">合并中</Tag>
+                      ),
+                  },
+                  {
+                    title: "操作",
+                    render: (_: unknown, item: StudentMergeHistory) =>
+                      item.reversedAt ? null : (
+                        <Button
+                          size="small"
+                          disabled={busy || !canMaintain}
+                          onClick={() => void reverseMerge(item)}
+                        >
+                          撤销合并
+                        </Button>
+                      ),
+                  },
+                ]}
+              />
+            </>
+          ) : null}
           <Typography.Title level={5}>家长与联系人</Typography.Title>
           <Table
             rowKey="id"
@@ -698,7 +831,7 @@ export function StudentDetail({
             ]}
             locale={{ emptyText: "尚未登记联系人" }}
           />
-          {canMaintain ? (
+          {canMaintain && !detail.data.mergedIntoStudentId ? (
             <Space style={{ marginTop: 16 }}>
               <Button
                 disabled={busy}
@@ -717,6 +850,163 @@ export function StudentDetail({
           ) : null}
         </>
       ) : null}
+      {mergeOpen && detail.data ? (
+        <StudentMergeModal
+          source={detail.data}
+          onCancel={() => setMergeOpen(false)}
+          onDone={(primaryStudentId) => {
+            setMergeOpen(false);
+            onMerged(primaryStudentId);
+            onSaved();
+          }}
+          onUnauthorized={onUnauthorized}
+        />
+      ) : null}
     </Drawer>
+  );
+}
+
+function StudentMergeModal({
+  source,
+  onCancel,
+  onDone,
+  onUnauthorized,
+}: {
+  source: StudentProfile;
+  onCancel: () => void;
+  onDone: (primaryStudentId: string) => void;
+  onUnauthorized: () => void;
+}) {
+  const [keyword, setKeyword] = useState("");
+  const [primaryId, setPrimaryId] = useState<string>();
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const pending = useRef<{ fingerprint: string; requestId: string } | null>(
+    null,
+  );
+  const candidates = useQuery({
+    queryKey: [
+      "archive-student-merge-candidates",
+      source.schoolId,
+      keyword.trim(),
+    ],
+    enabled: keyword.trim().length >= 2,
+    queryFn: async ({ signal }) => {
+      const { data, response } = await api.GET("/api/archive/students", {
+        params: { query: { search: keyword.trim(), page: 0, size: 20 } },
+        signal,
+      });
+      if (response.status === 401) {
+        onUnauthorized();
+        throw new Error("登录已失效，请重新登录");
+      }
+      if (!response.ok || !data) throw new Error("无法检索可选主档");
+      return (data.items ?? []).filter(
+        (item) =>
+          item.id !== source.id &&
+          item.schoolId === source.schoolId &&
+          (item.ownerAccountId ?? null) === (source.ownerAccountId ?? null) &&
+          item.status === "ACTIVE",
+      );
+    },
+  });
+
+  async function merge() {
+    if (!primaryId || !reason.trim() || busy) return;
+    const primary = candidates.data?.find((item) => item.id === primaryId);
+    if (!primary || primary.version == null || source.version == null) {
+      setError("请重新检索主档并确认版本信息。");
+      return;
+    }
+    const fingerprint = `${primaryId}|${source.version}|${primary.version}|${reason.trim()}`;
+    const requestId =
+      pending.current?.fingerprint === fingerprint
+        ? pending.current.requestId
+        : crypto.randomUUID();
+    pending.current = { fingerprint, requestId };
+    setBusy(true);
+    setError("");
+    try {
+      const token = await csrf();
+      const { response } = await api.POST("/api/archive/students/{id}/merge", {
+        params: { path: { id: source.id! } },
+        headers: { [token.headerName!]: token.token! },
+        body: {
+          requestId,
+          primaryStudentId: primaryId,
+          expectedSourceVersion: source.version,
+          expectedPrimaryVersion: primary.version,
+          reason: reason.trim(),
+        },
+      });
+      if (response.status === 401) {
+        onUnauthorized();
+        return;
+      }
+      if (!response.ok) {
+        setError(
+          response.status === 409
+            ? "合并未完成：档案版本已变化，或源档已有报名、收款、资金流水或客户来源记录。"
+            : "合并失败，请核对同校同负责人权限及业务状态。",
+        );
+        return;
+      }
+      pending.current = null;
+      onDone(primaryId);
+    } catch {
+      setError("合并结果暂时未知，请保持主档与原因不变后使用相同请求重试。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      title={`合并重复档案 · ${source.studentNo ?? ""} ${source.name ?? ""}`}
+      open
+      onCancel={onCancel}
+      onOk={() => void merge()}
+      okText="确认合并"
+      cancelText="取消"
+      confirmLoading={busy}
+      okButtonProps={{ disabled: !primaryId || !reason.trim() || busy }}
+      mask={{ closable: !busy }}
+    >
+      {error ? <Alert title={error} type="error" showIcon /> : null}
+      {candidates.error ? (
+        <Alert title={candidates.error.message} type="error" showIcon />
+      ) : null}
+      <Typography.Paragraph type="secondary">
+        合并只建立可撤销的档案关系，不搬迁资料；有报名、资金或客户来源事实的源档暂不允许合并。
+      </Typography.Paragraph>
+      <Form layout="vertical">
+        <Form.Item label="主档（姓名、学员号或电话检索）" required>
+          <Select
+            aria-label="合并主档"
+            showSearch
+            filterOption={false}
+            searchValue={keyword}
+            onSearch={setKeyword}
+            value={primaryId}
+            onChange={setPrimaryId}
+            loading={candidates.isFetching}
+            placeholder="输入至少 2 个字符，检索同校同负责人的有效档案"
+            options={(candidates.data ?? []).map((item: StudentSummary) => ({
+              value: item.id!,
+              label: `${item.studentNo ?? ""} ${item.name ?? "未命名学员"}`,
+            }))}
+          />
+        </Form.Item>
+        <Form.Item label="合并原因" required>
+          <Input.TextArea
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+            maxLength={200}
+            rows={3}
+          />
+        </Form.Item>
+      </Form>
+    </Modal>
   );
 }

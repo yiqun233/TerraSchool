@@ -360,11 +360,26 @@ class RejectedRequestAudit {
         /* 不保存原始路径文本。 */
       }
     } else if (path.equals("/api/archive/students")) action = FailureAudit.Action.STUDENT_CREATE;
-    else if (path.matches("/api/archive/students/[^/]+/(update|status|owner)")) {
-      action = path.endsWith("/owner")
-          ? FailureAudit.Action.STUDENT_ASSIGN
-          : FailureAudit.Action.STUDENT_UPDATE;
-      String suffix = path.endsWith("/update") ? "/update" : path.endsWith("/owner") ? "/owner" : "/status";
+    else if (path.matches("/api/archive/students/[^/]+/merge(/reverse)?")) {
+      action =
+          path.endsWith("/reverse")
+              ? FailureAudit.Action.STUDENT_MERGE_REVERSE
+              : FailureAudit.Action.STUDENT_MERGE;
+      String suffix = path.endsWith("/reverse") ? "/merge/reverse" : "/merge";
+      try {
+        resource =
+            UUID.fromString(
+                path.substring("/api/archive/students/".length(), path.length() - suffix.length()));
+      } catch (IllegalArgumentException invalid) {
+        /* 不保存原始路径文本。 */
+      }
+    } else if (path.matches("/api/archive/students/[^/]+/(update|status|owner)")) {
+      action =
+          path.endsWith("/owner")
+              ? FailureAudit.Action.STUDENT_ASSIGN
+              : FailureAudit.Action.STUDENT_UPDATE;
+      String suffix =
+          path.endsWith("/update") ? "/update" : path.endsWith("/owner") ? "/owner" : "/status";
       try {
         resource =
             UUID.fromString(

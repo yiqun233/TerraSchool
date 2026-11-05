@@ -23,7 +23,9 @@ public record StudentProfile(
     long version,
     List<StudentContact> contacts,
     boolean sensitiveFieldsMasked,
-    List<String> maskedFields) {
+    List<String> maskedFields,
+    UUID mergedIntoStudentId,
+    String mergedAt) {
   public StudentProfile {
     contacts = List.copyOf(contacts);
     maskedFields = maskedFields == null ? List.of() : List.copyOf(maskedFields);

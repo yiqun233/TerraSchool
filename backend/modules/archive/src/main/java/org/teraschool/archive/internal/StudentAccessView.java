@@ -26,7 +26,9 @@ public class StudentAccessView implements StudentAccess {
     if (studentId == null) throw new IllegalArgumentException("需要学员");
     var row =
         sql.fetchOne(
-            "select id,school_id,student_no,name from archive.student where id=?", studentId);
+            "select id,school_id,student_no,name from archive.student"
+                + " where id=? and merged_into_id is null",
+            studentId);
     if (row == null) throw new AccessDeniedException("学员档案不存在或不可访问");
     return new StudentRef(
         row.get("id", UUID.class),

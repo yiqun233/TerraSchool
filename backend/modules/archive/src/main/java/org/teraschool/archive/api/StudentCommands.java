@@ -16,4 +16,8 @@ public interface StudentCommands {
   StudentProfile changeStatus(UUID id, ChangeStudentStatus command);
 
   StudentProfile assignOwner(UUID id, AssignStudent command);
+
+  StudentMergeResult merge(UUID sourceStudentId, MergeStudent command);
+
+  StudentMergeResult reverseMerge(UUID sourceStudentId, ReverseStudentMerge command);
 }

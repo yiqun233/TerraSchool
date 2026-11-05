@@ -18,4 +18,6 @@ public interface StudentQueries {
    * <p>返回的是完整 CSV 文本（含表头），调用方直接作为附件返回，不在服务端落文件。
    */
   String exportCsv(UUID schoolId);
+
+  java.util.List<StudentMergeHistory> mergeHistory(UUID primaryStudentId);
 }

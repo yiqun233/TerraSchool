@@ -38,6 +38,7 @@ class StudentProfileTest {
   @LocalServerPort int port;
   @Autowired StudentCommands commands;
   @Autowired StudentQueries queries;
+  @Autowired StudentAccess studentAccess;
   @Autowired org.jooq.DSLContext sql;
   @Autowired TenantTransactions tx;
 
@@ -609,5 +610,69 @@ class StudentProfileTest {
     assertThat(mismatch.statusCode()).isEqualTo(409);
     assertThat(json.readTree(mismatch.body()).get("code").asText())
         .isEqualTo("IDEMPOTENCY_MISMATCH");
+  }
+
+  @Test
+  void mergeUnlinkedDuplicateIsReversibleAndFinancialFactsBlockMerge() throws Exception {
+    var source = asActor(MAINTAINER, () -> commands.create(command("待并档学员", null, null)).profile());
+    var primary = asActor(MAINTAINER, () -> commands.create(command("主档学员", null, null)).profile());
+    var merged =
+        asActor(
+            MAINTAINER,
+            () ->
+                commands.merge(
+                    source.id(),
+                    new MergeStudent(
+                        UUID.randomUUID(),
+                        primary.id(),
+                        source.version(),
+                        primary.version(),
+                        "确认重复")));
+    assertThat(merged.sourceStudentId()).isEqualTo(source.id());
+    assertThat(merged.primaryStudentId()).isEqualTo(primary.id());
+    assertThat(merged.sourceVersion()).isEqualTo(source.version() + 1);
+    assertThat(asActor(MAINTAINER, () -> queries.list(0, 100, "待并档学员")).total()).isZero();
+    assertThat(asActor(MAINTAINER, () -> queries.mergeHistory(primary.id())))
+        .singleElement()
+        .satisfies(item -> assertThat(item.sourceStudentId()).isEqualTo(source.id()));
+    assertThatThrownBy(() -> asActor(MAINTAINER, () -> studentAccess.require(source.id())))
+        .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
+
+    var reversed =
+        asActor(
+            MAINTAINER,
+            () ->
+                commands.reverseMerge(
+                    source.id(),
+                    new ReverseStudentMerge(UUID.randomUUID(), merged.sourceVersion(), "人工核验后撤销")));
+    assertThat(reversed.sourceStudentId()).isEqualTo(source.id());
+    assertThat(asActor(MAINTAINER, () -> queries.list(0, 100, "待并档学员")).total()).isEqualTo(1);
+    assertThat(asActor(MAINTAINER, () -> queries.mergeHistory(primary.id()).get(0).reversedAt()))
+        .isNotNull();
+
+    var funded = asActor(MAINTAINER, () -> commands.create(command("有资金学员", null, null)).profile());
+    update(
+        "insert into funds.account_entry(tenant_id,student_id,kind,amount,source_id)"
+            + " values (?,?,'RECEIPT',?,?)",
+        TENANT,
+        funded.id(),
+        new java.math.BigDecimal("10.00"),
+        UUID.randomUUID());
+    var target = asActor(MAINTAINER, () -> commands.create(command("备用主档", null, null)).profile());
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    MAINTAINER,
+                    () ->
+                        commands.merge(
+                            funded.id(),
+                            new MergeStudent(
+                                UUID.randomUUID(),
+                                target.id(),
+                                funded.version(),
+                                target.version(),
+                                "重复档案"))))
+        .isInstanceOf(StudentConflict.class)
+        .hasMessageContaining("MERGE_HAS_LINKED_FACTS");
   }
 }

@@ -40,6 +40,11 @@ class StudentHttp {
     return queries.detail(id);
   }
 
+  @GetMapping("/api/archive/students/{id}/merges")
+  java.util.List<StudentMergeHistory> mergeHistory(@PathVariable UUID id) {
+    return queries.mergeHistory(id);
+  }
+
   @PostMapping(value = "/api/archive/students", consumes = "application/json")
   @ResponseStatus(org.springframework.http.HttpStatus.CREATED)
   StudentCreation create(@RequestBody CreateStudent command) {
@@ -61,6 +66,16 @@ class StudentHttp {
   @PostMapping(value = "/api/archive/students/{id}/owner", consumes = "application/json")
   StudentProfile assignOwner(@PathVariable UUID id, @RequestBody AssignStudent command) {
     return commands.assignOwner(id, command);
+  }
+
+  @PostMapping(value = "/api/archive/students/{id}/merge", consumes = "application/json")
+  StudentMergeResult merge(@PathVariable UUID id, @RequestBody MergeStudent command) {
+    return commands.merge(id, command);
+  }
+
+  @PostMapping(value = "/api/archive/students/{id}/merge/reverse", consumes = "application/json")
+  StudentMergeResult reverseMerge(@PathVariable UUID id, @RequestBody ReverseStudentMerge command) {
+    return commands.reverseMerge(id, command);
   }
 
   /** 导出学员 CSV：字段按字段级授权脱敏，导出写审计。 */

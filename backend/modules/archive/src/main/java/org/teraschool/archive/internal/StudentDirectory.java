@@ -47,6 +47,7 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
   private final org.teraschool.organization.api.OrganizationQueries organizationQueries;
 
   private final org.teraschool.identity.api.FieldAccess fieldAccess;
+  private final List<StudentMergeGuard> mergeGuards;
 
   public StudentDirectory(
       CurrentActor actors,
@@ -54,13 +55,15 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
       DSLContext sql,
       SchoolAccess schools,
       org.teraschool.organization.api.OrganizationQueries organizationQueries,
-      org.teraschool.identity.api.FieldAccess fieldAccess) {
+      org.teraschool.identity.api.FieldAccess fieldAccess,
+      List<StudentMergeGuard> mergeGuards) {
     this.actors = actors;
     this.tx = tx;
     this.sql = sql;
     this.schools = schools;
     this.organizationQueries = organizationQueries;
     this.fieldAccess = fieldAccess;
+    this.mergeGuards = List.copyOf(mergeGuards);
   }
 
   // ---------------------------------------------------------------- 查询
@@ -79,7 +82,7 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
         scope.tenantId(),
         () -> {
           var filter =
-              " from archive.student s where s.school_id in ("
+              " from archive.student s where s.merged_into_id is null and s.school_id in ("
                   + marks(scope.readableSchoolIds().size())
                   + ") and (s.name ilike ? or s.student_no ilike ?";
           var args = new ArrayList<Object>(scope.readableSchoolIds());
@@ -284,6 +287,7 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
           schools.lockTenant(scope.tenantId());
           var verified = actors.requireResourceScopeInTransaction("STUDENT");
           var current = requireReadable(verified, id);
+          requireUnmerged(current);
           var schoolId = current.get("school_id", UUID.class);
           if (!verified.maintainableSchoolIds().contains(schoolId))
             throw new AccessDeniedException("无学员档案维护权限");
@@ -388,6 +392,7 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
                   verifiedScope, previousStudent, requireReadable(verifiedScope, previousStudent));
             }
             var current = requireReadable(verifiedScope, id);
+            requireUnmerged(current);
             var schoolId = current.get("school_id", UUID.class);
             if (!verifiedAssign.schools().contains(schoolId))
               throw new AccessDeniedException("无该校学员分派权限");
@@ -433,6 +438,257 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
     }
   }
 
+  @Override
+  public StudentMergeResult merge(UUID sourceId, MergeStudent command) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      if (sourceId == null
+          || command == null
+          || command.requestId() == null
+          || command.primaryStudentId() == null
+          || command.expectedSourceVersion() == null
+          || command.expectedPrimaryVersion() == null)
+        throw new IllegalArgumentException("需要源学员、主档、请求身份和版本");
+      if (sourceId.equals(command.primaryStudentId()))
+        throw new IllegalArgumentException("源学员与主档不能相同");
+      var reason = command.reason() == null ? null : command.reason().strip();
+      if (reason == null || reason.isEmpty() || reason.length() > 200)
+        throw new IllegalArgumentException("合并原因必填且不能超过 200 字");
+      var scope = actors.requireResourceScope("STUDENT");
+      var fingerprint =
+          fingerprint(
+              "MERGE",
+              sourceId.toString(),
+              command.primaryStudentId().toString(),
+              command.expectedSourceVersion().toString(),
+              command.expectedPrimaryVersion().toString(),
+              reason);
+      return tx.execute(
+          scope.tenantId(),
+          () -> {
+            schools.lockTenant(scope.tenantId());
+            var verified = actors.requireResourceScopeInTransaction("STUDENT");
+            sql.fetch(
+                "select id from archive.student where id in (?,?) order by id for update",
+                sourceId,
+                command.primaryStudentId());
+            var existing =
+                sql.fetchOne(
+                    "select action,merge_id,fingerprint from archive.student_merge_request"
+                        + " where tenant_id=? and actor_id=? and request_id=?",
+                    verified.tenantId(),
+                    verified.accountId(),
+                    command.requestId());
+            if (existing != null) {
+              if (!"MERGE".equals(existing.get("action", String.class))
+                  || !fingerprint.equals(existing.get("fingerprint", String.class)))
+                throw new StudentConflict("IDEMPOTENCY_MISMATCH");
+              return mergeResult(existing.get("merge_id", UUID.class));
+            }
+            var source = requireReadable(verified, sourceId);
+            var primary = requireReadable(verified, command.primaryStudentId());
+            var schoolId = source.get("school_id", UUID.class);
+            if (!verified.maintainableSchoolIds().contains(schoolId)
+                || !verified.maintainableSchoolIds().contains(primary.get("school_id", UUID.class)))
+              throw new AccessDeniedException("无学员档案维护权限");
+            if (!Objects.equals(schoolId, primary.get("school_id", UUID.class)))
+              throw new StudentConflict("SCHOOL_MISMATCH");
+            if (!Objects.equals(
+                source.get("owner_id", UUID.class), primary.get("owner_id", UUID.class)))
+              throw new StudentConflict("OWNER_MISMATCH");
+            if (!"ACTIVE".equals(source.get("status", String.class))
+                || !"ACTIVE".equals(primary.get("status", String.class)))
+              throw new StudentConflict("STUDENT_NOT_ACTIVE");
+            if (source.get("merged_into_id", UUID.class) != null
+                || primary.get("merged_into_id", UUID.class) != null)
+              throw new StudentConflict("STUDENT_ALREADY_MERGED");
+            if (!source.get("version", Long.class).equals(command.expectedSourceVersion())
+                || !primary.get("version", Long.class).equals(command.expectedPrimaryVersion()))
+              throw new StudentConflict("VERSION_CONFLICT");
+            if (!schools.require(schoolId).active())
+              throw new AccessDeniedException("学校已停用，不能合并学员档案");
+            var blockers =
+                mergeGuards.stream()
+                    .map(guard -> guard.blocker(sourceId))
+                    .filter(Objects::nonNull)
+                    .distinct()
+                    .toList();
+            if (!blockers.isEmpty()) throw new StudentConflict("MERGE_HAS_LINKED_FACTS");
+            if (sql.fetchExists(
+                sql.selectOne().from("archive.student").where("merged_into_id=?", sourceId)))
+              throw new StudentConflict("MERGE_SOURCE_HAS_CHILDREN");
+            var mergeId = UUID.randomUUID();
+            int updated =
+                sql.execute(
+                    "update archive.student set merged_into_id=?,merged_at=CURRENT_TIMESTAMP,"
+                        + "version=version+1,updated_at=CURRENT_TIMESTAMP where id=? and version=?"
+                        + " and merged_into_id is null",
+                    command.primaryStudentId(),
+                    sourceId,
+                    command.expectedSourceVersion());
+            if (updated != 1) throw new StudentConflict("VERSION_CONFLICT");
+            sql.execute(
+                "insert into archive.student_merge(id,tenant_id,source_student_id,primary_student_id,"
+                    + "actor_id,reason) values (?,?,?,?,?,?)",
+                mergeId,
+                verified.tenantId(),
+                sourceId,
+                command.primaryStudentId(),
+                verified.accountId(),
+                reason);
+            sql.execute(
+                "insert into archive.student_merge_request(tenant_id,actor_id,request_id,"
+                    + "source_student_id,action,merge_id,fingerprint) values (?,?,?,?,'MERGE',?,?)",
+                verified.tenantId(),
+                verified.accountId(),
+                command.requestId(),
+                sourceId,
+                mergeId,
+                fingerprint);
+            audit(
+                verified,
+                "STUDENT_MERGED",
+                sourceId,
+                schoolId,
+                "primary=" + command.primaryStudentId());
+            return mergeResult(mergeId);
+          });
+    }
+  }
+
+  @Override
+  public StudentMergeResult reverseMerge(UUID sourceId, ReverseStudentMerge command) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      if (sourceId == null
+          || command == null
+          || command.requestId() == null
+          || command.expectedSourceVersion() == null)
+        throw new IllegalArgumentException("需要源学员、请求身份和版本");
+      var reason = command.reason() == null ? null : command.reason().strip();
+      if (reason == null || reason.isEmpty() || reason.length() > 200)
+        throw new IllegalArgumentException("撤销原因必填且不能超过 200 字");
+      var scope = actors.requireResourceScope("STUDENT");
+      var fingerprint =
+          fingerprint(
+              "REVERSE", sourceId.toString(), command.expectedSourceVersion().toString(), reason);
+      return tx.execute(
+          scope.tenantId(),
+          () -> {
+            schools.lockTenant(scope.tenantId());
+            var verified = actors.requireResourceScopeInTransaction("STUDENT");
+            var existing =
+                sql.fetchOne(
+                    "select action,merge_id,fingerprint from archive.student_merge_request"
+                        + " where tenant_id=? and actor_id=? and request_id=?",
+                    verified.tenantId(),
+                    verified.accountId(),
+                    command.requestId());
+            if (existing != null) {
+              if (!"REVERSE".equals(existing.get("action", String.class))
+                  || !fingerprint.equals(existing.get("fingerprint", String.class)))
+                throw new StudentConflict("IDEMPOTENCY_MISMATCH");
+              return mergeResult(existing.get("merge_id", UUID.class));
+            }
+            var source = requireReadable(verified, sourceId);
+            var schoolId = source.get("school_id", UUID.class);
+            if (!verified.maintainableSchoolIds().contains(schoolId))
+              throw new AccessDeniedException("无学员档案维护权限");
+            if (!command.expectedSourceVersion().equals(source.get("version", Long.class)))
+              throw new StudentConflict("VERSION_CONFLICT");
+            var merge =
+                sql.fetchOne(
+                    "select id,primary_student_id from archive.student_merge"
+                        + " where source_student_id=? and reversed_at is null for update",
+                    sourceId);
+            if (merge == null
+                || !Objects.equals(
+                    merge.get("primary_student_id", UUID.class),
+                    source.get("merged_into_id", UUID.class)))
+              throw new StudentConflict("MERGE_NOT_ACTIVE");
+            if (!mergeGuards.stream()
+                .map(guard -> guard.blocker(sourceId))
+                .filter(Objects::nonNull)
+                .toList()
+                .isEmpty()) throw new StudentConflict("MERGE_HAS_LINKED_FACTS");
+            var updated =
+                sql.execute(
+                    "update archive.student set merged_into_id=null,merged_at=null,version=version+1,"
+                        + "updated_at=CURRENT_TIMESTAMP where id=? and version=? and merged_into_id=?",
+                    sourceId,
+                    command.expectedSourceVersion(),
+                    merge.get("primary_student_id", UUID.class));
+            if (updated != 1) throw new StudentConflict("VERSION_CONFLICT");
+            sql.execute(
+                "update archive.student_merge set reversed_at=CURRENT_TIMESTAMP,reversed_by=?,"
+                    + "reverse_reason=? where id=? and reversed_at is null",
+                verified.accountId(),
+                reason,
+                merge.get("id", UUID.class));
+            sql.execute(
+                "insert into archive.student_merge_request(tenant_id,actor_id,request_id,"
+                    + "source_student_id,action,merge_id,fingerprint) values (?,?,?,?,'REVERSE',?,?)",
+                verified.tenantId(),
+                verified.accountId(),
+                command.requestId(),
+                sourceId,
+                merge.get("id", UUID.class),
+                fingerprint);
+            audit(verified, "STUDENT_MERGE_REVERSED", sourceId, schoolId, "reason_recorded");
+            return mergeResult(merge.get("id", UUID.class));
+          });
+    }
+  }
+
+  @Override
+  public List<StudentMergeHistory> mergeHistory(UUID primaryStudentId) {
+    if (primaryStudentId == null) throw new IllegalArgumentException("需要主档学员");
+    var scope = actors.requireResourceScope("STUDENT");
+    return tx.execute(
+        scope.tenantId(),
+        () -> {
+          var primary = requireReadable(scope, primaryStudentId);
+          var schoolId = primary.get("school_id", UUID.class);
+          return sql.fetch(
+                  "select m.id,m.source_student_id,s.student_no,s.name,s.version,m.created_at,m.reversed_at"
+                      + " from archive.student_merge m join archive.student s"
+                      + " on s.id=m.source_student_id and s.tenant_id=m.tenant_id"
+                      + " where m.primary_student_id=? order by m.created_at desc,m.id",
+                  primaryStudentId)
+              .map(
+                  row ->
+                      new StudentMergeHistory(
+                          row.get("id", UUID.class),
+                          row.get("source_student_id", UUID.class),
+                          row.get("student_no", String.class),
+                          row.get("name", String.class),
+                          row.get("version", Long.class),
+                          row.get("created_at", java.time.OffsetDateTime.class).toString(),
+                          row.get("reversed_at", java.time.OffsetDateTime.class) == null
+                              ? null
+                              : row.get("reversed_at", java.time.OffsetDateTime.class).toString()));
+        });
+  }
+
+  private StudentMergeResult mergeResult(UUID mergeId) {
+    var row =
+        sql.fetchOne(
+            "select m.id,m.source_student_id,m.primary_student_id,s.student_no,s.name,s.version as source_version,"
+                + "p.version as primary_version,m.created_at from archive.student_merge m"
+                + " join archive.student s on s.id=m.source_student_id and s.tenant_id=m.tenant_id"
+                + " join archive.student p on p.id=m.primary_student_id and p.tenant_id=m.tenant_id"
+                + " where m.id=?",
+            mergeId);
+    if (row == null) throw new StudentConflict("MERGE_NOT_FOUND");
+    return new StudentMergeResult(
+        mergeId,
+        row.get("source_student_id", UUID.class),
+        row.get("primary_student_id", UUID.class),
+        row.get("student_no", String.class),
+        row.get("name", String.class),
+        row.get("source_version", Long.class),
+        row.get("primary_version", Long.class),
+        row.get("created_at", java.time.OffsetDateTime.class).toString());
+  }
+
   /**
    * 只变更启停状态。
    *
@@ -452,6 +708,7 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
           schools.lockTenant(scope.tenantId());
           var verified = actors.requireResourceScopeInTransaction("STUDENT");
           var current = requireReadable(verified, id);
+          requireUnmerged(current);
           var schoolId = current.get("school_id", UUID.class);
           if (!verified.maintainableSchoolIds().contains(schoolId))
             throw new AccessDeniedException("无学员档案维护权限");
@@ -674,13 +931,18 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
     var row =
         sql.fetchOne(
             "select id,student_no,name,name_english,sex,birthday,cert_type,cert_code,phone,email,"
-                + "school_id,campus_id,owner_id,status,version from archive.student"
+                + "school_id,campus_id,owner_id,status,version,merged_into_id,merged_at from archive.student"
                 + " where id=? and school_id in ("
                 + marks(scope.readableSchoolIds().size())
                 + ")",
             args.toArray());
     if (row == null) throw new AccessDeniedException("学员档案不存在或不可访问");
     return row;
+  }
+
+  private void requireUnmerged(Record row) {
+    if (row.get("merged_into_id", UUID.class) != null)
+      throw new StudentConflict("STUDENT_ALREADY_MERGED");
   }
 
   /** 详情读取：返回完整敏感字段时在同一事务写入独立审计，便于事后追溯谁看过。 */
@@ -743,7 +1005,11 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
         row.get("version", Long.class),
         contacts,
         !full,
-        maskedFields);
+        maskedFields,
+        row.get("merged_into_id", UUID.class),
+        row.get("merged_at", java.time.OffsetDateTime.class) == null
+            ? null
+            : row.get("merged_at", java.time.OffsetDateTime.class).toString());
   }
 
   private String masked(boolean full, java.util.function.UnaryOperator<String> mask, String value) {
@@ -894,7 +1160,7 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
     }
     return sql.fetch(
             "select s.id,s.student_no,s.name,s.birthday from archive.student s"
-                + " where s.school_id in ("
+                + " where s.merged_into_id is null and s.school_id in ("
                 + marks(scope.readableSchoolIds().size())
                 + ") and s.name=? and s.id<>? and ("
                 + condition
@@ -974,7 +1240,7 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
             var rows =
                 sql.fetch(
                     "select student_no,name,sex,birthday,cert_code,phone,email from archive.student"
-                        + " where school_id=? order by student_no limit 5001",
+                        + " where school_id=? and merged_into_id is null order by student_no limit 5001",
                     schoolId);
             org.teraschool.platform.api.CsvExport.requireComplete(rows.size());
             var csv = new StringBuilder();
