@@ -99,6 +99,12 @@ class Errors {
     return problem(409, error.code());
   }
 
+  @ExceptionHandler(org.teraschool.teaching.api.ScheduleConflict.class)
+  ResponseEntity<ProblemDetail> scheduleConflict(
+      org.teraschool.teaching.api.ScheduleConflict error) {
+    return problem(409, error.code());
+  }
+
   @ExceptionHandler(org.teraschool.migration.api.MigrationConflict.class)
   ResponseEntity<ProblemDetail> migrationConflict(
       org.teraschool.migration.api.MigrationConflict error) {

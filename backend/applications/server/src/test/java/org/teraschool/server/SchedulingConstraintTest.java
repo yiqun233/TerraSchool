@@ -132,6 +132,56 @@ class SchedulingConstraintTest {
   }
 
   @Test
+  void schoolClosureSkipsAllLessonsAndCanBeCancelledWithVersion() {
+    var classId = newClass();
+    var closure =
+        asActor(
+            OPS,
+            () ->
+                scheduling.createSchoolClosure(
+                    new CreateSchoolClosure(SCHOOL, "2026-11-14", "学校校历休息日")));
+    assertThat(closure.active()).isTrue();
+    var repeated =
+        asActor(
+            OPS,
+            () ->
+                scheduling.createSchoolClosure(
+                    new CreateSchoolClosure(SCHOOL, "2026-11-14", "学校校历休息日")));
+    assertThat(repeated.id()).isEqualTo(closure.id());
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    OPS,
+                    () ->
+                        scheduling.createSchoolClosure(
+                            new CreateSchoolClosure(SCHOOL, "2026-11-14", "其他原因"))))
+        .isInstanceOf(ScheduleConflict.class)
+        .hasMessage("SCHOOL_CLOSURE_EXISTS");
+
+    var preview = asActor(OPS, () -> scheduling.preview(classId, rule("2026-11-14", "2026-11-14")));
+    assertThat(preview.slots())
+        .singleElement()
+        .satisfies(
+            slot -> {
+              assertThat(slot.available()).isFalse();
+              assertThat(slot.reason()).isEqualTo("SCHOOL_CLOSED");
+              assertThat(slot.severity()).isEqualTo("HARD");
+            });
+    assertThatThrownBy(() -> asActor(OPS, () -> scheduling.cancelSchoolClosure(closure.id(), 1L)))
+        .isInstanceOf(ScheduleConflict.class)
+        .hasMessage("VERSION_CONFLICT");
+    var cancelled =
+        asActor(OPS, () -> scheduling.cancelSchoolClosure(closure.id(), closure.version()));
+    assertThat(cancelled.active()).isFalse();
+    assertThat(cancelled.version()).isEqualTo(1L);
+    var available =
+        asActor(OPS, () -> scheduling.preview(classId, rule("2026-11-14", "2026-11-14")));
+    assertThat(available.slots())
+        .singleElement()
+        .satisfies(slot -> assertThat(slot.available()).isTrue());
+  }
+
+  @Test
   void roomUnavailableBlocks() {
     var classId = newClass();
     asActor(

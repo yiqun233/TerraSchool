@@ -252,7 +252,16 @@ class RejectedRequestAudit {
         /* 不保存原始路径文本。 */
       }
     } else if (path.equals("/api/teaching/lessons")) action = FailureAudit.Action.LESSON_CREATE;
-    else if (path.matches(
+    else if (path.equals("/api/teaching/school-closures"))
+      action = FailureAudit.Action.SCHOOL_CLOSURE_CREATE;
+    else if (path.matches("/api/teaching/school-closures/[^/]+/cancel")) {
+      action = FailureAudit.Action.SCHOOL_CLOSURE_CANCEL;
+      try {
+        resource = UUID.fromString(path.split("/")[4]);
+      } catch (IllegalArgumentException invalid) {
+        /* 不记录原路径 */
+      }
+    } else if (path.matches(
         "/api/teaching/lessons/[^/]+/(publish|reschedule|swap|makeups|attendance|close)")) {
       action =
           path.endsWith("/publish")

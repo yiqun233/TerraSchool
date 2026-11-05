@@ -2,7 +2,7 @@ import { expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BlocksTab, PolicyTab } from "./SchedulingSettings";
+import { BlocksTab, PolicyTab, SchoolCalendarTab } from "./SchedulingSettings";
 
 const { get, post, csrf } = vi.hoisted(() => ({
   get: vi.fn(),
@@ -92,4 +92,50 @@ it("不可用时间列表展示资源与时段，无维护权限时不显示新�
   expect(await screen.findByText("教师：张老师")).toBeTruthy();
   expect(screen.getByText("休假")).toBeTruthy();
   expect(screen.queryByRole("button", { name: /新\s*增/ })).toBeNull();
+});
+
+it("登记停课日并按版本取消，保留校历结果", async () => {
+  vi.clearAllMocks();
+  csrf.mockResolvedValue({ headerName: "X-CSRF-TOKEN", token: "t" });
+  get.mockResolvedValue({
+    response: { ok: true, status: 200 },
+    data: [
+      {
+        id: "closure-1",
+        schoolId: "school-1",
+        closedOn: "2026-11-14",
+        reason: "校历休息日",
+        active: true,
+        version: 0,
+      },
+    ],
+  });
+  post.mockResolvedValue({ response: { ok: true, status: 200 }, data: {} });
+  const user = userEvent.setup({ pointerEventsCheck: 0 });
+  renderWithClient(
+    <SchoolCalendarTab
+      schoolId="school-1"
+      canMaintain
+      onError={vi.fn()}
+      onMessage={vi.fn()}
+    />,
+  );
+  expect(await screen.findByText("校历休息日")).toBeTruthy();
+  await user.type(screen.getByLabelText("停课日期"), "2026-11-14");
+  await user.type(screen.getByLabelText("原因"), "校历休息日");
+  await user.click(screen.getByRole("button", { name: "登记停课日" }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+  expect(post.mock.calls[0][0]).toBe("/api/teaching/school-closures");
+  expect(post.mock.calls[0][1].body).toEqual({
+    schoolId: "school-1",
+    closedOn: "2026-11-14",
+    reason: "校历休息日",
+  });
+  await user.click(screen.getByRole("button", { name: /取\s*消/ }));
+  await user.click(await screen.findByRole("button", { name: "取消停课" }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+  expect(post.mock.calls[1][0]).toBe(
+    "/api/teaching/school-closures/{id}/cancel",
+  );
+  expect(post.mock.calls[1][1].body).toEqual({ expectedVersion: 0 });
 });

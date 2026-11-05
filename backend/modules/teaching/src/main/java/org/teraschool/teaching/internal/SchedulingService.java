@@ -355,6 +355,159 @@ public class SchedulingService implements org.teraschool.teaching.api.Scheduling
     }
   }
 
+  @Override
+  public SchoolClosureView createSchoolClosure(CreateSchoolClosure command) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      var actor = actors.requireAction("TEACHING_MAINTAIN");
+      if (command == null || command.schoolId() == null)
+        throw new IllegalArgumentException("需要学校与停课日期");
+      var closedOn = date(command.closedOn(), "停课日期");
+      var reason = trim(command.reason(), 200);
+      if (reason == null) throw new IllegalArgumentException("需要填写停课原因");
+      return tx.execute(
+          actor.tenantId(),
+          () -> {
+            schools.lockTenant(actor.tenantId());
+            var verified = actors.requireActionInTransaction("TEACHING_MAINTAIN");
+            if (!verified.schools().contains(command.schoolId()))
+              throw new AccessDeniedException("无该学校的校历维护权限");
+            if (!schools.require(command.schoolId()).active())
+              throw new AccessDeniedException("学校已停用，不能维护校历");
+            var existing =
+                sql.fetchOne(
+                    "select id,reason,active,version from teaching.school_closure"
+                        + " where school_id=? and closed_on=? and active for update",
+                    command.schoolId(),
+                    closedOn);
+            if (existing != null) {
+              if (!reason.equals(existing.get("reason", String.class)))
+                throw new ScheduleConflict("SCHOOL_CLOSURE_EXISTS");
+              return schoolClosureView(existing, command.schoolId(), closedOn);
+            }
+            var id = UUID.randomUUID();
+            sql.execute(
+                "insert into teaching.school_closure(id,tenant_id,school_id,closed_on,reason,created_by)"
+                    + " values (?,?,?,?,?,?)",
+                id,
+                verified.tenantId(),
+                command.schoolId(),
+                closedOn,
+                reason,
+                verified.accountId());
+            sql.execute(
+                "insert into audit.teaching_event(tenant_id,actor_id,action,resource_id,school_id,changed_fields,trace_id)"
+                    + " values (?,?,'SCHOOL_CLOSURE_CREATED',?,?,?,?)",
+                verified.tenantId(),
+                verified.accountId(),
+                id,
+                command.schoolId(),
+                "closed_on:" + closedOn,
+                RequestTrace.id());
+            return requireSchoolClosure(id);
+          });
+    }
+  }
+
+  @Override
+  public List<SchoolClosureView> schoolClosures(UUID schoolId, String from, String to) {
+    var scope = actors.requireResourceScope("TEACHING");
+    if (schoolId == null || !scope.readableSchoolIds().contains(schoolId))
+      throw new AccessDeniedException("无该学校的校历读取权限");
+    var start = from == null || from.isBlank() ? LocalDate.now() : date(from, "开始日期");
+    var end = to == null || to.isBlank() ? start.plusDays(60) : date(to, "结束日期");
+    if (end.isBefore(start) || ChronoUnit.DAYS.between(start, end) > 366)
+      throw new ScheduleConflict("SCHOOL_CALENDAR_RANGE_INVALID");
+    return tx.execute(
+        scope.tenantId(),
+        () -> {
+          var verified = actors.requireResourceScopeInTransaction("TEACHING");
+          if (!verified.readableSchoolIds().contains(schoolId))
+            throw new AccessDeniedException("无该学校的校历读取权限");
+          return sql.fetch(
+                  "select id,school_id,closed_on,reason,active,version from teaching.school_closure"
+                      + " where school_id=? and closed_on between ? and ? order by closed_on,id limit 500",
+                  schoolId,
+                  start,
+                  end)
+              .map(this::schoolClosureView);
+        });
+  }
+
+  @Override
+  public SchoolClosureView cancelSchoolClosure(UUID id, Long expectedVersion) {
+    if (id == null || expectedVersion == null || expectedVersion < 0)
+      throw new IllegalArgumentException("需要校历记录和有效版本");
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      var actor = actors.requireAction("TEACHING_MAINTAIN");
+      return tx.execute(
+          actor.tenantId(),
+          () -> {
+            schools.lockTenant(actor.tenantId());
+            var verified = actors.requireActionInTransaction("TEACHING_MAINTAIN");
+            var row =
+                sql.fetchOne(
+                    "select id,school_id,closed_on,reason,active,version from teaching.school_closure"
+                        + " where id=? for update",
+                    id);
+            if (row == null) throw new ScheduleConflict("SCHOOL_CLOSURE_NOT_FOUND");
+            var schoolId = row.get("school_id", UUID.class);
+            if (!verified.schools().contains(schoolId))
+              throw new AccessDeniedException("无该学校的校历维护权限");
+            if (row.get("version", Long.class) != expectedVersion)
+              throw new ScheduleConflict("VERSION_CONFLICT");
+            if (!row.get("active", Boolean.class)) return schoolClosureView(row);
+            var updated =
+                sql.execute(
+                    "update teaching.school_closure set active=false,version=version+1,"
+                        + "cancelled_by=?,cancelled_at=CURRENT_TIMESTAMP where id=? and version=? and active",
+                    verified.accountId(),
+                    id,
+                    expectedVersion);
+            if (updated != 1) throw new ScheduleConflict("VERSION_CONFLICT");
+            sql.execute(
+                "insert into audit.teaching_event(tenant_id,actor_id,action,resource_id,school_id,changed_fields,trace_id)"
+                    + " values (?,?,'SCHOOL_CLOSURE_CANCELLED',?,?,?,?)",
+                verified.tenantId(),
+                verified.accountId(),
+                id,
+                schoolId,
+                "version:" + (expectedVersion + 1),
+                RequestTrace.id());
+            return requireSchoolClosure(id);
+          });
+    }
+  }
+
+  private SchoolClosureView requireSchoolClosure(UUID id) {
+    var row =
+        sql.fetchOne(
+            "select id,school_id,closed_on,reason,active,version from teaching.school_closure where id=?",
+            id);
+    if (row == null) throw new IllegalStateException("校历记录写入后不可见");
+    return schoolClosureView(row);
+  }
+
+  private SchoolClosureView schoolClosureView(org.jooq.Record row) {
+    return new SchoolClosureView(
+        row.get("id", UUID.class),
+        row.get("school_id", UUID.class),
+        date(row.get("closed_on", LocalDate.class)),
+        row.get("reason", String.class),
+        row.get("active", Boolean.class),
+        row.get("version", Long.class));
+  }
+
+  private SchoolClosureView schoolClosureView(
+      org.jooq.Record row, UUID schoolId, LocalDate closedOn) {
+    return new SchoolClosureView(
+        row.get("id", UUID.class),
+        schoolId,
+        date(closedOn),
+        row.get("reason", String.class),
+        row.get("active", Boolean.class),
+        row.get("version", Long.class));
+  }
+
   private SchedulePolicyView policyView(UUID schoolId) {
     var row =
         sql.fetchOne(
@@ -447,24 +600,37 @@ public class SchedulingService implements org.teraschool.teaching.api.Scheduling
     if (dates.size() > MAX_SLOTS) throw new ScheduleConflict("SCHEDULE_TOO_MANY_SLOTS");
 
     var policy = policy(schoolId);
+    var closedDays =
+        sql
+            .fetch(
+                "select closed_on from teaching.school_closure where school_id=? and active"
+                    + " and closed_on between ? and ?",
+                schoolId,
+                start,
+                end)
+            .map(closureRow -> closureRow.get("closed_on", LocalDate.class))
+            .stream()
+            .collect(java.util.stream.Collectors.toSet());
     var assignment =
         selectResources(classId, schoolId, rule, dates, startsAt, endsAt, policy, reservations);
     var slots = new ArrayList<ScheduleSlot>();
     for (var date : dates) {
       var clash =
-          assignment.failureReason() == null
-              ? conflict(
-                  classId,
-                  date,
-                  startsAt,
-                  endsAt,
-                  assignment.teacher().id(),
-                  assignment.teacher().name(),
-                  assignment.room().id(),
-                  assignment.room().name(),
-                  policy,
-                  reservations)
-              : new Clash(assignment.failureReason(), "HARD");
+          closedDays.contains(date)
+              ? new Clash("SCHOOL_CLOSED", "HARD")
+              : assignment.failureReason() == null
+                  ? conflict(
+                      classId,
+                      date,
+                      startsAt,
+                      endsAt,
+                      assignment.teacher().id(),
+                      assignment.teacher().name(),
+                      assignment.room().id(),
+                      assignment.room().name(),
+                      policy,
+                      reservations)
+                  : new Clash(assignment.failureReason(), "HARD");
       var hard = clash != null && "HARD".equals(clash.severity());
       slots.add(
           new ScheduleSlot(

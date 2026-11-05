@@ -228,4 +228,23 @@ class TeachingHttp {
   SchedulePolicyView savePolicy(@RequestParam UUID schoolId, @RequestBody SchedulePolicy command) {
     return scheduling.savePolicy(schoolId, command);
   }
+
+  @PostMapping(value = "/api/teaching/school-closures", consumes = "application/json")
+  @ResponseStatus(org.springframework.http.HttpStatus.CREATED)
+  SchoolClosureView createSchoolClosure(@RequestBody CreateSchoolClosure command) {
+    return scheduling.createSchoolClosure(command);
+  }
+
+  @GetMapping("/api/teaching/school-closures")
+  List<SchoolClosureView> schoolClosures(
+      @RequestParam UUID schoolId,
+      @RequestParam(defaultValue = "") String from,
+      @RequestParam(defaultValue = "") String to) {
+    return scheduling.schoolClosures(schoolId, from, to);
+  }
+
+  @PostMapping(value = "/api/teaching/school-closures/{id}/cancel", consumes = "application/json")
+  SchoolClosureView cancelSchoolClosure(@PathVariable UUID id, @RequestBody LessonVersion command) {
+    return scheduling.cancelSchoolClosure(id, command.expectedVersion());
+  }
 }

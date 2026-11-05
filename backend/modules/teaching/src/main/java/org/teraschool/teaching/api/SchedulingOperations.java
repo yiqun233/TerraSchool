@@ -22,4 +22,10 @@ public interface SchedulingOperations {
   SchedulePolicyView savePolicy(UUID schoolId, SchedulePolicy command);
 
   boolean deleteBlock(UUID id);
+
+  SchoolClosureView createSchoolClosure(CreateSchoolClosure command);
+
+  List<SchoolClosureView> schoolClosures(UUID schoolId, String from, String to);
+
+  SchoolClosureView cancelSchoolClosure(UUID id, Long expectedVersion);
 }

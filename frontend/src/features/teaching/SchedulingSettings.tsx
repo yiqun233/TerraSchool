@@ -20,6 +20,7 @@ import type { components } from "../../shared/generated/api";
 
 type ResourceBlockView = components["schemas"]["ResourceBlockView"];
 type SchedulePolicyView = components["schemas"]["SchedulePolicyView"];
+type SchoolClosureView = components["schemas"]["SchoolClosureView"];
 type ResourceOption = { id?: string; name?: string };
 
 /**
@@ -109,9 +110,177 @@ export function SchedulingSettings({
               />
             ),
           },
+          {
+            key: "calendar",
+            label: "学校校历",
+            children: (
+              <SchoolCalendarTab
+                schoolId={schoolId}
+                canMaintain={canMaintain}
+                onError={setError}
+                onMessage={setMessage}
+              />
+            ),
+          },
         ]}
       />
     </Modal>
+  );
+}
+
+/** 学校整日停课日：排课预览和确认会硬性跳过该日，并保留取消历史。 */
+export function SchoolCalendarTab({
+  schoolId,
+  canMaintain,
+  onError,
+  onMessage,
+}: {
+  schoolId: string;
+  canMaintain: boolean;
+  onError: (message: string) => void;
+  onMessage: (message: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [form] = Form.useForm();
+  const closures = useQuery({
+    queryKey: ["school-closures", schoolId],
+    queryFn: async ({ signal }) => {
+      const { data, response } = await api.GET(
+        "/api/teaching/school-closures",
+        {
+          params: { query: { schoolId } },
+          signal,
+        },
+      );
+      if (!response.ok || !data) return [];
+      return data;
+    },
+  });
+
+  async function save() {
+    let values;
+    try {
+      values = await form.validateFields();
+    } catch {
+      return;
+    }
+    setBusy(true);
+    try {
+      const token = await csrf();
+      const { response } = await api.POST("/api/teaching/school-closures", {
+        headers: { [token.headerName!]: token.token! },
+        body: { schoolId, closedOn: values.closedOn, reason: values.reason },
+      });
+      if (!response.ok) {
+        onError("保存失败：请核对日期、原因与课次维护权限。");
+        return;
+      }
+      onMessage("已登记学校停课日");
+      form.resetFields();
+      await closures.refetch();
+    } catch {
+      onError("请求结果不确定时可用相同日期和原因安全重试。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cancel(closure: SchoolClosureView) {
+    setBusy(true);
+    try {
+      const token = await csrf();
+      const { response } = await api.POST(
+        "/api/teaching/school-closures/{id}/cancel",
+        {
+          params: { path: { id: closure.id! } },
+          headers: { [token.headerName!]: token.token! },
+          body: { expectedVersion: closure.version! },
+        },
+      );
+      if (!response.ok) {
+        onError("取消失败：记录可能已变化，请刷新后重试。");
+        return;
+      }
+      onMessage("已取消停课日，历史记录保留");
+      await closures.refetch();
+    } catch {
+      onError("无法获取安全令牌或网络中断，请刷新后核对结果。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      {canMaintain ? (
+        <Form form={form} layout="vertical">
+          <Space wrap>
+            <Form.Item
+              label="停课日期"
+              name="closedOn"
+              rules={[{ required: true, message: "请输入日期" }]}
+            >
+              <Input
+                placeholder="2026-11-11"
+                maxLength={10}
+                style={{ width: 140 }}
+                disabled={busy}
+              />
+            </Form.Item>
+            <Form.Item
+              label="原因"
+              name="reason"
+              rules={[{ required: true, message: "请填写原因" }]}
+            >
+              <Input maxLength={200} style={{ width: 260 }} disabled={busy} />
+            </Form.Item>
+            <Button
+              type="primary"
+              onClick={() => void save()}
+              loading={busy}
+              disabled={busy}
+            >
+              登记停课日
+            </Button>
+          </Space>
+        </Form>
+      ) : null}
+      <Table
+        rowKey="id"
+        size="small"
+        loading={closures.isPending}
+        dataSource={closures.data ?? []}
+        pagination={false}
+        columns={[
+          { title: "日期", dataIndex: "closedOn" },
+          { title: "原因", dataIndex: "reason" },
+          {
+            title: "状态",
+            dataIndex: "active",
+            render: (active: boolean) => (active ? "停课" : "已取消"),
+          },
+          {
+            title: "操作",
+            key: "actions",
+            render: (_: unknown, closure: SchoolClosureView) =>
+              canMaintain && closure.active ? (
+                <Popconfirm
+                  title="取消这个停课日？"
+                  description={`${closure.closedOn} · ${closure.reason}`}
+                  okText="取消停课"
+                  cancelText="返回"
+                  onConfirm={() => void cancel(closure)}
+                >
+                  <Button size="small" danger loading={busy}>
+                    取消
+                  </Button>
+                </Popconfirm>
+              ) : null,
+          },
+        ]}
+        locale={{ emptyText: "尚无学校停课日" }}
+      />
+    </>
   );
 }
 
