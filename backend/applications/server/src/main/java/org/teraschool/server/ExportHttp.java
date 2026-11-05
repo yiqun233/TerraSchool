@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -42,11 +43,19 @@ class ExportHttp {
     return tasks.retry(id);
   }
 
-  @GetMapping(value = "/{id}/download", produces = "text/csv; charset=UTF-8")
+  @GetMapping("/{id}/download")
   ResponseEntity<byte[]> download(@PathVariable UUID id) {
     var task = tasks.get(id);
-    var filename = task.exportType().toLowerCase(Locale.ROOT) + "-" + id + ".csv";
+    boolean xlsx = "XLSX".equals(task.format());
+    var filename =
+        task.exportType().toLowerCase(Locale.ROOT) + "-" + id + (xlsx ? ".xlsx" : ".csv");
+    var contentType =
+        xlsx
+            ? MediaType.parseMediaType(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            : MediaType.parseMediaType("text/csv; charset=UTF-8");
     return ResponseEntity.ok()
+        .contentType(contentType)
         .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
         .body(tasks.download(id));
   }

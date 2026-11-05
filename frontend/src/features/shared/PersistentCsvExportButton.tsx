@@ -3,10 +3,12 @@ import { Alert, Button, Space, Typography } from "antd";
 import { csrf } from "../../shared/http";
 
 type ExportType = "ENROLLMENT" | "RECEIPTS" | "LESSONS";
+type ExportFormat = "CSV" | "XLSX";
 type ExportTask = {
   id: string;
   schoolId: string;
   exportType: ExportType;
+  format: ExportFormat;
   status:
     | "PENDING"
     | "RUNNING"
@@ -25,7 +27,7 @@ const LABEL: Record<ExportType, string> = {
   LESSONS: "课次",
 };
 
-/** 可轮询、取消和重试的服务器端 CSV 导出任务。 */
+/** 可轮询、取消和重试的服务器端 CSV/XLSX 导出任务。 */
 export function PersistentCsvExportButton({
   exportType,
   schoolId,
@@ -92,11 +94,13 @@ export function PersistentCsvExportButton({
     };
   }, [task]);
 
-  async function start() {
+  async function start(format: ExportFormat) {
     if (!schoolId) return;
     setError("");
-    const requestId = request?.key === key ? request.id : crypto.randomUUID();
-    setRequest({ key, id: requestId });
+    const requestKey = `${key}\n${format}`;
+    const requestId =
+      request?.key === requestKey ? request.id : crypto.randomUUID();
+    setRequest({ key: requestKey, id: requestId });
     try {
       const token = await csrf();
       const response = await fetch("/api/exports", {
@@ -106,7 +110,14 @@ export function PersistentCsvExportButton({
           "Content-Type": "application/json",
           [token.headerName!]: token.token!,
         },
-        body: JSON.stringify({ exportType, schoolId, requestId, from, to }),
+        body: JSON.stringify({
+          exportType,
+          schoolId,
+          requestId,
+          from,
+          to,
+          format,
+        }),
       });
       if (!response.ok) throw new Error("导出任务创建失败，请检查权限后重试");
       setTask((await response.json()) as ExportTask);
@@ -148,7 +159,7 @@ export function PersistentCsvExportButton({
       const url = URL.createObjectURL(await response.blob());
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = `${exportType.toLowerCase()}-${task.id}.csv`;
+      anchor.download = `${exportType.toLowerCase()}-${task.id}.${task.format.toLowerCase()}`;
       anchor.click();
       URL.revokeObjectURL(url);
     } catch (cause) {
@@ -158,17 +169,20 @@ export function PersistentCsvExportButton({
 
   return (
     <Space wrap>
-      <Button onClick={() => void start()} disabled={!schoolId}>
-        创建{LABEL[exportType]}导出任务
+      <Button onClick={() => void start("CSV")} disabled={!schoolId}>
+        创建{LABEL[exportType]} CSV 导出任务
+      </Button>
+      <Button onClick={() => void start("XLSX")} disabled={!schoolId}>
+        创建{LABEL[exportType]} XLSX 导出任务
       </Button>
       {task ? (
         <>
           <Typography.Text>
-            {LABEL[task.exportType]}导出：{task.status}
+            {LABEL[task.exportType]} {task.format} 导出：{task.status}
             {task.rowCount == null ? "" : ` · ${task.rowCount} 行`}
           </Typography.Text>
           {task.status === "COMPLETED" ? (
-            <Button onClick={() => void download()}>下载 CSV</Button>
+            <Button onClick={() => void download()}>下载 {task.format}</Button>
           ) : null}
           {task.status === "PENDING" ? (
             <Button onClick={() => void taskAction("cancel")}>取消任务</Button>

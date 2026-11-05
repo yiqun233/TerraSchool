@@ -4,16 +4,14 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { StudentCreator, StudentDirectory } from "./StudentDirectory";
 
-const { get, post, csrf, downloadCsv } = vi.hoisted(() => ({
+const { get, post, csrf } = vi.hoisted(() => ({
   get: vi.fn(),
   post: vi.fn(),
   csrf: vi.fn(),
-  downloadCsv: vi.fn(),
 }));
 vi.mock("../../shared/http", () => ({
   api: { GET: get, POST: post },
   csrf,
-  downloadCsv,
 }));
 
 beforeEach(() => {
@@ -158,51 +156,95 @@ it("通过持久导出任务展示进度并在完成后下载", { timeout: 10000
   const task = {
     id: "export-task-1",
     schoolId: "school-1",
-    status: "PENDING",
-    attemptCount: 0,
-    rowCount: null,
+    format: "CSV",
+    status: "COMPLETED",
+    attemptCount: 1,
+    rowCount: 4,
     errorCode: null,
     createdAt: "2026-11-05T00:00:00Z",
     startedAt: null,
     finishedAt: null,
   };
-  const completed = {
-    ...task,
-    status: "COMPLETED",
-    attemptCount: 1,
-    rowCount: 4,
-    finishedAt: "2026-11-05T00:00:02Z",
-  };
-  const fetchMock = vi
-    .fn()
-    .mockResolvedValueOnce({
-      ok: true,
-      status: 202,
-      json: async () => task,
-    })
-    .mockResolvedValueOnce({
-      ok: true,
-      status: 200,
-      json: async () => completed,
-    });
+  const completed = task;
+  const fetchMock = vi.fn(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/exports?"))
+        return Response.json([], { status: 200 });
+      if (url === "/api/exports" && init?.method === "POST")
+        return Response.json(task, { status: 202 });
+      if (url === "/api/exports/export-task-1/download")
+        return new Response(new Blob(["test"]), { status: 200 });
+      if (url.startsWith("/api/exports/"))
+        return Response.json(completed, { status: 200 });
+      throw new Error(`unexpected fetch ${url}`);
+    },
+  );
   vi.stubGlobal("fetch", fetchMock);
+  vi.stubGlobal("URL", {
+    createObjectURL: () => "blob:test",
+    revokeObjectURL: () => {},
+  });
+  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
   const user = userEvent.setup({ pointerEventsCheck: 0 });
   renderPage(<StudentDirectory onUnauthorized={vi.fn()} />);
 
   await user.click(await screen.findByRole("button", { name: "导出 CSV" }));
   expect(
-    await screen.findByText("导出任务：完成，共 4 条", {}, { timeout: 5000 }),
+    await screen.findByText(
+      "CSV 导出任务：完成，共 4 条",
+      {},
+      { timeout: 5000 },
+    ),
   ).toBeTruthy();
   await user.click(screen.getByRole("button", { name: /下\s*载/ }));
-  expect(downloadCsv).toHaveBeenCalledWith(
-    "/api/archive/student-exports/export-task-1/download",
-    "students-school-1.csv",
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/exports/export-task-1/download",
+    { credentials: "same-origin" },
   );
-  expect(fetchMock).toHaveBeenNthCalledWith(
-    1,
-    "/api/archive/student-exports",
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/exports",
     expect.objectContaining({ method: "POST" }),
   );
+});
+
+it("重新打开学员目录时恢复最近的持久导出任务", async () => {
+  get.mockImplementation(async (path: string) => {
+    if (path === "/api/archive/capabilities")
+      return {
+        response: { ok: true, status: 200 },
+        data: {
+          ...capabilities,
+          canExport: true,
+          exportableSchools: [{ id: "school-1", name: "测试学校" }],
+        },
+      };
+    if (path === "/api/archive/students")
+      return {
+        response: { ok: true, status: 200 },
+        data: { items: [], page: 0, size: 20, total: 0 },
+      };
+    throw new Error("unexpected path " + path);
+  });
+  const recentTask = {
+    id: "export-history-1",
+    schoolId: "school-1",
+    format: "XLSX",
+    status: "COMPLETED",
+    attemptCount: 1,
+    rowCount: 8,
+    errorCode: null,
+    createdAt: "2026-11-06T00:00:00Z",
+    startedAt: "2026-11-06T00:00:01Z",
+    finishedAt: "2026-11-06T00:00:02Z",
+  };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => Response.json([recentTask], { status: 200 })),
+  );
+  renderPage(<StudentDirectory onUnauthorized={vi.fn()} />);
+
+  expect(await screen.findByText("XLSX 导出任务：完成，共 8 条")).toBeTruthy();
 });
 
 it("新建成功后展示重复提示且不再自动合并", { timeout: 15000 }, async () => {

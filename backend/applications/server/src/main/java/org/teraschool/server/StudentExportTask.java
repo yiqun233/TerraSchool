@@ -7,6 +7,7 @@ record StudentExportTask(
     UUID id,
     UUID schoolId,
     String exportType,
+    String format,
     String status,
     int attemptCount,
     Integer rowCount,

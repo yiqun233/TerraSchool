@@ -69,6 +69,7 @@ class StudentExportTaskService {
     if (command == null || command.schoolId() == null || command.requestId() == null)
       throw new IllegalArgumentException("学校与请求标识必填");
     String type = normalizeType(command.exportType());
+    String format = normalizeFormat(command.format());
     var dates = normalizeDates(type, command.from(), command.to());
     var principal = SecurityContextHolder.getContext().getAuthentication();
     if (principal == null || !principal.isAuthenticated())
@@ -77,17 +78,34 @@ class StudentExportTaskService {
     requireSchool(scope, command.schoolId());
     authorize(type, command.schoolId(), false);
     var requestHash =
-        "STUDENT".equals(type)
+        "STUDENT".equals(type) && "CSV".equals(format)
             ? hash("student-csv-v1\n" + command.schoolId())
-            : hash(
-                type + "-csv-v1\n" + command.schoolId() + "\n" + dates.from() + "\n" + dates.to());
+            : "CSV".equals(format)
+                ? hash(
+                    type
+                        + "-csv-v1\n"
+                        + command.schoolId()
+                        + "\n"
+                        + dates.from()
+                        + "\n"
+                        + dates.to())
+                : hash(
+                    type
+                        + "-"
+                        + format.toLowerCase(Locale.ROOT)
+                        + "-v1\n"
+                        + command.schoolId()
+                        + "\n"
+                        + dates.from()
+                        + "\n"
+                        + dates.to());
     return tx.execute(
         scope.tenantId(),
         () -> {
           var id = UUID.randomUUID();
           app.update(
-              "insert into infra.export_task(id,tenant_id,owner_account_id,school_id,principal_name,request_id,request_hash,status,expires_at,export_type,date_from,date_to)"
-                  + " values (?,?,?,?,?,?,?,'PENDING',now()+(? * interval '1 hour'),?,?,?) on conflict (tenant_id,owner_account_id,request_id) do nothing",
+              "insert into infra.export_task(id,tenant_id,owner_account_id,school_id,principal_name,request_id,request_hash,status,expires_at,export_type,date_from,date_to,export_format)"
+                  + " values (?,?,?,?,?,?,?,'PENDING',now()+(? * interval '1 hour'),?,?,?,?) on conflict (tenant_id,owner_account_id,request_id) do nothing",
               id,
               scope.tenantId(),
               scope.accountId(),
@@ -98,10 +116,11 @@ class StudentExportTaskService {
               retentionHours,
               type,
               dates.from(),
-              dates.to());
+              dates.to(),
+              format);
           var row =
               app.queryForMap(
-                  "select id,school_id,export_type,status,attempt_count,row_count,error_code,created_at,started_at,finished_at,request_hash"
+                  "select id,school_id,export_type,export_format,status,attempt_count,row_count,error_code,created_at,started_at,finished_at,request_hash"
                       + " from infra.export_task where tenant_id=? and owner_account_id=? and request_id=? for update",
                   scope.tenantId(),
                   scope.accountId(),
@@ -129,7 +148,7 @@ class StudentExportTaskService {
           requireSchool(verified, schoolId);
           authorize(type, schoolId, true);
           return app.query(
-              "select id,school_id,export_type,status,attempt_count,row_count,error_code,created_at,started_at,finished_at"
+              "select id,school_id,export_type,export_format,status,attempt_count,row_count,error_code,created_at,started_at,finished_at"
                   + " from infra.export_task where tenant_id=? and owner_account_id=? and school_id=? and export_type=?"
                   + " order by created_at desc limit 20",
               (row, index) ->
@@ -137,6 +156,7 @@ class StudentExportTaskService {
                       row.getObject("id", UUID.class),
                       row.getObject("school_id", UUID.class),
                       row.getString("export_type"),
+                      row.getString("export_format"),
                       row.getString("status"),
                       row.getInt("attempt_count"),
                       row.getObject("row_count") == null
@@ -218,7 +238,7 @@ class StudentExportTaskService {
   private Map<String, Object> taskRow(ResourceScope scope, UUID id, boolean lock) {
     var rows =
         app.queryForList(
-            "select id,school_id,export_type,date_from,date_to,status,attempt_count,row_count,error_code,created_at,started_at,finished_at,exposed_fields,content,manual_retry_count"
+            "select id,school_id,export_type,export_format,date_from,date_to,status,attempt_count,row_count,error_code,created_at,started_at,finished_at,exposed_fields,content,manual_retry_count"
                 + " from infra.export_task where id=? and tenant_id=? and owner_account_id=?"
                 + (lock ? " for update" : ""),
             id,
@@ -242,6 +262,7 @@ class StudentExportTaskService {
         (UUID) row.get("id"),
         (UUID) row.get("school_id"),
         (String) row.get("export_type"),
+        (String) row.get("export_format"),
         (String) row.get("status"),
         ((Number) row.get("attempt_count")).intValue(),
         row.get("row_count") == null ? null : ((Number) row.get("row_count")).intValue(),
@@ -280,7 +301,7 @@ class StudentExportTaskService {
         MAX_AUTOMATIC_ATTEMPTS);
     var rows =
         app.query(
-            "select id,owner_account_id,school_id,principal_name,attempt_count,export_type,date_from,date_to from infra.export_task"
+            "select id,owner_account_id,school_id,principal_name,attempt_count,export_type,export_format,date_from,date_to from infra.export_task"
                 + " where tenant_id=? and ((status='PENDING' and next_attempt_at<=now()) or (status='RUNNING' and lease_until<now())) and attempt_count<?"
                 + " order by created_at limit 1 for update skip locked",
             (r, n) ->
@@ -294,6 +315,7 @@ class StudentExportTaskService {
                     r.getString(6),
                     r.getString(7),
                     r.getString(8),
+                    r.getString(9),
                     UUID.randomUUID()),
             tenant,
             MAX_AUTOMATIC_ATTEMPTS);
@@ -321,14 +343,15 @@ class StudentExportTaskService {
                     "AUTHENTICATED"))));
     SecurityContextHolder.setContext(context);
     try {
-      String artifact;
       String exposedFields;
+      int rowCount;
+      String csv;
       if ("STUDENT".equals(task.exportType())) {
         StudentCsvExport export = students.exportCsvArtifact(task.schoolId());
-        artifact = export.content();
+        csv = export.content();
         exposedFields = String.join(",", export.exposedFields());
       } else {
-        artifact =
+        csv =
             switch (task.exportType()) {
               case "ENROLLMENT" -> enrollments.exportCsv(task.schoolId());
               case "RECEIPTS" -> funds.exportReceiptsCsv(task.schoolId(), task.from(), task.to());
@@ -337,15 +360,20 @@ class StudentExportTaskService {
             };
         exposedFields = "";
       }
+      rowCount = ExportWorkbook.dataRowCount(csv);
+      byte[] content =
+          "XLSX".equals(task.format())
+              ? ExportWorkbook.fromCsv(csv)
+              : csv.getBytes(StandardCharsets.UTF_8);
       tx.execute(
           task.tenantId(),
           () -> {
             app.update(
                 "update infra.export_task set status='COMPLETED',content=?,exposed_fields=?,row_count=?,finished_at=now(),expires_at=now()+(? * interval '1 hour'),lease_until=null,next_attempt_at=now()"
                     + " where id=? and tenant_id=? and run_token=? and status='RUNNING'",
-                artifact.getBytes(StandardCharsets.UTF_8),
+                content,
                 exposedFields,
-                Math.max(0, artifact.split("\\n", -1).length - 2),
+                rowCount,
                 retentionHours,
                 task.id(),
                 task.tenantId(),
@@ -404,6 +432,7 @@ class StudentExportTaskService {
       String principalName,
       int attempt,
       String exportType,
+      String format,
       String from,
       String to,
       UUID runToken) {}
@@ -423,6 +452,13 @@ class StudentExportTaskService {
     String value = type.trim().toUpperCase(Locale.ROOT);
     if (!Set.of("STUDENT", "ENROLLMENT", "RECEIPTS", "LESSONS").contains(value))
       throw new IllegalArgumentException("不支持的导出类型");
+    return value;
+  }
+
+  private static String normalizeFormat(String format) {
+    if (format == null || format.isBlank()) return "CSV";
+    String value = format.trim().toUpperCase(Locale.ROOT);
+    if (!Set.of("CSV", "XLSX").contains(value)) throw new IllegalArgumentException("不支持的导出格式");
     return value;
   }
 

@@ -17,6 +17,7 @@ it("creates a persistent export with a stable request id and displays its status
         id: "export-1",
         schoolId: "school-1",
         exportType: "ENROLLMENT",
+        format: "CSV",
         status: "PENDING",
         attemptCount: 0,
       },
@@ -29,9 +30,11 @@ it("creates a persistent export with a stable request id and displays its status
   render(
     <PersistentCsvExportButton exportType="ENROLLMENT" schoolId="school-1" />,
   );
-  await user.click(screen.getByRole("button", { name: "创建报名导出任务" }));
+  await user.click(
+    screen.getByRole("button", { name: "创建报名 CSV 导出任务" }),
+  );
 
-  expect(await screen.findByText("报名导出：PENDING")).toBeTruthy();
+  expect(await screen.findByText("报名 CSV 导出：PENDING")).toBeTruthy();
   const createCall = fetchMock.mock.calls.find(
     (call) => call[0] === "/api/exports",
   );
@@ -42,10 +45,12 @@ it("creates a persistent export with a stable request id and displays its status
     exportType: string;
     schoolId: string;
     requestId: string;
+    format: string;
   };
   expect(requestBody).toMatchObject({
     exportType: "ENROLLMENT",
     schoolId: "school-1",
+    format: "CSV",
   });
   expect(requestBody.requestId).toMatch(/^[0-9a-f-]{36}$/i);
 });
@@ -59,6 +64,7 @@ it("restores the most recent completed task after the workspace is reopened", as
           id: "export-history-1",
           schoolId: "school-1",
           exportType: "LESSONS",
+          format: "CSV",
           status: "COMPLETED",
           attemptCount: 1,
           rowCount: 12,
@@ -71,6 +77,43 @@ it("restores the most recent completed task after the workspace is reopened", as
     <PersistentCsvExportButton exportType="LESSONS" schoolId="school-1" />,
   );
 
-  expect(await screen.findByText("课次导出：COMPLETED · 12 行")).toBeTruthy();
+  expect(
+    await screen.findByText("课次 CSV 导出：COMPLETED · 12 行"),
+  ).toBeTruthy();
   expect(screen.getByRole("button", { name: "下载 CSV" })).toBeTruthy();
+});
+
+it("creates an XLSX task with an XLSX-specific request fingerprint", async () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation(async (input, init) => {
+      if (String(input).startsWith("/api/exports?")) return Response.json([]);
+      const body = JSON.parse(String(init?.body)) as { format: string };
+      return Response.json(
+        {
+          id: "export-xlsx",
+          schoolId: "school-1",
+          exportType: "RECEIPTS",
+          format: body.format,
+          status: "PENDING",
+          attemptCount: 0,
+        },
+        { status: 202 },
+      );
+    });
+  vi.stubGlobal("fetch", fetchMock);
+  const user = userEvent.setup();
+
+  render(
+    <PersistentCsvExportButton exportType="RECEIPTS" schoolId="school-1" />,
+  );
+  await user.click(
+    screen.getByRole("button", { name: "创建收款 XLSX 导出任务" }),
+  );
+
+  expect(await screen.findByText("收款 XLSX 导出：PENDING")).toBeTruthy();
+  const options = fetchMock.mock.calls.find(
+    (call) => call[0] === "/api/exports",
+  )?.[1] as RequestInit;
+  expect(JSON.parse(String(options.body))).toMatchObject({ format: "XLSX" });
 });

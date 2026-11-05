@@ -14,7 +14,7 @@ import {
   Tag,
   Typography,
 } from "antd";
-import { api, csrf, downloadCsv } from "../../shared/http";
+import { api, csrf } from "../../shared/http";
 import type { components } from "../../shared/generated/api";
 
 type StudentProfile = components["schemas"]["StudentProfile"];
@@ -27,6 +27,7 @@ type EmployeeAssignmentOption =
 type StudentExportTask = {
   id: string;
   schoolId: string;
+  format: "CSV" | "XLSX";
   status:
     | "PENDING"
     | "RUNNING"
@@ -67,6 +68,7 @@ export function StudentDirectory({
 }) {
   const [page, setPage] = useState(0);
   const [exporting, setExporting] = useState(false);
+  const exportRequestStarted = useRef(false);
   const [exportTask, setExportTask] = useState<StudentExportTask | null>(null);
   // 导出按学校范围进行：取当前账号第一所可读学校。
   const [search, setSearch] = useState("");
@@ -111,6 +113,29 @@ export function StudentDirectory({
   });
 
   useEffect(() => {
+    if (!exportSchool || !capabilities.data?.canExport) {
+      setExportTask(null);
+      return;
+    }
+    const controller = new AbortController();
+    void fetch(
+      `/api/exports?exportType=STUDENT&schoolId=${encodeURIComponent(exportSchool)}`,
+      { credentials: "same-origin", signal: controller.signal },
+    )
+      .then(async (response) => {
+        if (!response.ok) throw new Error("无法恢复最近的学员导出任务");
+        const tasks = (await response.json()) as StudentExportTask[];
+        if (!exportRequestStarted.current) setExportTask(tasks[0] ?? null);
+      })
+      .catch((cause: unknown) => {
+        if (cause instanceof Error && cause.name !== "AbortError") {
+          setError(cause.message);
+        }
+      });
+    return () => controller.abort();
+  }, [exportSchool, capabilities.data?.canExport]);
+
+  useEffect(() => {
     if (!exportTask || !["PENDING", "RUNNING"].includes(exportTask.status))
       return;
     let cancelled = false;
@@ -144,12 +169,13 @@ export function StudentDirectory({
     return <Alert title="账号当前无学员档案读取权限" type="error" />;
 
   /** 导出以持久任务执行；下载时服务端复核学校与敏感字段权限。 */
-  async function exportCsv() {
+  async function exportStudents(format: "CSV" | "XLSX") {
     if (!exportSchool) return;
+    exportRequestStarted.current = true;
     setExporting(true);
     try {
       const token = await csrf();
-      const response = await fetch("/api/archive/student-exports", {
+      const response = await fetch("/api/exports", {
         method: "POST",
         credentials: "same-origin",
         headers: {
@@ -157,8 +183,10 @@ export function StudentDirectory({
           [token.headerName!]: token.token!,
         },
         body: JSON.stringify({
+          exportType: "STUDENT",
           schoolId: exportSchool,
           requestId: crypto.randomUUID(),
+          format,
         }),
       });
       if (response.status === 401) {
@@ -187,7 +215,7 @@ export function StudentDirectory({
     try {
       const token = await csrf();
       const response = await fetch(
-        `/api/archive/student-exports/${encodeURIComponent(exportTask.id)}/${action}`,
+        `/api/exports/${encodeURIComponent(exportTask.id)}/${action}`,
         {
           method: "POST",
           credentials: "same-origin",
@@ -209,7 +237,7 @@ export function StudentDirectory({
     if (!exportTask) return;
     try {
       const response = await fetch(
-        `/api/archive/student-exports/${encodeURIComponent(exportTask.id)}`,
+        `/api/exports/${encodeURIComponent(exportTask.id)}`,
         { credentials: "same-origin" },
       );
       if (response.status === 401) {
@@ -256,16 +284,23 @@ export function StudentDirectory({
           刷新
         </Button>
         <Button
-          onClick={() => void exportCsv()}
+          onClick={() => void exportStudents("CSV")}
           loading={exporting}
           disabled={!capabilities.data.canExport || !exportSchool || exporting}
         >
           导出 CSV
         </Button>
+        <Button
+          onClick={() => void exportStudents("XLSX")}
+          loading={exporting}
+          disabled={!capabilities.data.canExport || !exportSchool || exporting}
+        >
+          导出 XLSX
+        </Button>
         {exportTask ? (
           <Space>
             <Typography.Text role="status">
-              导出任务：
+              {exportTask.format} 导出任务：
               {exportTask.status === "PENDING"
                 ? "等待执行"
                 : exportTask.status === "RUNNING"
@@ -295,10 +330,22 @@ export function StudentDirectory({
             {exportTask.status === "COMPLETED" ? (
               <Button
                 onClick={() =>
-                  void downloadCsv(
-                    `/api/archive/student-exports/${encodeURIComponent(exportTask.id)}/download`,
-                    `students-${exportTask.schoolId}.csv`,
-                  )
+                  void (async () => {
+                    const response = await fetch(
+                      `/api/exports/${encodeURIComponent(exportTask.id)}/download`,
+                      { credentials: "same-origin" },
+                    );
+                    if (!response.ok) {
+                      setError("下载失败，可能是权限已变更或文件已过期。");
+                      return;
+                    }
+                    const url = URL.createObjectURL(await response.blob());
+                    const anchor = document.createElement("a");
+                    anchor.href = url;
+                    anchor.download = `students-${exportTask.schoolId}.${exportTask.format.toLowerCase()}`;
+                    anchor.click();
+                    URL.revokeObjectURL(url);
+                  })()
                 }
               >
                 下载

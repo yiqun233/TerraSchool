@@ -263,6 +263,61 @@ class StudentExportTest {
   }
 
   @Test
+  void xlsxExportStoresTextWorkbookAndFormatParticipatesInIdempotency() throws Exception {
+    var requestId = UUID.randomUUID();
+    var created =
+        asActor(
+            READER,
+            () ->
+                exportTasks.create(
+                    new CreateExport("ENROLLMENT", SCHOOL, requestId, null, null, "XLSX")));
+    assertThat(created.format()).isEqualTo("XLSX");
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    READER,
+                    () ->
+                        exportTasks.create(
+                            new CreateExport("ENROLLMENT", SCHOOL, requestId, null, null, "CSV"))))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("不同导出参数");
+
+    var deadline = System.nanoTime() + java.time.Duration.ofSeconds(10).toNanos();
+    StudentExportTask status;
+    do {
+      exportTasks.dispatchPending();
+      status = asActor(READER, () -> exportTasks.get(created.id()));
+      if ("COMPLETED".equals(status.status())) break;
+      Thread.sleep(50);
+    } while (System.nanoTime() < deadline);
+    assertThat(status.status()).isEqualTo("COMPLETED");
+    byte[] content = asActor(READER, () -> exportTasks.download(created.id()));
+    assertThat(content).startsWith((byte) 'P', (byte) 'K');
+    try (var workbook =
+        new org.apache.poi.xssf.usermodel.XSSFWorkbook(new java.io.ByteArrayInputStream(content))) {
+      assertThat(workbook.getNumberOfSheets()).isEqualTo(1);
+      assertThat(workbook.getSheetAt(0).getRow(0).getCell(0).getCellType())
+          .isEqualTo(org.apache.poi.ss.usermodel.CellType.STRING);
+      assertThat(workbook.getSheetAt(0).getRow(0).getCell(0).getStringCellValue()).isEqualTo("学员号");
+    }
+  }
+
+  @Test
+  void xlsxConverterPreservesQuotedRecordsAndNeverCreatesFormulaCells() throws Exception {
+    String csv = "标题,文本\r\n\"=SUM(1,2)\",\"第一行\n第二行\"\r\n";
+    byte[] content = ExportWorkbook.fromCsv(csv);
+    assertThat(ExportWorkbook.dataRowCount(csv)).isEqualTo(1);
+    try (var workbook =
+        new org.apache.poi.xssf.usermodel.XSSFWorkbook(new java.io.ByteArrayInputStream(content))) {
+      var row = workbook.getSheetAt(0).getRow(1);
+      assertThat(row.getCell(0).getCellType())
+          .isEqualTo(org.apache.poi.ss.usermodel.CellType.STRING);
+      assertThat(row.getCell(0).getStringCellValue()).isEqualTo("=SUM(1,2)");
+      assertThat(row.getCell(1).getStringCellValue()).isEqualTo("第一行\n第二行");
+    }
+  }
+
+  @Test
   void exportRequestIdentityIncludesDateFiltersAndRejectsInvalidRanges() {
     var requestId = UUID.randomUUID();
     asActor(
