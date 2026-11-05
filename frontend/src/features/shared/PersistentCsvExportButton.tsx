@@ -46,6 +46,29 @@ export function PersistentCsvExportButton({
   );
 
   useEffect(() => {
+    if (!schoolId) {
+      setTask(undefined);
+      return;
+    }
+    const controller = new AbortController();
+    void fetch(
+      `/api/exports?exportType=${encodeURIComponent(exportType)}&schoolId=${encodeURIComponent(schoolId)}`,
+      { credentials: "same-origin", signal: controller.signal },
+    )
+      .then(async (response) => {
+        if (!response.ok) throw new Error("无法读取最近的导出任务");
+        const tasks = (await response.json()) as ExportTask[];
+        setTask(tasks[0]);
+      })
+      .catch((cause: unknown) => {
+        if (cause instanceof Error && cause.name !== "AbortError") {
+          setError(cause.message);
+        }
+      });
+    return () => controller.abort();
+  }, [exportType, schoolId]);
+
+  useEffect(() => {
     if (!task || !["PENDING", "RUNNING"].includes(task.status)) return;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {

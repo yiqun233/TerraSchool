@@ -240,6 +240,9 @@ class StudentExportTest {
       var command = new CreateExport(entry.getKey(), SCHOOL, UUID.randomUUID(), "", "");
       var created = asActor(READER, () -> exportTasks.create(command));
       assertThat(created.exportType()).isEqualTo(entry.getKey());
+      assertThat(asActor(READER, () -> exportTasks.list(entry.getKey(), SCHOOL)))
+          .extracting(StudentExportTask::id)
+          .contains(created.id());
       var deadline = System.nanoTime() + java.time.Duration.ofSeconds(10).toNanos();
       StudentExportTask status;
       do {

@@ -117,6 +117,42 @@ class StudentExportTaskService {
     return tx.execute(scope.tenantId(), () -> view(taskRow(scope, id, false)));
   }
 
+  List<StudentExportTask> list(String exportType, UUID schoolId) {
+    String type = normalizeType(exportType);
+    var scope = actors.requireResourceScope(resource(type));
+    requireSchool(scope, schoolId);
+    authorize(type, schoolId, false);
+    return tx.execute(
+        scope.tenantId(),
+        () -> {
+          var verified = actors.requireResourceScopeInTransaction(resource(type));
+          requireSchool(verified, schoolId);
+          authorize(type, schoolId, true);
+          return app.query(
+              "select id,school_id,export_type,status,attempt_count,row_count,error_code,created_at,started_at,finished_at"
+                  + " from infra.export_task where tenant_id=? and owner_account_id=? and school_id=? and export_type=?"
+                  + " order by created_at desc limit 20",
+              (row, index) ->
+                  new StudentExportTask(
+                      row.getObject("id", UUID.class),
+                      row.getObject("school_id", UUID.class),
+                      row.getString("export_type"),
+                      row.getString("status"),
+                      row.getInt("attempt_count"),
+                      row.getObject("row_count") == null
+                          ? null
+                          : ((Number) row.getObject("row_count")).intValue(),
+                      row.getString("error_code"),
+                      instant(row.getTimestamp("created_at")),
+                      instant(row.getTimestamp("started_at")),
+                      instant(row.getTimestamp("finished_at"))),
+              scope.tenantId(),
+              scope.accountId(),
+              schoolId,
+              type);
+        });
+  }
+
   byte[] download(UUID id) {
     var scope = findScope(id);
     return tx.execute(
