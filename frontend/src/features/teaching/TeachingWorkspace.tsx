@@ -18,7 +18,8 @@ import {
   Tag,
   Typography,
 } from "antd";
-import { api, csrf, downloadCsv } from "../../shared/http";
+import { api, csrf } from "../../shared/http";
+import { PersistentCsvExportButton } from "../shared/PersistentCsvExportButton";
 import { SchedulePlanner } from "./SchedulePlanner";
 import { BatchSchedulePlanner } from "./BatchSchedulePlanner";
 import { SchedulingSettings } from "./SchedulingSettings";
@@ -1052,17 +1053,10 @@ export function TeachingWorkspace({
             >
               刷新课次
             </Button>
-            <Button
-              onClick={() =>
-                void downloadCsv(
-                  `/api/teaching/lessons/export?schoolId=${encodeURIComponent(current ?? "")}`,
-                  "lessons.csv",
-                )
-              }
-              disabled={!current}
-            >
-              导出课次
-            </Button>
+            <PersistentCsvExportButton
+              exportType="LESSONS"
+              schoolId={current}
+            />
             <Typography.Text type="secondary">
               在班 {members.data?.length ?? 0} 人
             </Typography.Text>

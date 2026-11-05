@@ -80,6 +80,14 @@ class StudentExportTest {
           TENANT,
           account,
           SCHOOL);
+    for (String action : List.of("ENROLLMENT_READ", "FUNDS_READ", "TEACHING_READ"))
+      update(
+          "insert into identity.account_permission(tenant_id,account_id,school_id,action,effect)"
+              + " values (?,?,?,?,'ALLOW')",
+          TENANT,
+          READER,
+          SCHOOL,
+          action);
     update(
         "insert into identity.field_grant(tenant_id,account_id,school_id,field_key,effect)"
             + " values (?,?,?,'STUDENT_PHONE','ALLOW')",
@@ -219,5 +227,100 @@ class StudentExportTest {
             READER, () -> exportTasks.create(new CreateStudentExport(SCHOOL, UUID.randomUUID())));
     var cancelled = asActor(READER, () -> exportTasks.cancel(created.id()));
     assertThat(cancelled.status()).isEqualTo("CANCELLED");
+  }
+
+  @Test
+  void persistentEnrollmentReceiptAndLessonExportsUseTheirOwnReadScope() throws Exception {
+    var cases =
+        Map.of(
+            "ENROLLMENT", "学员号,学员姓名,产品,课程",
+            "RECEIPTS", "学员号,学员姓名,金额,方式",
+            "LESSONS", "班级,日期,开始,结束");
+    for (var entry : cases.entrySet()) {
+      var command = new CreateExport(entry.getKey(), SCHOOL, UUID.randomUUID(), "", "");
+      var created = asActor(READER, () -> exportTasks.create(command));
+      assertThat(created.exportType()).isEqualTo(entry.getKey());
+      var deadline = System.nanoTime() + java.time.Duration.ofSeconds(10).toNanos();
+      StudentExportTask status;
+      do {
+        exportTasks.dispatchPending();
+        status = asActor(READER, () -> exportTasks.get(created.id()));
+        if ("COMPLETED".equals(status.status())) break;
+        Thread.sleep(50);
+      } while (System.nanoTime() < deadline);
+      assertThat(status.status()).isEqualTo("COMPLETED");
+      var csv =
+          asActor(
+              READER,
+              () ->
+                  new String(
+                      exportTasks.download(created.id()), java.nio.charset.StandardCharsets.UTF_8));
+      assertThat(csv).startsWith(entry.getValue());
+    }
+  }
+
+  @Test
+  void exportRequestIdentityIncludesDateFiltersAndRejectsInvalidRanges() {
+    var requestId = UUID.randomUUID();
+    asActor(
+        READER,
+        () ->
+            exportTasks.create(
+                new CreateExport("RECEIPTS", SCHOOL, requestId, "2026-11-01", "2026-11-03")));
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    READER,
+                    () ->
+                        exportTasks.create(
+                            new CreateExport(
+                                "RECEIPTS", SCHOOL, requestId, "2026-11-02", "2026-11-03"))))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("不同导出参数");
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    READER,
+                    () ->
+                        exportTasks.create(
+                            new CreateExport(
+                                "LESSONS", SCHOOL, UUID.randomUUID(), "2026-11-03", "2026-11-02"))))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("结束日期");
+  }
+
+  @Test
+  void persistentEnrollmentDownloadRechecksCurrentReadScope() throws Exception {
+    var created =
+        asActor(
+            READER,
+            () ->
+                exportTasks.create(
+                    new CreateExport("ENROLLMENT", SCHOOL, UUID.randomUUID(), null, null)));
+    var deadline = System.nanoTime() + java.time.Duration.ofSeconds(10).toNanos();
+    StudentExportTask status;
+    do {
+      exportTasks.dispatchPending();
+      status = asActor(READER, () -> exportTasks.get(created.id()));
+      if ("COMPLETED".equals(status.status())) break;
+      Thread.sleep(50);
+    } while (System.nanoTime() < deadline);
+    assertThat(status.status()).isEqualTo("COMPLETED");
+    update(
+        "delete from identity.account_permission where tenant_id=? and account_id=? and school_id=? and action='ENROLLMENT_READ'",
+        TENANT,
+        READER,
+        SCHOOL);
+    try {
+      assertThatThrownBy(() -> asActor(READER, () -> exportTasks.download(created.id())))
+          .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
+    } finally {
+      update(
+          "insert into identity.account_permission(tenant_id,account_id,school_id,action,effect)"
+              + " values (?,?,?,'ENROLLMENT_READ','ALLOW')",
+          TENANT,
+          READER,
+          SCHOOL);
+    }
   }
 }

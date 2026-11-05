@@ -16,8 +16,9 @@ import {
   Tag,
   Typography,
 } from "antd";
-import { api, csrf, downloadCsv } from "../../shared/http";
+import { api, csrf } from "../../shared/http";
 import type { components } from "../../shared/generated/api";
+import { PersistentCsvExportButton } from "../shared/PersistentCsvExportButton";
 import { RefundPanel } from "./RefundPanel";
 
 type EnrollmentView = components["schemas"]["EnrollmentView"];
@@ -160,17 +161,8 @@ export function EnrollmentWorkspace({
         >
           刷新
         </Button>
-        <Button
-          onClick={() =>
-            void downloadCsv(
-              `/api/enrollment/enrollments/export?schoolId=${encodeURIComponent(current ?? "")}`,
-              "enrollments.csv",
-            )
-          }
-          disabled={!current}
-        >
-          导出 CSV
-        </Button>
+        <PersistentCsvExportButton exportType="ENROLLMENT" schoolId={current} />
+        <PersistentCsvExportButton exportType="RECEIPTS" schoolId={current} />
         <Typography.Text type="secondary">
           报名冻结价格与课时；收款与分配分开记账
         </Typography.Text>

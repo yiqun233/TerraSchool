@@ -6,6 +6,7 @@ import java.util.UUID;
 record StudentExportTask(
     UUID id,
     UUID schoolId,
+    String exportType,
     String status,
     int attemptCount,
     Integer rowCount,
