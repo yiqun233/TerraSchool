@@ -220,6 +220,62 @@ class TeachingAndConsumptionTest {
   }
 
   @Test
+  void publishedLessonCanBeRescheduledBeforeFactsAndKeepsVersionedHistory() throws Exception {
+    var sourceClass = newClass("待调课班级");
+    var occupiedClass = newClass("目标时段班级");
+    var draft = newLesson(sourceClass.id(), "2026-11-12");
+    var lesson =
+        asActor(TEACHER, () -> commands.publishLesson(draft.id(), new LessonVersion(0L)));
+    var occupied = newLesson(occupiedClass.id(), "2026-11-20");
+    asActor(TEACHER, () -> commands.publishLesson(occupied.id(), new LessonVersion(0L)));
+
+    var conflict =
+        new RescheduleLesson(
+            UUID.randomUUID(), lesson.version(), "2026-11-20", "09:00", "10:00", "校区临时安排");
+    assertThatThrownBy(() -> asActor(TEACHER, () -> commands.rescheduleLesson(lesson.id(), conflict)))
+        .isInstanceOf(TeachingConflict.class)
+        .hasMessage("TEACHER_CLASH");
+    assertThat(asActor(TEACHER, () -> queries.lessons(sourceClass.id())).get(0).lessonDate())
+        .isEqualTo("2026-11-12");
+
+    var requestId = UUID.randomUUID();
+    var request =
+        new RescheduleLesson(
+            requestId, lesson.version(), "2026-11-20", "11:00", "12:00", "校区临时安排");
+    var moved = asActor(TEACHER, () -> commands.rescheduleLesson(lesson.id(), request));
+    assertThat(moved.lessonDate()).isEqualTo("2026-11-20");
+    assertThat(moved.startsAt()).isEqualTo("11:00");
+    assertThat(moved.status()).isEqualTo("PUBLISHED");
+    assertThat(asActor(TEACHER, () -> commands.rescheduleLesson(lesson.id(), request))).isEqualTo(moved);
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    TEACHER,
+                    () ->
+                        commands.rescheduleLesson(
+                            lesson.id(),
+                            new RescheduleLesson(
+                                requestId,
+                                lesson.version(),
+                                "2026-11-21",
+                                "11:00",
+                                "12:00",
+                                "改动参数复用身份"))))
+        .isInstanceOf(TeachingConflict.class)
+        .hasMessage("IDEMPOTENCY_MISMATCH");
+    assertThat(
+            tx.execute(
+                TENANT,
+                () ->
+                    sql.fetchOne(
+                            "select count(*) from teaching.lesson_reschedule where tenant_id=? and lesson_id=?",
+                            TENANT,
+                            lesson.id())
+                        .get(0, Long.class)))
+        .isEqualTo(1L);
+  }
+
+  @Test
   void teacherWorkbenchShowsOnlyAccountBoundLessonsInsideDateRange() {
     var classView = newClass("本人课表班级");
     var inRange = newLesson(classView.id(), "2026-11-12");

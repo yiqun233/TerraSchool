@@ -158,6 +158,11 @@ class TeachingHttp {
     return commands.publishLesson(id, command);
   }
 
+  @PostMapping(value = "/api/teaching/lessons/{id}/reschedule", consumes = "application/json")
+  LessonView reschedule(@PathVariable UUID id, @RequestBody RescheduleLesson command) {
+    return commands.rescheduleLesson(id, command);
+  }
+
   /** 授课确认与考勤登记；必须覆盖全部在班报名。 */
   @PostMapping(value = "/api/teaching/lessons/{id}/attendance", consumes = "application/json")
   LessonView confirmAttendance(@PathVariable UUID id, @RequestBody ConfirmAttendance command) {

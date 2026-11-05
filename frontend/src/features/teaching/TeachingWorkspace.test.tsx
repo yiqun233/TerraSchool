@@ -6,6 +6,7 @@ import {
   AttendanceModal,
   CloseLessonButton,
   PublishLessonButton,
+  RescheduleLessonModal,
   TeachingWorkspace,
 } from "./TeachingWorkspace";
 
@@ -333,6 +334,42 @@ it("发布课次携带读取版本", async () => {
   await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
   expect(post.mock.calls[0][0]).toBe("/api/teaching/lessons/{id}/publish");
   expect(post.mock.calls[0][1].body).toEqual({ expectedVersion: 0 });
+  expect(done).toHaveBeenCalled();
+});
+
+it("调课提交版本、原因与幂等标识", async () => {
+  vi.clearAllMocks();
+  csrf.mockResolvedValue({ headerName: "X-CSRF-TOKEN", token: "test" });
+  post.mockResolvedValue({ response: { ok: true, status: 200 }, data: {} });
+  const done = vi.fn();
+  const user = userEvent.setup({ pointerEventsCheck: 0 });
+  renderWithClient(
+    <RescheduleLessonModal
+      lesson={{ ...lesson, status: "PUBLISHED", version: 5 } as never}
+      onCancel={vi.fn()}
+      onDone={done}
+      onError={vi.fn()}
+    />,
+  );
+  await user.clear(screen.getByRole("textbox", { name: "调课原因" }));
+  await user.type(
+    screen.getByRole("textbox", { name: "调课原因" }),
+    "场地维护",
+  );
+  await user.click(screen.getByRole("button", { name: "保存调课" }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+  expect(post.mock.calls[0][0]).toBe("/api/teaching/lessons/{id}/reschedule");
+  expect(post.mock.calls[0][1]).toMatchObject({
+    params: { path: { id: "lesson-1" } },
+    body: {
+      expectedVersion: 5,
+      lessonDate: "2026-03-02",
+      startsAt: "09:00",
+      endsAt: "10:00",
+      reason: "场地维护",
+      requestId: expect.any(String),
+    },
+  });
   expect(done).toHaveBeenCalled();
 });
 

@@ -85,6 +85,7 @@ export function TeachingWorkspace({
   const [batchScheduling, setBatchScheduling] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [attendanceFor, setAttendanceFor] = useState<LessonView | null>(null);
+  const [rescheduleFor, setRescheduleFor] = useState<LessonView | null>(null);
   const [reconcileFor, setReconcileFor] = useState<string | null>(null);
   const [teacherClassId, setTeacherClassId] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -1138,12 +1139,20 @@ export function TeachingWorkspace({
                       />
                     ) : null}
                     {row.status === "PUBLISHED" ? (
-                      <Button
-                        size="small"
-                        onClick={() => setAttendanceFor(row)}
-                      >
-                        考勤确认
-                      </Button>
+                      <>
+                        <Button
+                          size="small"
+                          onClick={() => setRescheduleFor(row)}
+                        >
+                          调课
+                        </Button>
+                        <Button
+                          size="small"
+                          onClick={() => setAttendanceFor(row)}
+                        >
+                          考勤确认
+                        </Button>
+                      </>
                     ) : null}
                     {row.status === "CONFIRMED" && school?.canCloseLesson ? (
                       <CloseLessonButton
@@ -1336,6 +1345,17 @@ export function TeachingWorkspace({
           onError={setError}
         />
       ) : null}
+      {rescheduleFor ? (
+        <RescheduleLessonModal
+          lesson={rescheduleFor}
+          onCancel={() => setRescheduleFor(null)}
+          onDone={() => {
+            setRescheduleFor(null);
+            void lessons.refetch();
+          }}
+          onError={setError}
+        />
+      ) : null}
       {reconcileFor ? (
         <ReconciliationDrawer
           id={reconcileFor}
@@ -1434,6 +1454,126 @@ export function CloseLessonButton({
     <Button size="small" danger disabled={busy} onClick={() => void close()}>
       关闭课次
     </Button>
+  );
+}
+
+export function RescheduleLessonModal({
+  lesson,
+  onCancel,
+  onDone,
+  onError,
+}: {
+  lesson: LessonView;
+  onCancel: () => void;
+  onDone: () => void;
+  onError: (message: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [lessonDate, setLessonDate] = useState(lesson.lessonDate ?? "");
+  const [startsAt, setStartsAt] = useState((lesson.startsAt ?? "").slice(0, 5));
+  const [endsAt, setEndsAt] = useState((lesson.endsAt ?? "").slice(0, 5));
+  const [reason, setReason] = useState("");
+  const requestRef = useRef<{ fingerprint: string; requestId: string } | null>(
+    null,
+  );
+
+  async function submit() {
+    const fingerprint = JSON.stringify([
+      lesson.version,
+      lessonDate,
+      startsAt,
+      endsAt,
+      reason.trim(),
+    ]);
+    if (!requestRef.current || requestRef.current.fingerprint !== fingerprint)
+      requestRef.current = { fingerprint, requestId: crypto.randomUUID() };
+    setBusy(true);
+    try {
+      const token = await csrf();
+      const { response } = await api.POST(
+        "/api/teaching/lessons/{id}/reschedule",
+        {
+          params: { path: { id: lesson.id! } },
+          headers: { [token.headerName!]: token.token! },
+          body: {
+            requestId: requestRef.current.requestId,
+            expectedVersion: lesson.version,
+            lessonDate,
+            startsAt,
+            endsAt,
+            reason: reason.trim(),
+          },
+        },
+      );
+      if (response.status === 409) {
+        onError("课次或资源状态已变化，请刷新后核对调课结果。");
+        onDone();
+        return;
+      }
+      if (!response.ok) {
+        onError("调课失败，请核对权限、时间和冲突提示。");
+        return;
+      }
+      onDone();
+    } catch {
+      onError("调课结果未确认；保持本次内容重试可安全防重。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      title="调整已发布课次"
+      open
+      okText="保存调课"
+      cancelText="取消"
+      confirmLoading={busy}
+      onOk={() => void submit()}
+      onCancel={onCancel}
+    >
+      <Typography.Paragraph type="secondary">
+        仅支持尚未登记考勤或消费的课次；原时间与新时间会留存审计记录。
+      </Typography.Paragraph>
+      <Space orientation="vertical" style={{ width: "100%" }}>
+        <label>
+          上课日期
+          <Input
+            aria-label="调课日期"
+            type="date"
+            value={lessonDate}
+            onChange={(event) => setLessonDate(event.target.value)}
+          />
+        </label>
+        <label>
+          开始时间
+          <Input
+            aria-label="调课开始时间"
+            type="time"
+            value={startsAt}
+            onChange={(event) => setStartsAt(event.target.value)}
+          />
+        </label>
+        <label>
+          结束时间
+          <Input
+            aria-label="调课结束时间"
+            type="time"
+            value={endsAt}
+            onChange={(event) => setEndsAt(event.target.value)}
+          />
+        </label>
+        <label>
+          调课原因
+          <Input.TextArea
+            aria-label="调课原因"
+            maxLength={200}
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+          />
+        </label>
+      </Space>
+    </Modal>
   );
 }
 
