@@ -35,6 +35,11 @@ class FinanceHttp {
     return reports.receiptDailyTotals(schoolId, from, to);
   }
 
+  @GetMapping("/api/finance/reports/daily-overview")
+  DailyOverview dailyOverview(@RequestParam UUID schoolId, @RequestParam String day) {
+    return reports.dailyOverview(schoolId, day);
+  }
+
   @GetMapping("/api/finance/periods")
   List<PeriodView> periods(
       @RequestParam UUID schoolId, @RequestParam(defaultValue = "") String year) {

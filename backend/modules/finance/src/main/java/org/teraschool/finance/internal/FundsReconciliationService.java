@@ -113,6 +113,70 @@ class FundsReconciliationService implements FinancialReportQueries {
         });
   }
 
+  @Override
+  public org.teraschool.finance.api.DailyOverview dailyOverview(UUID schoolId, String dayText) {
+    if (schoolId == null) throw new IllegalArgumentException("需要学校");
+    var day = reportDate(dayText, "统计日期");
+    var enrollmentScope = actors.requireResourceScope("ENROLLMENT");
+    var fundsActor = actors.requireAction("FUNDS_READ");
+    var teachingScope = actors.requireResourceScope("TEACHING");
+    if (!enrollmentScope.tenantId().equals(fundsActor.tenantId())
+        || !enrollmentScope.tenantId().equals(teachingScope.tenantId())
+        || !enrollmentScope.readableSchoolIds().contains(schoolId)
+        || !fundsActor.schools().contains(schoolId)
+        || !teachingScope.readableSchoolIds().contains(schoolId))
+      throw new AccessDeniedException("需要报名、资金和教务的学校读取权限");
+    return tx.execute(
+        enrollmentScope.tenantId(),
+        () -> {
+          schools.lockTenant(enrollmentScope.tenantId());
+          var verifiedEnrollment = actors.requireResourceScopeInTransaction("ENROLLMENT");
+          var verifiedFunds = actors.requireActionInTransaction("FUNDS_READ");
+          var verifiedTeaching = actors.requireResourceScopeInTransaction("TEACHING");
+          if (!verifiedEnrollment.readableSchoolIds().contains(schoolId)
+              || !verifiedFunds.schools().contains(schoolId)
+              || !verifiedTeaching.readableSchoolIds().contains(schoolId))
+            throw new AccessDeniedException("需要报名、资金和教务的学校读取权限");
+          var row =
+              sql.fetchOne(
+                  "select"
+                      + " (select count(*) from enrollment.enrollment e where e.school_id=? and e.created_at::date=?) as enrollment_count,"
+                      + " (select count(*) from funds.receipt r where r.school_id=? and r.occurred_on=? and r.status='CONFIRMED') as confirmed_receipt_count,"
+                      + " (select coalesce(sum(r.amount),0) from funds.receipt r where r.school_id=? and r.occurred_on=? and r.status='CONFIRMED') as confirmed_receipt_amount,"
+                      + " (select count(*) from funds.receipt r where r.school_id=? and r.occurred_on=? and r.status='VOIDED') as voided_receipt_count,"
+                      + " (select coalesce(sum(r.amount),0) from funds.receipt r where r.school_id=? and r.occurred_on=? and r.status='VOIDED') as voided_receipt_amount,"
+                      + " (select count(*) from teaching.lesson l join teaching.class c on c.id=l.class_id and c.tenant_id=l.tenant_id where c.school_id=? and l.lesson_date=?) as lesson_count,"
+                      + " (select count(*) from teaching.lesson l join teaching.class c on c.id=l.class_id and c.tenant_id=l.tenant_id where c.school_id=? and l.lesson_date=? and l.status='CLOSED') as closed_lesson_count,"
+                      + " (select count(*) from teaching.attendance a join teaching.lesson l on l.id=a.lesson_id and l.tenant_id=a.tenant_id join teaching.class c on c.id=l.class_id and c.tenant_id=l.tenant_id where c.school_id=? and l.lesson_date=?) as attendance_record_count",
+                  schoolId,
+                  day,
+                  schoolId,
+                  day,
+                  schoolId,
+                  day,
+                  schoolId,
+                  day,
+                  schoolId,
+                  day,
+                  schoolId,
+                  day,
+                  schoolId,
+                  day,
+                  schoolId,
+                  day);
+          return new org.teraschool.finance.api.DailyOverview(
+              day.toString(),
+              row.get("enrollment_count", Long.class),
+              row.get("confirmed_receipt_count", Long.class),
+              money(row.get("confirmed_receipt_amount", BigDecimal.class)),
+              row.get("voided_receipt_count", Long.class),
+              money(row.get("voided_receipt_amount", BigDecimal.class)),
+              row.get("lesson_count", Long.class),
+              row.get("closed_lesson_count", Long.class),
+              row.get("attendance_record_count", Long.class));
+        });
+  }
+
   private LocalDate reportDate(String value, String label) {
     try {
       return LocalDate.parse(value);

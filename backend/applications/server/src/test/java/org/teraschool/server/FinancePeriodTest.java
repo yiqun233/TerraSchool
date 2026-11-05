@@ -343,6 +343,64 @@ class FinancePeriodTest {
   }
 
   @Test
+  void dailyOverviewSeparatesReceiptStatusesAndCountsSchoolOperations() throws Exception {
+    var student = freshStudent();
+    var enrollment = activeEnrollment(student);
+    var day = "2001-02-03";
+    update(
+        "update enrollment.enrollment set created_at='2001-02-03 12:00:00+00' where id=?",
+        enrollment.id());
+    asActor(
+        OPS,
+        () -> {
+          funds.createReceipt(
+              new CreateReceipt(UUID.randomUUID(), SCHOOL, student, "500", "CASH", day));
+          return null;
+        });
+    update(
+        "insert into funds.receipt(id,tenant_id,school_id,student_id,amount,method,occurred_on,status)"
+            + " values (?,?,?,?,'80.00','BANK',?,'VOIDED')",
+        UUID.randomUUID(),
+        TENANT,
+        SCHOOL,
+        student,
+        java.time.LocalDate.parse(day));
+    var classId = UUID.randomUUID();
+    var lessonId = UUID.randomUUID();
+    update(
+        "insert into teaching.class(id,tenant_id,school_id,curriculum_id,name) values (?,?,?,?,?)",
+        classId,
+        TENANT,
+        SCHOOL,
+        CURRICULUM,
+        "概况班级-" + classId.toString().substring(0, 8));
+    update(
+        "insert into teaching.lesson(id,tenant_id,class_id,lesson_date,starts_at,ends_at,hours,status)"
+            + " values (?,?,?,?,'09:00','10:00',1.00,'CLOSED')",
+        lessonId,
+        TENANT,
+        classId,
+        java.time.LocalDate.parse(day));
+    update(
+        "insert into teaching.attendance(tenant_id,lesson_id,enrollment_id,status) values (?,?,?,'PRESENT')",
+        TENANT,
+        lessonId,
+        enrollment.id());
+
+    var overview = asActor(OPS, () -> financialReports.dailyOverview(SCHOOL, day));
+    assertThat(overview.enrollmentCount()).isEqualTo(1);
+    assertThat(overview.confirmedReceiptCount()).isEqualTo(1);
+    assertThat(overview.confirmedReceiptAmount()).isEqualTo("500.00");
+    assertThat(overview.voidedReceiptCount()).isEqualTo(1);
+    assertThat(overview.voidedReceiptAmount()).isEqualTo("80.00");
+    assertThat(overview.lessonCount()).isEqualTo(1);
+    assertThat(overview.closedLessonCount()).isEqualTo(1);
+    assertThat(overview.attendanceRecordCount()).isEqualTo(1);
+    assertThatThrownBy(() -> asActor(READER, () -> financialReports.dailyOverview(SCHOOL, day)))
+        .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
+  }
+
+  @Test
   void studentConsumptionReportReconcilesPurchasedConsumedCancelledAndRemaining() throws Exception {
     var student = freshStudent();
     var enrollment = activeEnrollment(student);

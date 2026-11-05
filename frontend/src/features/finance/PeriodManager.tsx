@@ -20,8 +20,13 @@ import type { components } from "../../shared/generated/api";
 type PeriodView = components["schemas"]["PeriodView"];
 type FundsReconciliation = components["schemas"]["FundsReconciliation"];
 type ReceiptDailyTotal = components["schemas"]["ReceiptDailyTotal"];
+type DailyOverview = components["schemas"]["DailyOverview"];
 
 const YEAR = new Date().getFullYear();
+function localDay() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+}
 
 /**
  * 财务期间：按自然月锁定/解锁。
@@ -40,6 +45,7 @@ export function PeriodManager({
     lock: boolean;
   } | null>(null);
   const [error, setError] = useState("");
+  const [overviewDay, setOverviewDay] = useState(localDay);
   const [receiptRange, setReceiptRange] = useState(() => {
     const today = new Date();
     const year = today.getFullYear();
@@ -123,6 +129,23 @@ export function PeriodManager({
       }
       if (response.status === 403) return null;
       if (!response.ok || !data) throw new Error("无法读取收款统计");
+      return data;
+    },
+  });
+  const dailyOverview = useQuery<DailyOverview | null>({
+    queryKey: ["finance-daily-overview", current, overviewDay],
+    enabled: !!current && !!overviewDay,
+    queryFn: async ({ signal }) => {
+      const { data, response } = await api.GET(
+        "/api/finance/reports/daily-overview",
+        { params: { query: { schoolId: current!, day: overviewDay } }, signal },
+      );
+      if (response.status === 401) {
+        onUnauthorized();
+        throw new Error("登录已失效，请重新登录");
+      }
+      if (response.status === 403) return null;
+      if (!response.ok || !data) throw new Error("无法读取每日概况");
       return data;
     },
   });
@@ -297,6 +320,70 @@ export function PeriodManager({
         )}
         <Typography.Text type="secondary">
           已撤销单据单独列示；统计金额为收款单原额，不含现金退款净额或财务确收口径。
+        </Typography.Text>
+      </Card>
+      <Card
+        title="每日运营概况（候选口径）"
+        size="small"
+        loading={dailyOverview.isFetching}
+        style={{ marginTop: 12 }}
+      >
+        <Space className="toolbar" wrap>
+          <label htmlFor="daily-overview-day">统计日期</label>
+          <Input
+            id="daily-overview-day"
+            aria-label="每日概况统计日期"
+            type="date"
+            value={overviewDay}
+            onChange={(event) => setOverviewDay(event.target.value)}
+          />
+        </Space>
+        {dailyOverview.error ? (
+          <Alert
+            type="error"
+            title={dailyOverview.error.message}
+            showIcon
+            style={{ marginTop: 12 }}
+          />
+        ) : dailyOverview.data === null ? (
+          <Typography.Text type="secondary">
+            该概况要求同时具备报名、资金和教务的学校读取权限
+          </Typography.Text>
+        ) : dailyOverview.data ? (
+          <Descriptions
+            style={{ marginTop: 12 }}
+            size="small"
+            column={{ xs: 1, sm: 2, lg: 3 }}
+          >
+            <Descriptions.Item label="新建报名数">
+              {dailyOverview.data.enrollmentCount}
+            </Descriptions.Item>
+            <Descriptions.Item label="确认收款单数">
+              {dailyOverview.data.confirmedReceiptCount}
+            </Descriptions.Item>
+            <Descriptions.Item label="确认收款原额">
+              {dailyOverview.data.confirmedReceiptAmount}
+            </Descriptions.Item>
+            <Descriptions.Item label="作废收款单数">
+              {dailyOverview.data.voidedReceiptCount}
+            </Descriptions.Item>
+            <Descriptions.Item label="作废收款原额">
+              {dailyOverview.data.voidedReceiptAmount}
+            </Descriptions.Item>
+            <Descriptions.Item label="课次记录数">
+              {dailyOverview.data.lessonCount}
+            </Descriptions.Item>
+            <Descriptions.Item label="已关课次数">
+              {dailyOverview.data.closedLessonCount}
+            </Descriptions.Item>
+            <Descriptions.Item label="考勤记录数">
+              {dailyOverview.data.attendanceRecordCount}
+            </Descriptions.Item>
+          </Descriptions>
+        ) : null}
+        <Typography.Text type="secondary">
+          报名按创建日期、收款按发生日期、教务按课次日期统计；收款原额按单据状态分列，不扣退款。时区和正式指标口径待
+          Q62 确认。
         </Typography.Text>
       </Card>
       <Table
