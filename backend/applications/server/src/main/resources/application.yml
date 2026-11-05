@@ -27,3 +27,14 @@ server:
 springdoc:
   api-docs:
     version: OPENAPI_3_0
+teraschool:
+  admissions:
+    auto-recycle:
+      # Keep disabled until each school's legacy policy and contact definition are confirmed.
+      enabled: ${TERASCHOOL_ADMISSIONS_AUTO_RECYCLE_ENABLED:false}
+      interval-ms: ${TERASCHOOL_ADMISSIONS_AUTO_RECYCLE_INTERVAL_MS:60000}
+      inactive-days: ${TERASCHOOL_ADMISSIONS_AUTO_RECYCLE_INACTIVE_DAYS:7}
+      assignment-age-enabled: ${TERASCHOOL_ADMISSIONS_AUTO_RECYCLE_ASSIGNMENT_AGE_ENABLED:false}
+      assignment-age-days: ${TERASCHOOL_ADMISSIONS_AUTO_RECYCLE_ASSIGNMENT_AGE_DAYS:15}
+      first-day-no-contact-enabled: ${TERASCHOOL_ADMISSIONS_AUTO_RECYCLE_FIRST_DAY_NO_CONTACT_ENABLED:false}
+      first-day-cutoff: ${TERASCHOOL_ADMISSIONS_AUTO_RECYCLE_FIRST_DAY_CUTOFF:23:59}

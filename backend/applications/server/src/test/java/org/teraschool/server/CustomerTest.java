@@ -32,6 +32,7 @@ class CustomerTest {
   @Autowired StudentCommands studentCommands;
   @Autowired ChannelCommands channels;
   @Autowired org.teraschool.platform.api.TenantTransactions tx;
+  @Autowired CustomerAutoRecycleJob autoRecycle;
 
   @DynamicPropertySource
   static void config(DynamicPropertyRegistry r) {
@@ -950,6 +951,43 @@ class CustomerTest {
                 A,
                 requestId))
         .isEqualTo("按校区调整负责范围");
+  }
+
+  @Test
+  void automaticRecycleReturnsOnlyStaleUnconvertedCustomersAndAuditsSystemActor() throws Exception {
+    var stale = created(A, input("超期未跟进客户", "13900001772"));
+    var fresh = created(A, input("新分配客户", "13900001773"));
+    update(
+        "update admissions.customer set owner_assigned_at=CURRENT_TIMESTAMP-interval '8 days' where id=?",
+        stale.id());
+
+    var workers = Executors.newFixedThreadPool(2);
+    try {
+      var first = workers.submit(() -> autoRecycle.sweepTenant(TENANT));
+      var second = workers.submit(() -> autoRecycle.sweepTenant(TENANT));
+      assertThat(first.get() + second.get()).isEqualTo(1);
+    } finally {
+      workers.shutdownNow();
+    }
+    assertThat(
+            count(
+                "select count(*) from admissions.customer where tenant_id=? and id=? and in_pool",
+                TENANT,
+                stale.id()))
+        .isEqualTo(1);
+    assertThat(
+            count(
+                "select count(*) from admissions.customer where tenant_id=? and id=? and not in_pool",
+                TENANT,
+                fresh.id()))
+        .isEqualTo(1);
+    assertThat(
+            scalar(
+                "select actor_type||':'||detail from audit.customer_event where tenant_id=? and customer_id=? and action='AUTO_RECYCLED'",
+                TENANT,
+                stale.id()))
+        .isEqualTo("SYSTEM:INACTIVITY");
+    assertThat(autoRecycle.sweepTenant(TENANT)).isZero();
   }
 
   private long count(String query, Object... args) throws Exception {

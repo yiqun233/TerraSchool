@@ -493,7 +493,7 @@ class CustomerService implements CustomerQueries, CustomerCommands {
             throw new CustomerConflict("CUSTOMER_ALREADY_ASSIGNED");
           int changed =
               sql.execute(
-                  "update admissions.customer set owner_id=?,version=version+1 where id=? and version=? and in_pool=false and merged_into_id is null",
+                  "update admissions.customer set owner_id=?,owner_assigned_at=CURRENT_TIMESTAMP,version=version+1 where id=? and version=? and in_pool=false and merged_into_id is null",
                   command.ownerAccountId(),
                   id,
                   command.expectedVersion());
@@ -549,7 +549,7 @@ class CustomerService implements CustomerQueries, CustomerCommands {
             throw new CustomerConflict("VERSION_CONFLICT");
           int changed =
               sql.execute(
-                  "update admissions.customer set owner_id=?,in_pool=false,version=version+1 where id=? and version=? and in_pool=true",
+                  "update admissions.customer set owner_id=?,in_pool=false,owner_assigned_at=CURRENT_TIMESTAMP,version=version+1 where id=? and version=? and in_pool=true",
                   verifiedCustomer.accountId(),
                   id,
                   expectedVersion);
