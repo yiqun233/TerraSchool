@@ -7,11 +7,13 @@ import java.net.http.*;
 import java.nio.file.*;
 import java.sql.*;
 import java.util.*;
+import javax.sql.DataSource;
 import org.jooq.DSLContext;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.*;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.factory.PasswordEncoderFactories;
@@ -36,10 +38,14 @@ class EngineeringTest {
   @Autowired TenantTransactions tx;
   @Autowired DSLContext sql;
 
+  @Autowired
+  @Qualifier("schedulerDataSource")
+  DataSource schedulerDataSource;
+
   @DynamicPropertySource
   static void config(DynamicPropertyRegistry r) {
     r.add("teraschool.database.url", () -> System.getenv("TS_JDBC_URL"));
-    for (String kind : List.of("app", "identity", "session", "audit")) {
+    for (String kind : List.of("app", "identity", "session", "audit", "scheduler")) {
       r.add("teraschool.database." + kind + ".username", () -> "ts_" + kind);
       r.add(
           "teraschool.database." + kind + ".password",
@@ -51,6 +57,22 @@ class EngineeringTest {
     // 每个测试类有独立上下文与连接池：每池 2 条（并发用例需要第二条连接等锁），
     // 配合临时库放宽的 max_connections，避免缓存上下文把连接数打满。
     r.add("teraschool.database.pool-size", () -> "2");
+  }
+
+  @Test
+  void durableSchedulerUsesDedicatedRoleWithoutBusinessSchemaAccess() throws Exception {
+    var scheduler = new JdbcTemplate(schedulerDataSource);
+    assertThat(scheduler.queryForObject("select current_user", String.class))
+        .isEqualTo("ts_scheduler");
+    assertThat(
+            scheduler.queryForObject(
+                "select rolbypassrls from pg_roles where rolname=current_user", Boolean.class))
+        .isFalse();
+    assertThat(scheduler.queryForObject("select count(*) from infra.scheduled_tasks", Long.class))
+        .isNotNull();
+    assertThatThrownBy(
+            () -> scheduler.queryForObject("select count(*) from archive.student", Long.class))
+        .isInstanceOf(org.springframework.dao.DataAccessException.class);
   }
 
   static Connection admin() throws Exception {

@@ -38,7 +38,7 @@ class PermissionMigrationTest {
       try (var c = DriverManager.getConnection(url, "postgres", password);
           var s = c.createStatement()) {
         s.execute(
-            "CREATE ROLE ts_app;CREATE ROLE ts_identity;CREATE ROLE ts_session;CREATE ROLE ts_audit;");
+            "CREATE ROLE ts_app;CREATE ROLE ts_identity;CREATE ROLE ts_session;CREATE ROLE ts_audit;CREATE ROLE ts_scheduler;");
       }
       Flyway.configure()
           .dataSource(url, "postgres", password)

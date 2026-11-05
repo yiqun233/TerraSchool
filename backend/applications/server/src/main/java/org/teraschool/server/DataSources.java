@@ -49,6 +49,14 @@ class DataSources {
   }
 
   @Bean
+  HikariDataSource schedulerDataSource() {
+    var source = pool("scheduler");
+    source.setMaximumPoolSize(3);
+    source.setConnectionTimeout(2000);
+    return source;
+  }
+
+  @Bean
   @SpringSessionDataSource
   HikariDataSource sessionDataSource() {
     return pool("session");

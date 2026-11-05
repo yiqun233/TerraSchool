@@ -12,7 +12,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.env.Environment;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.teraschool.platform.api.RequestTrace;
 import org.teraschool.platform.api.TenantTransactions;
@@ -69,7 +68,6 @@ class CustomerAutoRecycleJob {
     return days;
   }
 
-  @Scheduled(fixedDelayString = "${teraschool.admissions.auto-recycle.interval-ms:60000}")
   void scheduledSweep() {
     if (!enabled) return;
     List<UUID> tenants =
@@ -85,6 +83,10 @@ class CustomerAutoRecycleJob {
         log.error("Customer auto-recycle failed tenant={}", tenantId, failure);
       }
     }
+  }
+
+  boolean isEnabled() {
+    return enabled;
   }
 
   int sweepTenant(UUID tenantId) {

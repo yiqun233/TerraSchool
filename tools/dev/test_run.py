@@ -114,7 +114,7 @@ class LocalDevTests(unittest.TestCase):
     def test_migration_resumes_prepare_after_state_has_switched(self):
         backups = self.local / 'backups'
         backups.mkdir()
-        current = {'workspace': dev.WORKSPACE, 'environment_id': 'ours', 'settings': dev.SETTINGS, 'passwords': {'audit': 'fixture'}}
+        current = {'workspace': dev.WORKSPACE, 'environment_id': 'ours', 'settings': dev.SETTINGS, 'passwords': {'audit': 'fixture', 'scheduler': 'scheduler-fixture'}}
         source = dict(current, settings={'container_name': 'fixture-old'})
         state = self.local / 'environment.json'
         dev.write_json(state, current)
@@ -148,6 +148,7 @@ class LocalDevTests(unittest.TestCase):
         self.assertEqual(first['passwords']['login'], 'existing-fixture')
         self.assertEqual(first['passwords']['app'], 'existing-app')
         self.assertTrue(first['passwords']['audit'])
+        self.assertTrue(first['passwords']['scheduler'])
 
 
 if __name__ == '__main__':

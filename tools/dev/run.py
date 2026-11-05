@@ -134,10 +134,13 @@ def configuration():
         if 'audit' not in value['passwords']:
             value['passwords']['audit'] = secrets.token_urlsafe(30)
             write_json(STATE, value)
+        if 'scheduler' not in value['passwords']:
+            value['passwords']['scheduler'] = secrets.token_urlsafe(30)
+            write_json(STATE, value)
         return value
     value = {'workspace': WORKSPACE, 'environment_id': secrets.token_hex(16),
              'settings': SETTINGS, 'passwords': {key: secrets.token_urlsafe(30)
-             for key in ['migrator', 'app', 'identity', 'session', 'audit', 'login']}}
+             for key in ['migrator', 'app', 'identity', 'session', 'audit', 'scheduler', 'login']}}
     write_json(STATE, value)
     (LOCAL / 'accounts.txt').write_text(
         '仅供本机合成演示，不是正式管理员。\n维护账号：local-admin\n只读账号：local-reader\n两账号密码：' +
@@ -211,7 +214,7 @@ def ensure_database(config):
         raise RuntimeError('当前工程需要已验证的PostgreSQL18。')
     roles = json.loads(wsl_admin(config, "SELECT coalesce(json_object_agg(rolname, "
         "coalesce(shobj_description(oid,'pg_authid'),'')),'{}'::json) FROM pg_roles "
-        "WHERE rolname IN ('ts_migrator','ts_app','ts_identity','ts_session','ts_audit');"))
+        "WHERE rolname IN ('ts_migrator','ts_app','ts_identity','ts_session','ts_audit','ts_scheduler');"))
     for name, marker in roles.items():
         if marker != database_marker(config):
             raise RuntimeError('已有角色不属于当前项目，拒绝更改：' + name)
@@ -219,7 +222,7 @@ def ensure_database(config):
     if existing == '1':
         assert_wsl_database(config)
     statements = []
-    for key, role in [('migrator','ts_migrator'),('app','ts_app'),('identity','ts_identity'),('session','ts_session'),('audit','ts_audit')]:
+    for key, role in [('migrator','ts_migrator'),('app','ts_app'),('identity','ts_identity'),('session','ts_session'),('audit','ts_audit'),('scheduler','ts_scheduler')]:
         if role not in roles:
             statements.append('CREATE ROLE ' + role + ' LOGIN PASSWORD ' + literal(config['passwords'][key]) +
                 ' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS; COMMENT ON ROLE ' + role + ' IS ' +
@@ -231,7 +234,7 @@ def ensure_database(config):
                   literal(database_marker(config)) + ';')
     assert_wsl_database(config)
     wsl_admin(config, 'REVOKE ALL ON DATABASE teraschool_dev FROM PUBLIC; '
-              'GRANT CONNECT ON DATABASE teraschool_dev TO ts_app,ts_identity,ts_session,ts_audit;')
+              'GRANT CONNECT ON DATABASE teraschool_dev TO ts_app,ts_identity,ts_session,ts_audit,ts_scheduler;')
 
 
 def tools():
@@ -282,11 +285,12 @@ def mail_credential_key(config):
 
 def write_runtime_config(config):
     """每次启动都从受限文件复核并生成配置，避免旧配置掩盖主密钥丢失。"""
+    config['passwords'].setdefault('scheduler', secrets.token_urlsafe(30))
     lines = ['# 自动生成，仅供本机开发，勿提交Git。', 'server:', '  address: 127.0.0.1',
              '  port: ' + str(SETTINGS['backend_port']), '  servlet:', '    session:', '      cookie:',
              '        secure: false', 'teraschool:', '  database:',
              '    url: jdbc:postgresql://127.0.0.1:' + str(SETTINGS['database_port']) + '/teraschool_dev']
-    for kind in ['app', 'identity', 'session', 'audit']:
+    for kind in ['app', 'identity', 'session', 'audit', 'scheduler']:
         lines += ['    ' + kind + ':', '      username: ts_' + kind,
                   '      password: ' + json.dumps(config['passwords'][kind])]
     lines += ['  mail-credentials:', '    master-key: ' + json.dumps(mail_credential_key(config))]
