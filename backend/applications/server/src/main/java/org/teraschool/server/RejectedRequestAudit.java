@@ -205,6 +205,13 @@ class RejectedRequestAudit {
       } catch (IllegalArgumentException invalid) {
         /* 不保存原始路径文本。 */
       }
+    } else if (path.matches("/api/enrollment/enrollments/[^/]+/reductions")) {
+      action = FailureAudit.Action.ENROLLMENT_DISCOUNT;
+      try {
+        resource = UUID.fromString(path.split("/")[4]);
+      } catch (IllegalArgumentException invalid) {
+        /* 不记录原路径 */
+      }
     } else if (path.equals("/api/funds/refunds")) action = FailureAudit.Action.REFUND_PREPARE;
     else if (path.matches("/api/funds/refunds/[^/]+/(confirm|cancel)")) {
       action =
@@ -251,9 +258,9 @@ class RejectedRequestAudit {
               ? FailureAudit.Action.LESSON_PUBLISH
               : path.endsWith("/reschedule")
                   ? FailureAudit.Action.LESSON_RESCHEDULE
-              : path.endsWith("/attendance")
-                  ? FailureAudit.Action.ATTENDANCE_CONFIRM
-                  : FailureAudit.Action.LESSON_CLOSE;
+                  : path.endsWith("/attendance")
+                      ? FailureAudit.Action.ATTENDANCE_CONFIRM
+                      : FailureAudit.Action.LESSON_CLOSE;
       String suffix = path.substring(path.lastIndexOf('/'));
       try {
         resource =

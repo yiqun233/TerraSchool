@@ -841,7 +841,34 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
   @Override
   public EnrollmentView applyDiscount(UUID id, ApplyDiscount command) {
     try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
-      return applyDiscountWithTrace(id, command);
+      if (command == null) throw new IllegalArgumentException("需要报名减免参数");
+      return applyReductionWithTrace(
+          id,
+          command.requestId(),
+          "ENROLLMENT_DISCOUNT",
+          command.amount(),
+          command.reason(),
+          command.expectedVersion(),
+          command.approvalId());
+    }
+  }
+
+  @Override
+  public EnrollmentView applyReduction(UUID id, ApplyReduction command) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      if (command == null) throw new IllegalArgumentException("需要报名减款参数");
+      var action =
+          command.action() == null ? "" : command.action().strip().toUpperCase(Locale.ROOT);
+      if (!Set.of("ENROLLMENT_REDUCTION", "SERVICE_FEE_REDUCTION").contains(action))
+        throw new IllegalArgumentException("减款动作无效");
+      return applyReductionWithTrace(
+          id,
+          command.requestId(),
+          action,
+          command.amount(),
+          command.reason(),
+          command.expectedVersion(),
+          command.approvalId());
     }
   }
 
@@ -850,11 +877,17 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
    *
    * <p>优惠使用独立权限和审批策略；历史调整追加版本事实，不覆盖既有消费或退款。
    */
-  private EnrollmentView applyDiscountWithTrace(UUID id, ApplyDiscount command) {
-    if (id == null || command == null || command.requestId() == null)
-      throw new IllegalArgumentException("需要报名、请求身份与减免金额");
-    var amount = positiveHours(command.amount());
-    var reason = text(command.reason(), 200, "减免原因");
+  private EnrollmentView applyReductionWithTrace(
+      UUID id,
+      UUID requestId,
+      String action,
+      String amountText,
+      String reasonText,
+      Long expectedVersion,
+      UUID approvalId) {
+    if (id == null || requestId == null) throw new IllegalArgumentException("需要报名、请求身份与减免金额");
+    var amount = positiveHours(amountText);
+    var reason = text(reasonText, 200, "减免原因");
     var scope = actors.requireAction("ENROLLMENT_DISCOUNT");
     return tx.execute(
         scope.tenantId(),
@@ -868,34 +901,48 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
           if (!schools.require(schoolId).active()) throw new AccessDeniedException("学校已停用，不能登记减免");
           if (!"ACTIVE".equals(row.get("status", String.class)))
             throw new EnrollmentConflict("ENROLLMENT_NOT_ACTIVE");
-          if (row.get("hours", BigDecimal.class).signum() == 0)
+          if ("ENROLLMENT_DISCOUNT".equals(action)
+              && row.get("hours", BigDecimal.class).signum() == 0)
             throw new EnrollmentConflict("SERVICE_FEE_ONLY_DISCOUNT_NOT_SUPPORTED");
           var digest =
               fingerprint(
-                  "DISCOUNT",
+                  action,
                   id.toString(),
                   amount.toPlainString(),
                   String.valueOf(reason),
-                  String.valueOf(command.expectedVersion()),
-                  String.valueOf(command.approvalId()));
-          var previous = previousRequest(verified, command.requestId(), digest);
+                  String.valueOf(expectedVersion),
+                  String.valueOf(approvalId));
+          var previous = previousRequest(verified, requestId, digest);
           if (previous != null)
             return view(
                 requireEnrollmentByTenant(previous),
                 students.require(row.get("student_id", UUID.class)).name());
           periods.requireOpen(schoolId, LocalDate.now());
-          if (command.expectedVersion() != null
-              && !row.get("version", Long.class).equals(command.expectedVersion()))
+          if (expectedVersion != null && !row.get("version", Long.class).equals(expectedVersion))
             throw new EnrollmentConflict("VERSION_CONFLICT");
           if (cancelledHours(id).signum() > 0)
             throw new EnrollmentConflict("DISCOUNT_AFTER_REFUND");
+          if ("SERVICE_FEE_REDUCTION".equals(action)) {
+            var alreadyReduced =
+                sql.fetchOne(
+                        "select coalesce(sum(amount),0) from enrollment.discount"
+                            + " where enrollment_id=? and action='SERVICE_FEE_REDUCTION'",
+                        id)
+                    .get(0, BigDecimal.class);
+            var remainingFee =
+                row.get("service_fee", BigDecimal.class)
+                    .subtract(serviceFeeRefunded(id))
+                    .subtract(alreadyReduced);
+            if (amount.compareTo(remainingFee) > 0)
+              throw new EnrollmentConflict("SERVICE_FEE_REDUCTION_EXCEEDS_REMAINING");
+          }
           var outstanding = netAmount(id);
           if (amount.compareTo(outstanding) > 0)
             throw new EnrollmentConflict("DISCOUNT_EXCEED_RECEIVABLE");
           var newNetAmount = outstanding.subtract(amount);
           for (var guard : discountGuards)
             guard.requireAllowed(id, schoolId, row.get("student_id", UUID.class), newNetAmount);
-          discountApproval.consume(schoolId, id, amount, command.approvalId());
+          discountApproval.consume(action, schoolId, id, amount, approvalId);
           var discountVersion =
               sql.fetchOne(
                       "select coalesce(max(version_no),0)+1 from enrollment.discount"
@@ -904,7 +951,8 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
                   .get(0, Long.class);
           sql.execute(
               "insert into enrollment.discount(tenant_id,enrollment_id,amount,reason,created_by,"
-                  + "version_no,previous_total,new_total,approval_id) values (?,?,?,?,?,?,?,?,?)",
+                  + "version_no,previous_total,new_total,approval_id,action)"
+                  + " values (?,?,?,?,?,?,?,?,?,?)",
               scope.tenantId(),
               id,
               amount,
@@ -913,15 +961,17 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
               discountVersion,
               outstanding,
               newNetAmount,
-              command.approvalId());
+              approvalId,
+              action);
           sql.execute(
               "insert into enrollment.charge(tenant_id,enrollment_id,kind,amount,reason)"
-                  + " values (?,?,'ADJUSTMENT',?,'优惠减免')",
+                  + " values (?,?,'ADJUSTMENT',?,?)",
               scope.tenantId(),
               id,
-              amount.negate());
+              amount.negate(),
+              "ENROLLMENT_DISCOUNT".equals(action) ? "优惠减免" : "批准减款:" + action);
           sql.execute("update enrollment.enrollment set version=version+1 where id=?", id);
-          rememberRequest(verified, command.requestId(), id, digest);
+          rememberRequest(verified, requestId, id, digest);
           audit(scope, "DISCOUNT_ADDED", id, schoolId, amount.toPlainString());
           return view(
               requireEnrollmentByTenant(id),

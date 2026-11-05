@@ -55,6 +55,12 @@ class EnrollmentHttp {
     return commands.applyDiscount(id, command);
   }
 
+  /** 经审批的报名金额或服务费减款；原收款、消费和退款事实保持只追加。 */
+  @PostMapping(value = "/api/enrollment/enrollments/{id}/reductions", consumes = "application/json")
+  EnrollmentView reduce(@PathVariable UUID id, @RequestBody ApplyReduction command) {
+    return commands.applyReduction(id, command);
+  }
+
   /** 报名 CSV 导出：按学校，导出写审计。 */
   @GetMapping(value = "/api/enrollment/enrollments/export", produces = "text/csv; charset=UTF-8")
   org.springframework.http.ResponseEntity<String> export(@RequestParam UUID schoolId) {

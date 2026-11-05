@@ -23,4 +23,6 @@ public interface EnrollmentCommands {
 
   /** 登记一次性减免：写一条应收减项并留审计。 */
   EnrollmentView applyDiscount(UUID id, ApplyDiscount command);
+
+  EnrollmentView applyReduction(UUID id, ApplyReduction command);
 }

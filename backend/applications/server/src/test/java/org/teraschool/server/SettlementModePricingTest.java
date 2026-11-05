@@ -64,6 +64,13 @@ class SettlementModePricingTest {
         TENANT,
         SCHOOL);
     EngineeringTest.seedExplicitApprovalPolicy(TENANT, SCHOOL);
+    for (var action : List.of("ENROLLMENT_REDUCTION", "SERVICE_FEE_REDUCTION"))
+      update(
+          "insert into approval.policy(tenant_id,school_id,action,free_below,active)"
+              + " values (?,?,?,999999999999.99,true)",
+          TENANT,
+          SCHOOL,
+          action);
     for (var entry : Map.of(CHINESE, "语文", MATH, "数学").entrySet())
       update(
           "insert into product.curriculum(id,tenant_id,school_id,name) values (?,?,?,?)",
@@ -557,6 +564,131 @@ class SettlementModePricingTest {
     } finally {
       update(
           "update approval.policy set free_below=999999999999.99 where school_id=? and action='ENROLLMENT_DISCOUNT'",
+          SCHOOL);
+    }
+  }
+
+  @Test
+  void approvedEnrollmentReductionIsVersionedAndRequestIdempotent() throws Exception {
+    var enrollment = multiCourse(1);
+    update(
+        "update approval.policy set free_below=0 where school_id=? and action='ENROLLMENT_REDUCTION'",
+        SCHOOL);
+    try {
+      var request =
+          asActor(
+              OPS,
+              () ->
+                  approvalCommands.request(
+                      new CreateApprovalRequest(
+                          UUID.randomUUID(),
+                          enrollment.id(),
+                          "ENROLLMENT_REDUCTION",
+                          "400.00",
+                          "批准报名减款")));
+      var approved =
+          asActor(
+              APPROVER,
+              () ->
+                  approvalCommands.decide(
+                      request.id(), new DecideApproval(request.version(), "APPROVED", "同意")));
+      var command =
+          new ApplyReduction(
+              UUID.randomUUID(),
+              "ENROLLMENT_REDUCTION",
+              "400.00",
+              "批准报名减款",
+              enrollment.version(),
+              approved.id());
+      var reduced = asActor(OPS, () -> enrollments.applyReduction(enrollment.id(), command));
+      assertThat(reduced.netAmount()).isEqualTo("1600.00");
+      assertThat(asActor(OPS, () -> enrollments.applyReduction(enrollment.id(), command)))
+          .isEqualTo(reduced);
+    } finally {
+      update(
+          "update approval.policy set free_below=999999999999.99 where school_id=? and action='ENROLLMENT_REDUCTION'",
+          SCHOOL);
+    }
+  }
+
+  @Test
+  void serviceFeeReductionUsesItsOwnApprovalAndCannotExceedFeeBalance() throws Exception {
+    var enrollment = multiCourse(1);
+    update("update enrollment.enrollment set service_fee=100.00 where id=?", enrollment.id());
+    update(
+        "update approval.policy set free_below=0 where school_id=? and action='SERVICE_FEE_REDUCTION'",
+        SCHOOL);
+    try {
+      var approvalRequest =
+          asActor(
+              OPS,
+              () ->
+                  approvalCommands.request(
+                      new CreateApprovalRequest(
+                          UUID.randomUUID(),
+                          enrollment.id(),
+                          "SERVICE_FEE_REDUCTION",
+                          "100.00",
+                          "服务费首期减款")));
+      var approved =
+          asActor(
+              APPROVER,
+              () ->
+                  approvalCommands.decide(
+                      approvalRequest.id(),
+                      new DecideApproval(approvalRequest.version(), "APPROVED", "同意")));
+      var reduced =
+          asActor(
+              OPS,
+              () ->
+                  enrollments.applyReduction(
+                      enrollment.id(),
+                      new ApplyReduction(
+                          UUID.randomUUID(),
+                          "SERVICE_FEE_REDUCTION",
+                          "100.00",
+                          "服务费首期减款",
+                          enrollment.version(),
+                          approved.id())));
+      assertThat(reduced.netAmount()).isEqualTo("1900.00");
+
+      var overLimitRequest =
+          asActor(
+              OPS,
+              () ->
+                  approvalCommands.request(
+                      new CreateApprovalRequest(
+                          UUID.randomUUID(),
+                          enrollment.id(),
+                          "SERVICE_FEE_REDUCTION",
+                          "0.01",
+                          "验证服务费余额上限")));
+      var overLimitApproved =
+          asActor(
+              APPROVER,
+              () ->
+                  approvalCommands.decide(
+                      overLimitRequest.id(),
+                      new DecideApproval(overLimitRequest.version(), "APPROVED", "同意")));
+      assertThatThrownBy(
+              () ->
+                  asActor(
+                      OPS,
+                      () ->
+                          enrollments.applyReduction(
+                              enrollment.id(),
+                              new ApplyReduction(
+                                  UUID.randomUUID(),
+                                  "SERVICE_FEE_REDUCTION",
+                                  "0.01",
+                                  "超额验证",
+                                  reduced.version(),
+                                  overLimitApproved.id()))))
+          .isInstanceOf(EnrollmentConflict.class)
+          .hasMessage("SERVICE_FEE_REDUCTION_EXCEEDS_REMAINING");
+    } finally {
+      update(
+          "update approval.policy set free_below=999999999999.99 where school_id=? and action='SERVICE_FEE_REDUCTION'",
           SCHOOL);
     }
   }

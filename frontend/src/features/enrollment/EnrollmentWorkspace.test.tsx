@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   AllocateAction,
   ApproveButton,
+  DiscountModal,
   EnrollmentBatchCreator,
   EnrollmentWorkspace,
   VoidReceiptButton,
@@ -359,4 +360,45 @@ it("课程明细合计校验：课时与费用必须等于价格版本", () => {
   expect(validateCourseLines([{ hours: "4", amount: "2000" }], price)).toBe(
     "每行明细都要选择课程",
   );
+});
+
+it("批准减款可选择服务费类别并提交金额、版本和审批单", async () => {
+  post.mockClear();
+  csrf.mockResolvedValue({ headerName: "X-CSRF-TOKEN", token: "test" });
+  post.mockResolvedValue({ response: { ok: true, status: 200 }, data: {} });
+  const done = vi.fn();
+  const user = userEvent.setup({ pointerEventsCheck: 0 });
+  renderWithClient(
+    <DiscountModal
+      enrollmentId="enrollment-1"
+      expectedVersion={4}
+      reduction
+      onCancel={vi.fn()}
+      onDone={done}
+      onError={vi.fn()}
+    />,
+  );
+  await user.click(screen.getByRole("combobox", { name: "减款类别" }));
+  await user.click(await screen.findByText("服务费减款"));
+  await user.type(screen.getByRole("spinbutton"), "50");
+  await user.type(
+    screen.getByLabelText("已通过的审批单号（如策略要求）"),
+    "approval-1",
+  );
+  await user.click(screen.getByRole("button", { name: "确认减款" }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+  expect(post.mock.calls[0][0]).toBe(
+    "/api/enrollment/enrollments/{id}/reductions",
+  );
+  expect(post.mock.calls[0][1]).toMatchObject({
+    params: { path: { id: "enrollment-1" } },
+    body: {
+      action: "SERVICE_FEE_REDUCTION",
+      amount: "50",
+      expectedVersion: 4,
+      approvalId: "approval-1",
+      requestId: expect.any(String),
+    },
+  });
+  expect(done).toHaveBeenCalled();
 });

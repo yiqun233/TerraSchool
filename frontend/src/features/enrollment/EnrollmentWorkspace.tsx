@@ -1061,6 +1061,7 @@ export function EnrollmentDetail({
   const [error, setError] = useState("");
   const [receipting, setReceipting] = useState(false);
   const [discounting, setDiscounting] = useState(false);
+  const [reducing, setReducing] = useState(false);
   const detail = useQuery({
     queryKey: ["enrollment", id],
     queryFn: async ({ signal }) => {
@@ -1173,7 +1174,10 @@ export function EnrollmentDetail({
             <Space wrap>
               <Button onClick={() => setReceipting(true)}>确认收款</Button>
               {canDiscount ? (
-                <Button onClick={() => setDiscounting(true)}>登记减免</Button>
+                <>
+                  <Button onClick={() => setDiscounting(true)}>登记减免</Button>
+                  <Button onClick={() => setReducing(true)}>批准减款</Button>
+                </>
               ) : null}
               <AllocateAction
                 enrollmentId={id}
@@ -1307,6 +1311,20 @@ export function EnrollmentDetail({
           onCancel={() => setDiscounting(false)}
           onDone={() => {
             setDiscounting(false);
+            void detail.refetch();
+            void outstanding.refetch();
+          }}
+          onError={setError}
+        />
+      ) : null}
+      {reducing ? (
+        <DiscountModal
+          enrollmentId={id}
+          expectedVersion={detail.data?.version ?? 0}
+          reduction
+          onCancel={() => setReducing(false)}
+          onDone={() => {
+            setReducing(false);
             void detail.refetch();
             void outstanding.refetch();
           }}
@@ -1626,12 +1644,14 @@ export function VoidReceiptButton({
 export function DiscountModal({
   enrollmentId,
   expectedVersion,
+  reduction = false,
   onCancel,
   onDone,
   onError,
 }: {
   enrollmentId: string;
   expectedVersion: number;
+  reduction?: boolean;
   onCancel: () => void;
   onDone: () => void;
   onError: (message: string) => void;
@@ -1644,6 +1664,7 @@ export function DiscountModal({
     reason?: string;
     expectedVersion: number;
     approvalId?: string;
+    action?: string;
   } | null>(null);
   const [form] = Form.useForm();
 
@@ -1658,20 +1679,44 @@ export function DiscountModal({
     setBusy(true);
     try {
       const token = await csrf();
-      const { response } = await api.POST(
-        "/api/enrollment/enrollments/{id}/discounts",
-        {
-          params: { path: { id: enrollmentId } },
-          headers: { [token.headerName!]: token.token! },
-          body: (request.current ??= {
-            requestId: crypto.randomUUID(),
-            amount: String(values.amount),
-            reason: values.reason || undefined,
-            expectedVersion,
-            approvalId: values.approvalId || undefined,
-          }),
-        },
-      );
+      const base = {
+        requestId: crypto.randomUUID(),
+        amount: String(values.amount),
+        reason: values.reason || undefined,
+        expectedVersion,
+        approvalId: values.approvalId || undefined,
+      };
+      let response;
+      if (reduction) {
+        const payload = (request.current ??= {
+          ...base,
+          action: values.action,
+        });
+        ({ response } = await api.POST(
+          "/api/enrollment/enrollments/{id}/reductions",
+          {
+            params: { path: { id: enrollmentId } },
+            headers: { [token.headerName!]: token.token! },
+            body: payload as typeof base & {
+              action: string;
+              requestId: string;
+            },
+          },
+        ));
+      } else {
+        const payload = (request.current ??= {
+          ...base,
+          requestId: base.requestId,
+        });
+        ({ response } = await api.POST(
+          "/api/enrollment/enrollments/{id}/discounts",
+          {
+            params: { path: { id: enrollmentId } },
+            headers: { [token.headerName!]: token.token! },
+            body: payload,
+          },
+        ));
+      }
       if (response.status === 409) {
         request.current = null;
         setUncertain(false);
@@ -1698,7 +1743,7 @@ export function DiscountModal({
 
   return (
     <Modal
-      title="登记减免"
+      title={reduction ? "登记批准减款" : "登记减免"}
       open
       onCancel={uncertain ? undefined : onCancel}
       closable={!busy && !uncertain}
@@ -1707,6 +1752,22 @@ export function DiscountModal({
       footer={null}
     >
       <Form form={form} layout="vertical">
+        {reduction ? (
+          <Form.Item
+            label="减款类别"
+            name="action"
+            initialValue="ENROLLMENT_REDUCTION"
+            rules={[{ required: true, message: "请选择减款类别" }]}
+          >
+            <Select
+              disabled={busy || uncertain}
+              options={[
+                { value: "ENROLLMENT_REDUCTION", label: "报名金额减款" },
+                { value: "SERVICE_FEE_REDUCTION", label: "服务费减款" },
+              ]}
+            />
+          </Form.Item>
+        ) : null}
         <Form.Item
           label="减免金额（元）"
           name="amount"
@@ -1722,11 +1783,11 @@ export function DiscountModal({
         <Form.Item label="原因" name="reason">
           <Input maxLength={200} disabled={busy || uncertain} />
         </Form.Item>
-        <Form.Item label="已通过的优惠审批单号（如策略要求）" name="approvalId">
+        <Form.Item label="已通过的审批单号（如策略要求）" name="approvalId">
           <Input disabled={busy || uncertain} />
         </Form.Item>
         <Typography.Text type="secondary">
-          已发生消费或退款时暂不支持直接减免；多分配金额会原子释放回学员账户。
+          已发生消费或退课后暂不支持直接减款；多分配金额会原子释放回学员账户。
           {uncertain ? "上次结果未确认，请使用相同内容重试。" : ""}
         </Typography.Text>
         <div style={{ marginTop: 12 }}>
@@ -1736,7 +1797,7 @@ export function DiscountModal({
             loading={busy}
             disabled={busy}
           >
-            确认减免
+            {reduction ? "确认减款" : "确认减免"}
           </Button>
         </div>
       </Form>
