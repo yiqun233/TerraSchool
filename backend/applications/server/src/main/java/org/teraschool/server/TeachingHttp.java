@@ -143,6 +143,11 @@ class TeachingHttp {
     return commands.addMember(id, command);
   }
 
+  @PostMapping(value = "/api/teaching/classes/members/batch", consumes = "application/json")
+  List<ClassView> addMembers(@RequestBody AddClassMembers command) {
+    return commands.addMembers(command);
+  }
+
   @PostMapping(value = "/api/teaching/enrollments/{id}/transfer", consumes = "application/json")
   ClassView transferMember(@PathVariable UUID id, @RequestBody TransferClassMember command) {
     return commands.transferMember(id, command);

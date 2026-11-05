@@ -206,6 +206,103 @@ it("班级列表展示在班人数与状态", async () => {
   );
 });
 
+it("可从有效报名一次选择多个目标班并提交批量入班", async () => {
+  get.mockImplementation(async (path: string) => {
+    if (path === "/api/teaching/capabilities")
+      return { response: { ok: true, status: 200 }, data: capabilities };
+    if (path === "/api/teaching/classes")
+      return {
+        response: { ok: true, status: 200 },
+        data: [
+          {
+            id: "class-1",
+            schoolId: "school-1",
+            curriculumId: "course-1",
+            curriculumName: "数学",
+            name: "数学 A 班",
+            status: "ACTIVE",
+            memberCount: 0,
+            version: 0,
+          },
+          {
+            id: "class-2",
+            schoolId: "school-1",
+            curriculumId: "course-1",
+            curriculumName: "数学",
+            name: "数学 B 班",
+            status: "ACTIVE",
+            memberCount: 0,
+            version: 0,
+          },
+        ],
+      };
+    if (path === "/api/enrollment/enrollments")
+      return {
+        response: { ok: true, status: 200 },
+        data: {
+          items: [
+            {
+              id: "enrollment-1",
+              studentName: "学员甲",
+              productName: "数学产品",
+              curriculumName: "数学",
+            },
+          ],
+          total: 1,
+        },
+      };
+    if (path === "/api/teaching/me/workbench")
+      return {
+        response: { ok: true, status: 200 },
+        data: { classes: [], lessons: [] },
+      };
+    if (path === "/api/teaching/reports/attendance")
+      return {
+        response: { ok: true, status: 200 },
+        data: { from: "2026-11-01", to: "2026-11-06", lessons: [] },
+      };
+    return { response: { ok: true, status: 200 }, data: [] };
+  });
+  csrf.mockResolvedValue({ headerName: "X-CSRF", token: "token" });
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.startsWith("/api/exports?")) return Response.json([]);
+    if (url === "/api/teaching/classes/members/batch")
+      return Response.json([], { status: 200 });
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+  renderWithClient(<TeachingWorkspace onUnauthorized={vi.fn()} />);
+  await user.click((await screen.findAllByText("数学 A 班"))[0]);
+  expect(await screen.findByText("课次：数学 A 班")).toBeTruthy();
+  await user.click(await screen.findByRole("button", { name: "加入已有报名" }));
+  expect(
+    await screen.findByText(
+      "选择本校有效报名加入当前班级。现有规则与审批要求仍以服务端校验为准。",
+    ),
+  ).toBeTruthy();
+  await user.click(await screen.findByText("搜索并选择有效报名"));
+  await user.click(await screen.findByText("学员甲 · 数学产品 · 数学"));
+  await user.click(await screen.findByLabelText("目标班级"));
+  await user.click(await screen.findByText("数学 B 班 · 数学"));
+  await user.click(screen.getByRole("button", { name: "加入班级" }));
+
+  await waitFor(() =>
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/teaching/classes/members/batch",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          enrollmentId: "enrollment-1",
+          classIds: ["class-1", "class-2"],
+        }),
+      }),
+    ),
+  );
+});
+
 it("结班需确认并提交班级版本", async () => {
   vi.clearAllMocks();
   get.mockImplementation(async (path: string) => {

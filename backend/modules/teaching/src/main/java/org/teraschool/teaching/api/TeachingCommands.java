@@ -1,5 +1,6 @@
 package org.teraschool.teaching.api;
 
+import java.util.List;
 import java.util.UUID;
 
 public interface TeachingCommands {
@@ -12,6 +13,9 @@ public interface TeachingCommands {
   ClassView cancelClass(UUID classId, CancelClass command);
 
   ClassView addMember(UUID classId, AddClassMember command);
+
+  /** 原子将一条报名加入多个匹配课程班级，任一不满足时全部回滚。 */
+  List<ClassView> addMembers(AddClassMembers command);
 
   /** 经审批/免批策略后在同校同课程班级间转班；报名金额与课时留在原报名上。 */
   ClassView transferMember(UUID enrollmentId, TransferClassMember command);

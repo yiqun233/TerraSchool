@@ -78,6 +78,7 @@ export function TeachingWorkspace({
   const [transferApprovalId, setTransferApprovalId] = useState("");
   const [addingMembersOpen, setAddingMembersOpen] = useState(false);
   const [memberEnrollmentId, setMemberEnrollmentId] = useState<string>();
+  const [memberClassIds, setMemberClassIds] = useState<string[]>([]);
   const [enrollmentPage, setEnrollmentPage] = useState(0);
   const [addingMemberBusy, setAddingMemberBusy] = useState(false);
   const [creatingClass, setCreatingClass] = useState(false);
@@ -481,19 +482,24 @@ export function TeachingWorkspace({
   }
 
   async function addClassMember() {
-    if (!classId || !memberEnrollmentId || addingMemberBusy) return;
+    if (!memberClassIds.length || !memberEnrollmentId || addingMemberBusy)
+      return;
     setAddingMemberBusy(true);
     setError("");
     try {
       const token = await csrf();
-      const { response } = await api.POST(
-        "/api/teaching/classes/{id}/members",
-        {
-          params: { path: { id: classId } },
-          headers: { [token.headerName!]: token.token! },
-          body: { enrollmentId: memberEnrollmentId },
+      const response = await fetch("/api/teaching/classes/members/batch", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          [token.headerName!]: token.token!,
         },
-      );
+        body: JSON.stringify({
+          enrollmentId: memberEnrollmentId,
+          classIds: memberClassIds,
+        }),
+      });
       if (response.status === 401) {
         onUnauthorized();
         return;
@@ -508,10 +514,9 @@ export function TeachingWorkspace({
       }
       setAddingMembersOpen(false);
       setMemberEnrollmentId(undefined);
+      setMemberClassIds([]);
       await Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: ["teaching-members", classId],
-        }),
+        queryClient.invalidateQueries({ queryKey: ["teaching-members"] }),
         queryClient.invalidateQueries({ queryKey: ["teaching-classes"] }),
       ]);
     } catch {
@@ -1066,6 +1071,7 @@ export function TeachingWorkspace({
                   onClick={() => {
                     setEnrollmentPage(0);
                     setMemberEnrollmentId(undefined);
+                    setMemberClassIds(classId ? [classId] : []);
                     setAddingMembersOpen(true);
                   }}
                 >
@@ -1235,7 +1241,10 @@ export function TeachingWorkspace({
         cancelText="取消"
         okButtonProps={{
           disabled:
-            !memberEnrollmentId || !school?.maintainable || addingMemberBusy,
+            !memberEnrollmentId ||
+            !memberClassIds.length ||
+            !school?.maintainable ||
+            addingMemberBusy,
         }}
         confirmLoading={addingMemberBusy}
         destroyOnHidden
@@ -1267,6 +1276,26 @@ export function TeachingWorkspace({
             enrollments.isLoading ? "正在读取…" : "本页没有可加入的有效报名"
           }
         />
+        <Typography.Paragraph style={{ marginTop: 16, marginBottom: 6 }}>
+          目标班级（可多选）
+        </Typography.Paragraph>
+        <Select
+          mode="multiple"
+          aria-label="目标班级"
+          placeholder="选择本校进行中的课程班级"
+          value={memberClassIds}
+          onChange={setMemberClassIds}
+          options={(classes.data ?? [])
+            .filter((item) => item.status === "ACTIVE")
+            .map((item) => ({
+              value: item.id!,
+              label: `${item.name} · ${item.curriculumName}`,
+            }))}
+          style={{ width: "100%" }}
+        />
+        <Typography.Text type="secondary">
+          服务端会校验报名课程与班级课程匹配；同课程多班并行、名额和插班细则待确认。
+        </Typography.Text>
         <Space style={{ marginTop: 12 }}>
           <Button
             size="small"

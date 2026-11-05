@@ -28,6 +28,7 @@ class TeachingAndConsumptionTest {
       SCHOOL = UUID.randomUUID(),
       OTHER_SCHOOL = UUID.randomUUID(),
       CURRICULUM = UUID.randomUUID(),
+      SECOND_CURRICULUM = UUID.randomUUID(),
       OTHER_CURRICULUM = UUID.randomUUID(),
       PRODUCT = UUID.randomUUID(),
       PRICE = UUID.randomUUID(),
@@ -64,7 +65,12 @@ class TeachingAndConsumptionTest {
           TENANT,
           id,
           id.equals(SCHOOL) ? "教务学校甲" : "教务学校乙");
-    for (var pair : new Object[][] {{CURRICULUM, SCHOOL}, {OTHER_CURRICULUM, OTHER_SCHOOL}})
+    for (var pair :
+        new Object[][] {
+          {CURRICULUM, SCHOOL},
+          {SECOND_CURRICULUM, SCHOOL},
+          {OTHER_CURRICULUM, OTHER_SCHOOL}
+        })
       update(
           "insert into product.curriculum(id,tenant_id,school_id,name) values (?,?,?,?)",
           pair[0],
@@ -182,6 +188,12 @@ class TeachingAndConsumptionTest {
           "insert into enrollment.charge(tenant_id,enrollment_id,kind,amount) values (?,?,'ORIGINAL',1000.00)",
           TENANT,
           id);
+      update(
+          "insert into enrollment.enrollment_course(tenant_id,enrollment_id,curriculum_id,hours,amount)"
+              + " values (?,?,?,10.00,1000.00)",
+          TENANT,
+          id,
+          CURRICULUM);
     } catch (Exception error) {
       throw new IllegalStateException(error);
     }
@@ -189,9 +201,19 @@ class TeachingAndConsumptionTest {
   }
 
   ClassView newClass(String name) {
+    return newClass(name, CURRICULUM);
+  }
+
+  ClassView newClass(String name, UUID curriculumId) {
+    return newClass(name, curriculumId, "NORMAL");
+  }
+
+  ClassView newClass(String name, UUID curriculumId, String classType) {
     return asActor(
         TEACHER,
-        () -> commands.createClass(new CreateClass(UUID.randomUUID(), SCHOOL, CURRICULUM, name)));
+        () ->
+            commands.createClass(
+                new CreateClass(UUID.randomUUID(), SCHOOL, curriculumId, name, classType)));
   }
 
   ClassView classWithMember(String name) {
@@ -644,6 +666,60 @@ class TeachingAndConsumptionTest {
             asActor(TEACHER, () -> commands.addMember(other.id(), new AddClassMember(enrollment)))
                 .memberCount())
         .isEqualTo(1);
+  }
+
+  @Test
+  void multiClassEnrollmentIsAtomicCourseMatchedAndIdempotent() throws Exception {
+    var first = newClass("批量入班甲");
+    var second = newClass("批量入班乙");
+    var enrollment = activeEnrollment();
+    var firstAuditCount = countAudit("audit.teaching_event", first.id());
+    var secondAuditCount = countAudit("audit.teaching_event", second.id());
+    var command = new AddClassMembers(enrollment, List.of(first.id(), second.id()));
+
+    assertThat(asActor(TEACHER, () -> commands.addMembers(command)))
+        .extracting(ClassView::id)
+        .containsExactly(first.id(), second.id());
+    assertThat(asActor(TEACHER, () -> queries.members(first.id())))
+        .extracting(ClassMemberView::enrollmentId)
+        .containsExactly(enrollment);
+    assertThat(asActor(TEACHER, () -> commands.addMembers(command)))
+        .extracting(ClassView::id)
+        .containsExactly(first.id(), second.id());
+    assertThat(countAudit("audit.teaching_event", first.id())).isEqualTo(firstAuditCount + 1);
+    assertThat(countAudit("audit.teaching_event", second.id())).isEqualTo(secondAuditCount + 1);
+
+    var mismatch = newClass("不匹配课程班", SECOND_CURRICULUM);
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    TEACHER,
+                    () ->
+                        commands.addMembers(
+                            new AddClassMembers(enrollment, List.of(first.id(), mismatch.id())))))
+        .isInstanceOf(TeachingConflict.class)
+        .hasMessage("ENROLLMENT_COURSE_MISMATCH");
+    assertThat(asActor(TEACHER, () -> queries.members(mismatch.id()))).isEmpty();
+  }
+
+  @Test
+  void autoSettlementBatchRejectsClassesThatResolveToDifferentModes() throws Exception {
+    var vip = newClass("自动模式 VIP 班", CURRICULUM, "VIP");
+    var normal = newClass("自动模式普通班", CURRICULUM, "NORMAL");
+    var enrollment = activeEnrollment();
+    update("update enrollment.enrollment set settlement_mode=0 where id=?", enrollment);
+
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    TEACHER,
+                    () ->
+                        commands.addMembers(
+                            new AddClassMembers(enrollment, List.of(vip.id(), normal.id())))))
+        .isInstanceOf(TeachingConflict.class)
+        .hasMessage("AUTO_SETTLEMENT_MODE_CLASS_TYPE_MISMATCH");
+    assertThat(asActor(TEACHER, () -> queries.members(vip.id()))).isEmpty();
+    assertThat(asActor(TEACHER, () -> queries.members(normal.id()))).isEmpty();
   }
 
   @Test
@@ -1126,5 +1202,39 @@ class TeachingAndConsumptionTest {
     assertThat(body.get("consumedHours").asText()).isEqualTo("1.00");
     assertThat(body.get("consumedAmount").asText()).isEqualTo("100.00");
     assertThat(body.get("remainingHours").isTextual()).isTrue();
+  }
+
+  @Test
+  void httpBatchMemberRouteAddsOneEnrollmentToMultipleClasses() throws Exception {
+    var first = newClass("HTTP批量甲");
+    var second = newClass("HTTP批量乙");
+    var enrollmentId = activeEnrollment();
+    var client =
+        HttpClient.newBuilder()
+            .cookieHandler(new CookieManager(null, CookiePolicy.ACCEPT_ALL))
+            .build();
+    var json = JsonMapper.builder().build();
+    var csrf = json.readTree(get(client, "/api/session/csrf").body());
+    assertThat(
+            post(
+                    client,
+                    "/api/session/login",
+                    "username=teaching-teacher&password=" + PASSWORD,
+                    csrf.get("token").asText())
+                .statusCode())
+        .isEqualTo(204);
+    var token = json.readTree(get(client, "/api/session/csrf").body()).get("token").asText();
+    var result =
+        post(
+            client,
+            "/api/teaching/classes/members/batch",
+            json.writeValueAsString(
+                new AddClassMembers(enrollmentId, List.of(first.id(), second.id()))),
+            token);
+
+    assertThat(result.statusCode()).isEqualTo(200);
+    assertThat(json.readTree(result.body()).size()).isEqualTo(2);
+    assertThat(asActor(TEACHER, () -> queries.members(first.id()))).hasSize(1);
+    assertThat(asActor(TEACHER, () -> queries.members(second.id()))).hasSize(1);
   }
 }

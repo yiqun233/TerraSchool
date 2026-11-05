@@ -821,44 +821,86 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
   private ClassView addMemberWithTrace(UUID classId, AddClassMember command) {
     if (classId == null || command == null || command.enrollmentId() == null)
       throw new IllegalArgumentException("需要班级和报名");
+    return addMembersWithTrace(new AddClassMembers(command.enrollmentId(), List.of(classId)))
+        .getFirst();
+  }
+
+  @Override
+  public List<ClassView> addMembers(AddClassMembers command) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      return addMembersWithTrace(command);
+    }
+  }
+
+  private List<ClassView> addMembersWithTrace(AddClassMembers command) {
+    if (command == null || command.enrollmentId() == null || command.classIds().isEmpty())
+      throw new IllegalArgumentException("需要报名和目标班级");
+    if (command.classIds().size() > 20) throw new TeachingConflict("CLASS_MEMBER_BATCH_TOO_LARGE");
+    if (new HashSet<>(command.classIds()).size() != command.classIds().size())
+      throw new TeachingConflict("CLASS_MEMBER_BATCH_DUPLICATE_TARGET");
     var scope = actors.requireResourceScope("TEACHING");
     return tx.execute(
         scope.tenantId(),
         () -> {
           schools.lockTenant(scope.tenantId());
           var verified = actors.requireResourceScopeInTransaction("TEACHING");
-          var row = requireClass(verified, classId);
-          var schoolId = row.get("school_id", UUID.class);
+          var enrollment = enrollments.require(command.enrollmentId());
+          if (!"ACTIVE".equals(enrollment.status()))
+            throw new TeachingConflict("ENROLLMENT_NOT_ACTIVE");
+          if (enrollment.courses().isEmpty())
+            throw new TeachingConflict("ENROLLMENT_HAS_NO_COURSE");
+          var schoolId = enrollment.schoolId();
           if (!verified.maintainableSchoolIds().contains(schoolId))
             throw new AccessDeniedException("无班级维护权限");
           if (!schools.require(schoolId).active())
             throw new AccessDeniedException("学校已停用，不能调整班级成员");
-          if (!"ACTIVE".equals(row.get("status", String.class)))
-            throw new TeachingConflict("CLASS_NOT_ACTIVE");
-          var enrollment = enrollments.require(command.enrollmentId());
-          if (!enrollment.schoolId().equals(schoolId)) throw new AccessDeniedException("报名不属于该学校");
-          if (!"ACTIVE".equals(enrollment.status()))
-            throw new TeachingConflict("ENROLLMENT_NOT_ACTIVE");
-          // 一条报名可以同时上多门课程（结算模式 2/3 的课程匹配前提），因此只禁止同一班级重复加入；
-          // 同一班级内重复加入仍返回既有冲突码，便于幂等重试。
-          var current =
-              sql.fetchOne(
-                  "select class_id from teaching.enrollment_class"
-                      + " where enrollment_id=? and class_id=? and active",
+
+          var classes = new ArrayList<Record>();
+          for (var classId : command.classIds()) {
+            var target = requireClass(verified, classId);
+            if (!schoolId.equals(target.get("school_id", UUID.class)))
+              throw new AccessDeniedException("报名与目标班级须属于同一学校");
+            if (!"ACTIVE".equals(target.get("status", String.class)))
+              throw new TeachingConflict("CLASS_NOT_ACTIVE");
+            var curriculumId = target.get("curriculum_id", UUID.class);
+            if (enrollment.courses().stream()
+                .noneMatch(course -> curriculumId.equals(course.curriculumId())))
+              throw new TeachingConflict("ENROLLMENT_COURSE_MISMATCH");
+            classes.add(target);
+          }
+
+          if (enrollment.settlementMode() == 0) {
+            var resolvedModes =
+                classes.stream()
+                    .map(target -> "VIP".equals(target.get("class_type", String.class)) ? 1 : 2)
+                    .collect(java.util.stream.Collectors.toSet());
+            if (resolvedModes.size() != 1)
+              throw new TeachingConflict("AUTO_SETTLEMENT_MODE_CLASS_TYPE_MISMATCH");
+            enrollments.resolveSettlementMode(enrollment.id(), resolvedModes.iterator().next());
+          }
+
+          var schoolName = schools.require(schoolId).name();
+          var result = new ArrayList<ClassView>();
+          for (var target : classes) {
+            var classId = target.get("id", UUID.class);
+            boolean alreadyMember =
+                sql.fetchOne(
+                        "select 1 from teaching.enrollment_class where enrollment_id=? and class_id=? and active",
+                        command.enrollmentId(),
+                        classId)
+                    != null;
+            if (!alreadyMember) {
+              sql.execute(
+                  "insert into teaching.enrollment_class(tenant_id,enrollment_id,class_id,joined_on)"
+                      + " values (?,?,?,CURRENT_DATE)",
+                  scope.tenantId(),
                   command.enrollmentId(),
                   classId);
-          resolveAutoMode(enrollment, classId);
-          if (current != null) {
-            return classView(requireClass(verified, classId), schools.require(schoolId).name());
+              audit(scope, "CLASS_MEMBER_ADDED", classId, schoolId, "members");
+            }
+            result.add(classView(requireClass(verified, classId), schoolName));
           }
-          sql.execute(
-              "insert into teaching.enrollment_class(tenant_id,enrollment_id,class_id,joined_on)"
-                  + " values (?,?,?,CURRENT_DATE)",
-              scope.tenantId(),
-              command.enrollmentId(),
-              classId);
-          audit(scope, "CLASS_MEMBER_ADDED", classId, schoolId, "members");
-          return classView(requireClass(verified, classId), schools.require(schoolId).name());
+          return List.copyOf(result);
         });
   }
 
@@ -1911,7 +1953,7 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
   private Record requireClass(ResourceScope scope, UUID id) {
     var row =
         sql.fetchOne(
-            "select c.id,c.school_id,c.curriculum_id,c.name,c.status,c.version,c.group_training,"
+            "select c.id,c.school_id,c.curriculum_id,c.name,c.status,c.version,c.group_training,c.class_type,"
                 + "cur.name as curriculum_name,"
                 + "(select count(*) from teaching.enrollment_class m where m.class_id=c.id and m.active)"
                 + " as member_count from teaching.class c"
