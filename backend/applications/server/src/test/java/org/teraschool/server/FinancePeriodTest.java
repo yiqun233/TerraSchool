@@ -490,9 +490,7 @@ class FinancePeriodTest {
         new TransferClassMember(
             UUID.randomUUID(), source.id(), target.id(), approval.id(), "同课程换班");
     assertThatThrownBy(
-            () ->
-                asActor(
-                    OPS, () -> teaching.transferMember(enrollment.id(), pendingTransfer)))
+            () -> asActor(OPS, () -> teaching.transferMember(enrollment.id(), pendingTransfer)))
         .isInstanceOf(ApprovalConflict.class)
         .hasMessage("APPROVAL_NOT_APPROVED");
     assertThat(

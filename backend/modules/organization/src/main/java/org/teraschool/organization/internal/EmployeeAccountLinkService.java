@@ -86,8 +86,7 @@ public class EmployeeAccountLinkService {
         actor.tenantId(),
         () -> {
           var verified = actors.requireActionInTransaction("STUDENT_ASSIGN");
-          if (!verified.schools().contains(schoolId))
-            throw new AccessDeniedException("无该校学员分派权限");
+          if (!verified.schools().contains(schoolId)) throw new AccessDeniedException("无该校学员分派权限");
           return sql.fetch(
                   "select e.account_id,e.name from organization.employee e join identity.account a on a.id=e.account_id and a.tenant_id=e.tenant_id join organization.unit s on s.id=e.school_id and s.tenant_id=e.tenant_id and s.active where e.tenant_id=? and e.school_id=? and e.active and e.account_id is not null and a.active order by e.name,e.id limit 200",
                   actor.tenantId(),
