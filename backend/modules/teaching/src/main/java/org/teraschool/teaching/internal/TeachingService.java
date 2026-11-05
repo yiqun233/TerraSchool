@@ -404,6 +404,60 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
   }
 
   @Override
+  public ClassConsumptionReport classConsumptionReport(
+      UUID schoolId, String fromText, String toText) {
+    if (schoolId == null) throw new IllegalArgumentException("需要学校");
+    var from = workbenchDate(fromText);
+    var to = workbenchDate(toText);
+    if (to.isBefore(from) || to.isAfter(from.plusDays(30)))
+      throw new IllegalArgumentException("班级课次消费日期范围须为 1 至 31 天");
+    var teachingScope = actors.requireResourceScope("TEACHING");
+    var enrollmentScope = actors.requireResourceScope("ENROLLMENT");
+    var fundsActor = actors.requireAction("FUNDS_READ");
+    if (!teachingScope.tenantId().equals(enrollmentScope.tenantId())
+        || !teachingScope.tenantId().equals(fundsActor.tenantId())
+        || !teachingScope.readableSchoolIds().contains(schoolId)
+        || !enrollmentScope.readableSchoolIds().contains(schoolId)
+        || !fundsActor.schools().contains(schoolId))
+      throw new AccessDeniedException("需要报名、教务和资金的学校读取权限");
+    return tx.execute(
+        teachingScope.tenantId(),
+        () -> {
+          var verifiedTeaching = actors.requireResourceScopeInTransaction("TEACHING");
+          var verifiedEnrollment = actors.requireResourceScopeInTransaction("ENROLLMENT");
+          var verifiedFunds = actors.requireActionInTransaction("FUNDS_READ");
+          if (!verifiedTeaching.readableSchoolIds().contains(schoolId)
+              || !verifiedEnrollment.readableSchoolIds().contains(schoolId)
+              || !verifiedFunds.schools().contains(schoolId))
+            throw new AccessDeniedException("需要报名、教务和资金的学校读取权限");
+          var rows =
+              sql.fetch(
+                  "select c.id as class_id,c.name as class_name,count(distinct l.id) as lesson_count,"
+                      + "coalesce(sum(x.hours),0) as consumed_hours,coalesce(sum(x.amount),0) as consumed_amount"
+                      + " from teaching.consumption x"
+                      + " join teaching.lesson l on l.id=x.lesson_id and l.tenant_id=x.tenant_id"
+                      + " join teaching.class c on c.id=l.class_id and c.tenant_id=l.tenant_id"
+                      + " where c.school_id=? and l.lesson_date between ? and ?"
+                      + " group by c.id,c.name order by c.name,c.id limit 5001",
+                  schoolId,
+                  from,
+                  to);
+          org.teraschool.platform.api.CsvExport.requireComplete(rows.size());
+          return new ClassConsumptionReport(
+              from.toString(),
+              to.toString(),
+              rows.map(
+                  row ->
+                      new ClassConsumptionRow(
+                          row.get("class_id", UUID.class),
+                          row.get("class_name", String.class),
+                          row.get("lesson_count", Long.class),
+                          hours(row.get("consumed_hours", BigDecimal.class)),
+                          money(row.get("consumed_amount", BigDecimal.class)))));
+        });
+  }
+
+  @Override
   public AttendanceReport attendanceReport(UUID schoolId, String fromText, String toText) {
     if (schoolId == null) throw new IllegalArgumentException("需要学校");
     var from = workbenchDate(fromText);

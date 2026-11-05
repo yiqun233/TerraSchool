@@ -78,6 +78,19 @@ public interface TeachingQueries {
     }
   }
 
+  record ClassConsumptionRow(
+      UUID classId,
+      String className,
+      long lessonCount,
+      String consumedHours,
+      String consumedAmount) {}
+
+  record ClassConsumptionReport(String from, String to, List<ClassConsumptionRow> classes) {
+    public ClassConsumptionReport {
+      classes = List.copyOf(classes);
+    }
+  }
+
   record LessonAttendanceSummary(
       UUID lessonId,
       String className,
@@ -109,6 +122,9 @@ public interface TeachingQueries {
 
   /** 学校范围内逐报名的累计消费/退课/剩余课时，需同时具备报名、教务和资金读取权限。 */
   StudentConsumptionPage studentConsumption(UUID schoolId, int page, int size);
+
+  /** 按课次日期和班级汇总已固化课次消费；金额是消费额，不代表现金实收或班级收入。 */
+  ClassConsumptionReport classConsumptionReport(UUID schoolId, String from, String to);
 
   /** 学校范围按课次和日期汇总已登记考勤；未登记课次的各状态计数为 0。 */
   AttendanceReport attendanceReport(UUID schoolId, String from, String to);

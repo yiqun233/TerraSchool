@@ -61,6 +61,8 @@ it("列出十二个月并按状态标注，锁定月份显示解锁按钮", asyn
       return { response: { ok: true, status: 200 }, data: [] };
     if (path === "/api/finance/reports/daily-overview")
       return { response: { ok: false, status: 403 } };
+    if (path === "/api/teaching/reports/class-consumption")
+      return { response: { ok: false, status: 403 } };
     throw new Error("unexpected path " + path);
   });
   renderWithClient(<PeriodManager onUnauthorized={vi.fn()} />);
@@ -94,6 +96,8 @@ it("对账卡片显示累计平衡式分项和差额", async () => {
     if (path === "/api/finance/reports/receipt-daily")
       return { response: { ok: true, status: 200 }, data: [] };
     if (path === "/api/finance/reports/daily-overview")
+      return { response: { ok: false, status: 403 } };
+    if (path === "/api/teaching/reports/class-consumption")
       return { response: { ok: false, status: 403 } };
     throw new Error("unexpected path " + path);
   });
@@ -147,6 +151,23 @@ it("展示按日收款原额并把撤销单据单独列示", async () => {
           attendanceRecordCount: 18,
         },
       };
+    if (path === "/api/teaching/reports/class-consumption")
+      return {
+        response: { ok: true, status: 200 },
+        data: {
+          from: "2026-04-01",
+          to: "2026-04-30",
+          classes: [
+            {
+              classId: "class-1",
+              className: "消费核对班",
+              lessonCount: 3,
+              consumedHours: "4.50",
+              consumedAmount: "360.00",
+            },
+          ],
+        },
+      };
     throw new Error("unexpected path " + path);
   });
   renderWithClient(<PeriodManager onUnauthorized={vi.fn()} />);
@@ -157,6 +178,11 @@ it("展示按日收款原额并把撤销单据单独列示", async () => {
   expect(screen.getAllByText("150.00")).toHaveLength(2);
   expect(await screen.findByText("每日运营概况（候选口径）")).toBeTruthy();
   expect(screen.getByText("18")).toBeTruthy();
+  expect(
+    await screen.findByText("按班级课次消费对账（消费额，不是实收）"),
+  ).toBeTruthy();
+  expect(screen.getByText("消费核对班")).toBeTruthy();
+  expect(screen.getByText("360.00")).toBeTruthy();
   expect(screen.getByText(/不含现金退款净额或财务确收口径/)).toBeTruthy();
   expect(get).toHaveBeenCalledWith(
     "/api/finance/reports/receipt-daily",

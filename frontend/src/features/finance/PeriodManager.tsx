@@ -21,6 +21,7 @@ type PeriodView = components["schemas"]["PeriodView"];
 type FundsReconciliation = components["schemas"]["FundsReconciliation"];
 type ReceiptDailyTotal = components["schemas"]["ReceiptDailyTotal"];
 type DailyOverview = components["schemas"]["DailyOverview"];
+type ClassConsumptionReport = components["schemas"]["ClassConsumptionReport"];
 
 const YEAR = new Date().getFullYear();
 function localDay() {
@@ -146,6 +147,42 @@ export function PeriodManager({
       }
       if (response.status === 403) return null;
       if (!response.ok || !data) throw new Error("无法读取每日概况");
+      return data;
+    },
+  });
+  const classConsumption = useQuery<ClassConsumptionReport | null>({
+    queryKey: [
+      "finance-class-consumption",
+      current,
+      receiptRange.from,
+      receiptRange.to,
+    ],
+    enabled:
+      !!current &&
+      receiptRange.from <= receiptRange.to &&
+      Date.parse(`${receiptRange.to}T00:00:00Z`) -
+        Date.parse(`${receiptRange.from}T00:00:00Z`) <=
+        30 * 24 * 60 * 60 * 1000,
+    queryFn: async ({ signal }) => {
+      const { data, response } = await api.GET(
+        "/api/teaching/reports/class-consumption",
+        {
+          params: {
+            query: {
+              schoolId: current!,
+              from: receiptRange.from,
+              to: receiptRange.to,
+            },
+          },
+          signal,
+        },
+      );
+      if (response.status === 401) {
+        onUnauthorized();
+        throw new Error("登录已失效，请重新登录");
+      }
+      if (response.status === 403) return null;
+      if (!response.ok || !data) throw new Error("无法读取班级课次消费");
       return data;
     },
   });
@@ -383,6 +420,53 @@ export function PeriodManager({
         ) : null}
         <Typography.Text type="secondary">
           报名按创建日期、收款按发生日期、教务按课次日期统计；收款原额按单据状态分列，不扣退款。时区和正式指标口径待
+          Q62 确认。
+        </Typography.Text>
+      </Card>
+      <Card
+        title="按班级课次消费对账（消费额，不是实收）"
+        size="small"
+        loading={classConsumption.isFetching}
+        style={{ marginTop: 12 }}
+      >
+        {receiptRange.from > receiptRange.to ||
+        Date.parse(`${receiptRange.to}T00:00:00Z`) -
+          Date.parse(`${receiptRange.from}T00:00:00Z`) >
+          30 * 24 * 60 * 60 * 1000 ? (
+          <Alert
+            type="warning"
+            title="班级消费对账日期范围最多 31 天"
+            showIcon
+          />
+        ) : null}
+        {classConsumption.error ? (
+          <Alert
+            type="error"
+            title={classConsumption.error.message}
+            showIcon
+            style={{ marginTop: 12 }}
+          />
+        ) : classConsumption.data === null ? (
+          <Typography.Text type="secondary">
+            当前账号需要报名、教务和资金三个数据域的读取权限
+          </Typography.Text>
+        ) : (
+          <Table
+            style={{ marginTop: 12 }}
+            size="small"
+            rowKey="classId"
+            pagination={false}
+            dataSource={classConsumption.data?.classes ?? []}
+            columns={[
+              { title: "班级", dataIndex: "className" },
+              { title: "已消费课次数", dataIndex: "lessonCount" },
+              { title: "已入账课时", dataIndex: "consumedHours" },
+              { title: "已入账消费金额", dataIndex: "consumedAmount" },
+            ]}
+          />
+        )}
+        <Typography.Text type="secondary">
+          按课次日期汇总已固化的课次消费，不含期初已消耗，也不等同于班级收入、确收或现金实收；完整收入归属待
           Q62 确认。
         </Typography.Text>
       </Card>

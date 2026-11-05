@@ -401,6 +401,55 @@ class FinancePeriodTest {
   }
 
   @Test
+  void classConsumptionReportBalancesHoursAndPostedAmountsByLessonDate() throws Exception {
+    var student = freshStudent();
+    var enrollment = activeEnrollment(student);
+    var classId = UUID.randomUUID();
+    var firstLesson = UUID.randomUUID();
+    var secondLesson = UUID.randomUUID();
+    var day = "2001-02-04";
+    update(
+        "insert into teaching.class(id,tenant_id,school_id,curriculum_id,name) values (?,?,?,?,?)",
+        classId,
+        TENANT,
+        SCHOOL,
+        CURRICULUM,
+        "消费汇总班级-" + classId.toString().substring(0, 8));
+    for (var lesson : List.of(firstLesson, secondLesson))
+      update(
+          "insert into teaching.lesson(id,tenant_id,class_id,lesson_date,starts_at,ends_at,hours,status)"
+              + " values (?,?,?,?,'09:00','10:00',1.00,'CLOSED')",
+          lesson,
+          TENANT,
+          classId,
+          java.time.LocalDate.parse(day));
+    update(
+        "insert into teaching.consumption(tenant_id,enrollment_id,lesson_id,hours,amount,settlement_mode,price_snapshot,hours_snapshot)"
+            + " values (?,?,?,1.00,80.00,1,1000.00,10.00),(?,?,?,2.00,180.00,1,1000.00,10.00)",
+        TENANT,
+        enrollment.id(),
+        firstLesson,
+        TENANT,
+        enrollment.id(),
+        secondLesson);
+
+    var report = asActor(OPS, () -> teachingQueries.classConsumptionReport(SCHOOL, day, day));
+    assertThat(report.from()).isEqualTo(day);
+    assertThat(report.classes())
+        .singleElement()
+        .satisfies(
+            item -> {
+              assertThat(item.classId()).isEqualTo(classId);
+              assertThat(item.lessonCount()).isEqualTo(2);
+              assertThat(item.consumedHours()).isEqualTo("3.00");
+              assertThat(item.consumedAmount()).isEqualTo("260.00");
+            });
+    assertThatThrownBy(
+            () -> asActor(READER, () -> teachingQueries.classConsumptionReport(SCHOOL, day, day)))
+        .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
+  }
+
+  @Test
   void studentConsumptionReportReconcilesPurchasedConsumedCancelledAndRemaining() throws Exception {
     var student = freshStudent();
     var enrollment = activeEnrollment(student);
