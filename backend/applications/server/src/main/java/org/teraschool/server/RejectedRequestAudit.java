@@ -252,11 +252,12 @@ class RejectedRequestAudit {
         /* 不保存原始路径文本。 */
       }
     } else if (path.equals("/api/teaching/lessons")) action = FailureAudit.Action.LESSON_CREATE;
-    else if (path.matches("/api/teaching/lessons/[^/]+/(publish|reschedule|attendance|close)")) {
+    else if (path.matches(
+        "/api/teaching/lessons/[^/]+/(publish|reschedule|swap|makeups|attendance|close)")) {
       action =
           path.endsWith("/publish")
               ? FailureAudit.Action.LESSON_PUBLISH
-              : path.endsWith("/reschedule")
+              : path.endsWith("/reschedule") || path.endsWith("/swap") || path.endsWith("/makeups")
                   ? FailureAudit.Action.LESSON_RESCHEDULE
                   : path.endsWith("/attendance")
                       ? FailureAudit.Action.ATTENDANCE_CONFIRM

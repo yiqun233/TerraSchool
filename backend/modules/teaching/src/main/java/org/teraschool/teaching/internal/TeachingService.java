@@ -939,8 +939,7 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
       if (enrollmentId == null
           || command == null
           || command.requestId() == null
-          || command.classId() == null)
-        throw new IllegalArgumentException("需要请求身份、班级和报名");
+          || command.classId() == null) throw new IllegalArgumentException("需要请求身份、班级和报名");
       var reason = text(command.reason(), 200, "退班原因");
       if (reason == null) throw new IllegalArgumentException("退班原因必填");
       var scope = actors.requireAction("TEACHING_MAINTAIN");
@@ -963,10 +962,7 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
             var verifiedTeaching = actors.requireResourceScopeInTransaction("TEACHING");
             var previous =
                 previousRequest(
-                    verifiedTeaching,
-                    command.requestId(),
-                    "CLASS_WITHDRAWAL",
-                    requestFingerprint);
+                    verifiedTeaching, command.requestId(), "CLASS_WITHDRAWAL", requestFingerprint);
             if (previous != null) {
               var previousClass = requireClass(verifiedTeaching, previous);
               return classView(
@@ -976,10 +972,8 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
 
             var classRow = requireClass(verifiedTeaching, command.classId());
             var schoolId = classRow.get("school_id", UUID.class);
-            if (!verified.schools().contains(schoolId))
-              throw new AccessDeniedException("无权维护该校班级");
-            if (!schools.require(schoolId).active())
-              throw new AccessDeniedException("学校已停用，不能退班");
+            if (!verified.schools().contains(schoolId)) throw new AccessDeniedException("无权维护该校班级");
+            if (!schools.require(schoolId).active()) throw new AccessDeniedException("学校已停用，不能退班");
             if (!"ACTIVE".equals(classRow.get("status", String.class)))
               throw new TeachingConflict("CLASS_NOT_ACTIVE");
             var enrollment = enrollments.require(enrollmentId);
@@ -1112,8 +1106,7 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
       if (id == null
           || command == null
           || command.requestId() == null
-          || command.expectedVersion() == null)
-        throw new IllegalArgumentException("需要课次、请求身份和版本");
+          || command.expectedVersion() == null) throw new IllegalArgumentException("需要课次、请求身份和版本");
       var date = businessDate(command.lessonDate(), "新上课日期");
       var startsAt = time(command.startsAt(), "新开始时间");
       var endsAt = time(command.endsAt(), "新结束时间");
@@ -1139,8 +1132,7 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
             var schoolId = classSchool(row.get("class_id", UUID.class));
             if (!verified.schools().contains(schoolId))
               throw new AccessDeniedException("无该学校的教务维护权限");
-            if (!schools.require(schoolId).active())
-              throw new AccessDeniedException("学校已停用，不能调课");
+            if (!schools.require(schoolId).active()) throw new AccessDeniedException("学校已停用，不能调课");
             var previous =
                 sql.fetchOne(
                     "select lesson_id,fingerprint from teaching.lesson_reschedule_request"
@@ -1208,6 +1200,249 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
     }
   }
 
+  @Override
+  public LessonView swapLessons(UUID id, SwapLessons command) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      if (id == null
+          || command == null
+          || command.requestId() == null
+          || command.otherLessonId() == null
+          || command.expectedVersion() == null
+          || command.expectedOtherVersion() == null
+          || id.equals(command.otherLessonId()))
+        throw new IllegalArgumentException("需要两个不同课次、版本和请求身份");
+      var reason = command.reason() == null ? "" : command.reason().strip();
+      if (reason.isEmpty() || reason.length() > 200)
+        throw new IllegalArgumentException("换课原因必填且不能超过 200 字");
+      var actor = actors.requireAction("TEACHING_MAINTAIN");
+      var digest =
+          fingerprint(
+              "SWAP",
+              id.toString(),
+              command.otherLessonId().toString(),
+              command.expectedVersion().toString(),
+              command.expectedOtherVersion().toString(),
+              reason);
+      return tx.execute(
+          actor.tenantId(),
+          () -> {
+            schools.lockTenant(actor.tenantId());
+            var verified = actors.requireActionInTransaction("TEACHING_MAINTAIN");
+            var previous =
+                sql.fetchOne(
+                    "select lesson_id,fingerprint from teaching.lesson_reschedule_request"
+                        + " where tenant_id=? and actor_id=? and request_id=?",
+                    actor.tenantId(),
+                    actor.accountId(),
+                    command.requestId());
+            if (previous != null) {
+              if (!id.equals(previous.get("lesson_id", UUID.class))
+                  || !digest.equals(previous.get("fingerprint", String.class)))
+                throw new TeachingConflict("IDEMPOTENCY_MISMATCH");
+              return lessonView(requireLessonForUpdate(id));
+            }
+            var first = requireLessonForUpdate(id);
+            var second = requireLessonForUpdate(command.otherLessonId());
+            var classId = first.get("class_id", UUID.class);
+            var schoolId = classSchool(classId);
+            if (!classId.equals(second.get("class_id", UUID.class)))
+              throw new TeachingConflict("SWAP_CLASS_MISMATCH");
+            if (!verified.schools().contains(schoolId))
+              throw new AccessDeniedException("无该学校的教务维护权限");
+            if (!schools.require(schoolId).active()) throw new AccessDeniedException("学校已停用，不能换课");
+            if (!"PUBLISHED".equals(first.get("status", String.class))
+                || !"PUBLISHED".equals(second.get("status", String.class)))
+              throw new TeachingConflict("LESSON_NOT_RESCHEDULABLE");
+            if (!command.expectedVersion().equals(first.get("version", Long.class))
+                || !command.expectedOtherVersion().equals(second.get("version", Long.class)))
+              throw new TeachingConflict("VERSION_CONFLICT");
+            for (var row : List.of(first, second)) {
+              if (row.get("attendance_count", Integer.class) != 0
+                  || sql.fetchExists(
+                      sql.selectOne()
+                          .from("teaching.consumption")
+                          .where("lesson_id=?", row.get("id", UUID.class))))
+                throw new TeachingConflict("LESSON_HAS_BUSINESS_FACTS");
+            }
+            var firstDate = first.get("lesson_date", LocalDate.class);
+            var firstStarts = first.get("starts_at", LocalTime.class);
+            var firstEnds = first.get("ends_at", LocalTime.class);
+            var secondDate = second.get("lesson_date", LocalDate.class);
+            var secondStarts = second.get("starts_at", LocalTime.class);
+            var secondEnds = second.get("ends_at", LocalTime.class);
+            sql.execute(
+                "update teaching.lesson set lesson_date=case id when cast(? as uuid) then cast(? as date)"
+                    + " when cast(? as uuid) then cast(? as date) end,"
+                    + "starts_at=case id when cast(? as uuid) then cast(? as time)"
+                    + " when cast(? as uuid) then cast(? as time) end,"
+                    + "ends_at=case id when cast(? as uuid) then cast(? as time)"
+                    + " when cast(? as uuid) then cast(? as time) end,version=version+1"
+                    + " where id in (?,?)",
+                id,
+                secondDate,
+                command.otherLessonId(),
+                firstDate,
+                id,
+                secondStarts,
+                command.otherLessonId(),
+                firstStarts,
+                id,
+                secondEnds,
+                command.otherLessonId(),
+                firstEnds,
+                id,
+                command.otherLessonId());
+            ensureLessonSlotAvailable(
+                requireLessonForUpdate(id), schoolId, secondDate, secondStarts, secondEnds);
+            ensureLessonSlotAvailable(
+                requireLessonForUpdate(command.otherLessonId()),
+                schoolId,
+                firstDate,
+                firstStarts,
+                firstEnds);
+            var requestRow = UUID.randomUUID();
+            sql.execute(
+                "insert into teaching.lesson_reschedule(id,tenant_id,lesson_id,actor_id,request_id,"
+                    + "old_lesson_date,old_starts_at,old_ends_at,new_lesson_date,new_starts_at,new_ends_at,reason)"
+                    + " values (?,?,?,?,?,?,?,?,?,?,?,?)",
+                requestRow,
+                actor.tenantId(),
+                id,
+                actor.accountId(),
+                command.requestId(),
+                firstDate,
+                firstStarts,
+                firstEnds,
+                secondDate,
+                secondStarts,
+                secondEnds,
+                reason);
+            sql.execute(
+                "insert into teaching.lesson_reschedule(id,tenant_id,lesson_id,actor_id,request_id,"
+                    + "old_lesson_date,old_starts_at,old_ends_at,new_lesson_date,new_starts_at,new_ends_at,reason)"
+                    + " values (?,?,?,?,?,?,?,?,?,?,?,?)",
+                UUID.randomUUID(),
+                actor.tenantId(),
+                command.otherLessonId(),
+                actor.accountId(),
+                command.requestId(),
+                secondDate,
+                secondStarts,
+                secondEnds,
+                firstDate,
+                firstStarts,
+                firstEnds,
+                reason);
+            sql.execute(
+                "insert into teaching.lesson_reschedule_request(tenant_id,actor_id,request_id,lesson_id,fingerprint)"
+                    + " values (?,?,?,?,?)",
+                actor.tenantId(),
+                actor.accountId(),
+                command.requestId(),
+                id,
+                digest);
+            audit(verified, "LESSON_SWAPPED", id, schoolId, "schedule");
+            audit(verified, "LESSON_SWAPPED", command.otherLessonId(), schoolId, "schedule");
+            return lessonView(requireLessonForUpdate(id));
+          });
+    }
+  }
+
+  @Override
+  public LessonView createMakeupLesson(UUID sourceLessonId, CreateMakeupLesson command) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      if (sourceLessonId == null || command == null || command.requestId() == null)
+        throw new IllegalArgumentException("需要原课次和请求身份");
+      var date = businessDate(command.lessonDate(), "补课日期");
+      var startsAt = time(command.startsAt(), "补课开始时间");
+      var endsAt = time(command.endsAt(), "补课结束时间");
+      if (!endsAt.isAfter(startsAt)) throw new IllegalArgumentException("结束时间必须晚于开始时间");
+      var reason = command.reason() == null ? "" : command.reason().strip();
+      if (reason.isEmpty() || reason.length() > 200)
+        throw new IllegalArgumentException("补课原因必填且不能超过 200 字");
+      var actor = actors.requireAction("TEACHING_MAINTAIN");
+      var digest =
+          fingerprint(
+              sourceLessonId.toString(),
+              date.toString(),
+              startsAt.toString(),
+              endsAt.toString(),
+              reason);
+      return tx.execute(
+          actor.tenantId(),
+          () -> {
+            schools.lockTenant(actor.tenantId());
+            var verified = actors.requireActionInTransaction("TEACHING_MAINTAIN");
+            var previous =
+                sql.fetchOne(
+                    "select source_lesson_id,makeup_lesson_id,fingerprint from teaching.lesson_makeup"
+                        + " where tenant_id=? and actor_id=? and request_id=?",
+                    actor.tenantId(),
+                    actor.accountId(),
+                    command.requestId());
+            if (previous != null) {
+              if (!sourceLessonId.equals(previous.get("source_lesson_id", UUID.class))
+                  || !digest.equals(previous.get("fingerprint", String.class))) {
+                throw new TeachingConflict("IDEMPOTENCY_MISMATCH");
+              }
+              return lessonView(
+                  requireLessonForUpdate(previous.get("makeup_lesson_id", UUID.class)));
+            }
+            var source = requireLessonForUpdate(sourceLessonId);
+            var classId = source.get("class_id", UUID.class);
+            var schoolId = classSchool(classId);
+            if (!verified.schools().contains(schoolId))
+              throw new AccessDeniedException("无该学校的教务维护权限");
+            if (!schools.require(schoolId).active())
+              throw new AccessDeniedException("学校已停用，不能安排补课");
+            if (!"CLOSED".equals(source.get("status", String.class)))
+              throw new TeachingConflict("MAKEUP_SOURCE_NOT_CLOSED");
+            if (!date.isAfter(source.get("lesson_date", LocalDate.class)))
+              throw new TeachingConflict("MAKEUP_DATE_MUST_FOLLOW_SOURCE");
+            if (!sql.fetchExists(
+                sql.selectOne()
+                    .from("teaching.attendance")
+                    .where("lesson_id=? and status in ('ABSENT','LEAVE')", sourceLessonId)))
+              throw new TeachingConflict("MAKEUP_REQUIRES_ABSENCE");
+            var classRow = sql.fetchOne("select status from teaching.class where id=?", classId);
+            if (classRow == null || !"ACTIVE".equals(classRow.get("status", String.class)))
+              throw new TeachingConflict("CLASS_NOT_ACTIVE");
+            ensureLessonSlotAvailable(source, schoolId, date, startsAt, endsAt);
+            var makeupId = UUID.randomUUID();
+            var sourceTopic = source.get("topic", String.class);
+            var topic = sourceTopic == null || sourceTopic.isBlank() ? "补课" : sourceTopic + "（补课）";
+            if (topic.length() > 100) topic = topic.substring(0, 100);
+            sql.execute(
+                "insert into teaching.lesson(id,tenant_id,class_id,lesson_date,starts_at,ends_at,"
+                    + "teacher_name,room_name,topic,hours,teacher_id,room_id) values (?,?,?,?,?,?,?,?,?,?,?,?)",
+                makeupId,
+                actor.tenantId(),
+                classId,
+                date,
+                startsAt,
+                endsAt,
+                source.get("teacher_name", String.class),
+                source.get("room_name", String.class),
+                topic,
+                source.get("hours", BigDecimal.class),
+                source.get("teacher_id", UUID.class),
+                source.get("room_id", UUID.class));
+            sql.execute(
+                "insert into teaching.lesson_makeup(tenant_id,source_lesson_id,makeup_lesson_id,actor_id,request_id,fingerprint,reason)"
+                    + " values (?,?,?,?,?,?,?)",
+                actor.tenantId(),
+                sourceLessonId,
+                makeupId,
+                actor.accountId(),
+                command.requestId(),
+                digest,
+                reason);
+            audit(verified, "LESSON_MAKEUP_CREATED", makeupId, schoolId, sourceLessonId.toString());
+            return lessonView(requireLessonForUpdate(makeupId));
+          });
+    }
+  }
+
   private void ensureLessonSlotAvailable(
       Record lesson, UUID schoolId, LocalDate date, LocalTime startsAt, LocalTime endsAt) {
     var id = lesson.get("id", UUID.class);
@@ -1219,8 +1454,13 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
     if (sql.fetchExists(
         sql.selectOne()
             .from("teaching.lesson")
-            .where("class_id=? and id<>? and lesson_date=? and starts_at<? and ends_at>?", classId, id, date, endsAt, startsAt)))
-      throw new TeachingConflict("LESSON_OVERLAP");
+            .where(
+                "class_id=? and id<>? and lesson_date=? and starts_at<? and ends_at>?",
+                classId,
+                id,
+                date,
+                endsAt,
+                startsAt))) throw new TeachingConflict("LESSON_OVERLAP");
     var policy =
         sql.fetchOne(
             "select block_teacher_unavailable,block_room_unavailable,min_gap_minutes"
@@ -1356,6 +1596,25 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
           }
           if (!provided.keySet().equals(new HashSet<>(members)))
             throw new TeachingConflict("ATTENDANCE_MUST_COVER_MEMBERS");
+          var makeup =
+              sql.fetchOne(
+                  "select source_lesson_id from teaching.lesson_makeup where makeup_lesson_id=?",
+                  id);
+          if (makeup != null) {
+            var eligible =
+                new HashSet<UUID>(
+                    sql.fetch(
+                            "select enrollment_id from teaching.attendance where lesson_id=?"
+                                + " and status in ('ABSENT','LEAVE')",
+                            makeup.get("source_lesson_id", UUID.class))
+                        .map(item -> item.get("enrollment_id", UUID.class)));
+            if (provided.values().stream()
+                .anyMatch(
+                    item ->
+                        ("PRESENT".equals(item.status()) || "PARTIAL".equals(item.status()))
+                            && !eligible.contains(item.enrollmentId())))
+              throw new TeachingConflict("MAKEUP_ATTENDANCE_NOT_ELIGIBLE");
+          }
           for (var entry : provided.entrySet())
             sql.execute(
                 "insert into teaching.attendance(tenant_id,lesson_id,enrollment_id,status,attended_minutes)"
@@ -1818,8 +2077,21 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
   }
 
   private LessonView lessonView(Record row) {
+    var id = row.get("id", UUID.class);
+    var makeup =
+        sql.fetchOne(
+            "select source_lesson_id from teaching.lesson_makeup where makeup_lesson_id=?", id);
+    var makeupSourceId = makeup == null ? null : makeup.get("source_lesson_id", UUID.class);
+    var makeupEnrollmentIds =
+        makeupSourceId == null
+            ? List.<UUID>of()
+            : sql.fetch(
+                    "select enrollment_id from teaching.attendance where lesson_id=?"
+                        + " and status in ('ABSENT','LEAVE') order by enrollment_id",
+                    makeupSourceId)
+                .map(item -> item.get("enrollment_id", UUID.class));
     return new LessonView(
-        row.get("id", UUID.class),
+        id,
         row.get("class_id", UUID.class),
         date(row.get("lesson_date", LocalDate.class)),
         time(row.get("starts_at", LocalTime.class)),
@@ -1832,7 +2104,9 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
         row.get("version", Long.class),
         row.get("attendance_count", Integer.class),
         row.get("teacher_id", UUID.class),
-        row.get("room_id", UUID.class));
+        row.get("room_id", UUID.class),
+        makeupSourceId,
+        makeupEnrollmentIds);
   }
 
   private String text(String value, int max, String label) {

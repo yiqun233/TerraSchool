@@ -26,6 +26,10 @@ public interface TeachingCommands {
   /** 调整尚未考勤/消费的已发布课次，原时间写入变更历史。 */
   LessonView rescheduleLesson(UUID id, RescheduleLesson command);
 
+  LessonView swapLessons(UUID id, SwapLessons command);
+
+  LessonView createMakeupLesson(UUID sourceLessonId, CreateMakeupLesson command);
+
   LessonView confirmAttendance(UUID id, ConfirmAttendance command);
 
   /** 关闭课次并固化消费；需要单独权限。 */

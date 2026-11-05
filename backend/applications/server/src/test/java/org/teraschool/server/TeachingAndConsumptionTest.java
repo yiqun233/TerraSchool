@@ -224,15 +224,15 @@ class TeachingAndConsumptionTest {
     var sourceClass = newClass("待调课班级");
     var occupiedClass = newClass("目标时段班级");
     var draft = newLesson(sourceClass.id(), "2026-11-12");
-    var lesson =
-        asActor(TEACHER, () -> commands.publishLesson(draft.id(), new LessonVersion(0L)));
+    var lesson = asActor(TEACHER, () -> commands.publishLesson(draft.id(), new LessonVersion(0L)));
     var occupied = newLesson(occupiedClass.id(), "2026-11-20");
     asActor(TEACHER, () -> commands.publishLesson(occupied.id(), new LessonVersion(0L)));
 
     var conflict =
         new RescheduleLesson(
             UUID.randomUUID(), lesson.version(), "2026-11-20", "09:00", "10:00", "校区临时安排");
-    assertThatThrownBy(() -> asActor(TEACHER, () -> commands.rescheduleLesson(lesson.id(), conflict)))
+    assertThatThrownBy(
+            () -> asActor(TEACHER, () -> commands.rescheduleLesson(lesson.id(), conflict)))
         .isInstanceOf(TeachingConflict.class)
         .hasMessage("TEACHER_CLASH");
     assertThat(asActor(TEACHER, () -> queries.lessons(sourceClass.id())).get(0).lessonDate())
@@ -240,13 +240,13 @@ class TeachingAndConsumptionTest {
 
     var requestId = UUID.randomUUID();
     var request =
-        new RescheduleLesson(
-            requestId, lesson.version(), "2026-11-20", "11:00", "12:00", "校区临时安排");
+        new RescheduleLesson(requestId, lesson.version(), "2026-11-20", "11:00", "12:00", "校区临时安排");
     var moved = asActor(TEACHER, () -> commands.rescheduleLesson(lesson.id(), request));
     assertThat(moved.lessonDate()).isEqualTo("2026-11-20");
     assertThat(moved.startsAt()).isEqualTo("11:00");
     assertThat(moved.status()).isEqualTo("PUBLISHED");
-    assertThat(asActor(TEACHER, () -> commands.rescheduleLesson(lesson.id(), request))).isEqualTo(moved);
+    assertThat(asActor(TEACHER, () -> commands.rescheduleLesson(lesson.id(), request)))
+        .isEqualTo(moved);
     assertThatThrownBy(
             () ->
                 asActor(
@@ -271,6 +271,140 @@ class TeachingAndConsumptionTest {
                             "select count(*) from teaching.lesson_reschedule where tenant_id=? and lesson_id=?",
                             TENANT,
                             lesson.id())
+                        .get(0, Long.class)))
+        .isEqualTo(1L);
+  }
+
+  @Test
+  void swappingPublishedLessonTimesIsAtomicAndIdempotent() {
+    var classView = newClass("同班换课");
+    var first = newLesson(classView.id(), "2026-11-17");
+    var second = newLesson(classView.id(), "2026-11-24");
+    var publishedFirst =
+        asActor(TEACHER, () -> commands.publishLesson(first.id(), new LessonVersion(0L)));
+    var publishedSecond =
+        asActor(TEACHER, () -> commands.publishLesson(second.id(), new LessonVersion(0L)));
+    var command =
+        new SwapLessons(
+            UUID.randomUUID(),
+            second.id(),
+            publishedFirst.version(),
+            publishedSecond.version(),
+            "教師調整課表");
+
+    var swapped = asActor(TEACHER, () -> commands.swapLessons(first.id(), command));
+    var other =
+        asActor(TEACHER, () -> queries.lessons(classView.id())).stream()
+            .filter(item -> item.id().equals(second.id()))
+            .findFirst()
+            .orElseThrow();
+    assertThat(swapped.lessonDate()).isEqualTo("2026-11-24");
+    assertThat(other.lessonDate()).isEqualTo("2026-11-17");
+    assertThat(swapped.status()).isEqualTo("PUBLISHED");
+    assertThat(asActor(TEACHER, () -> commands.swapLessons(first.id(), command)))
+        .isEqualTo(swapped);
+    assertThat(
+            tx.execute(
+                TENANT,
+                () ->
+                    sql.fetchOne(
+                            "select count(*) from teaching.lesson_reschedule where tenant_id=? and request_id=?",
+                            TENANT,
+                            command.requestId())
+                        .get(0, Long.class)))
+        .isEqualTo(2L);
+  }
+
+  @Test
+  void makeupForClosedAbsenceCreatesLinkedDraftAndReplaysSafely() {
+    var classView = classWithMember("缺勤后补课");
+    var member = membershipOf(classView.id());
+    var otherEnrollment = activeEnrollment();
+    asActor(TEACHER, () -> commands.addMember(classView.id(), new AddClassMember(otherEnrollment)));
+    var source = published(classView.id(), "2026-03-05");
+    var confirmed =
+        asActor(
+            TEACHER,
+            () ->
+                commands.confirmAttendance(
+                    source.id(),
+                    new ConfirmAttendance(
+                        source.version(),
+                        List.of(
+                            new AttendanceInput(member, "ABSENT"),
+                            new AttendanceInput(otherEnrollment, "PRESENT")))));
+    var closed =
+        asActor(
+            TEACHER,
+            () -> commands.closeLesson(confirmed.id(), new LessonVersion(confirmed.version())));
+    var command =
+        new CreateMakeupLesson(UUID.randomUUID(), "2026-03-12", "11:00", "12:00", "学员病假补课");
+
+    var makeup = asActor(TEACHER, () -> commands.createMakeupLesson(closed.id(), command));
+    assertThat(makeup.status()).isEqualTo("DRAFT");
+    assertThat(makeup.lessonDate()).isEqualTo("2026-03-12");
+    assertThat(makeup.hours()).isEqualTo(closed.hours());
+    assertThat(makeup.makeupSourceLessonId()).isEqualTo(closed.id());
+    assertThat(makeup.makeupEnrollmentIds()).containsExactly(member);
+    assertThat(asActor(TEACHER, () -> commands.createMakeupLesson(closed.id(), command)))
+        .isEqualTo(makeup);
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    TEACHER,
+                    () ->
+                        commands.createMakeupLesson(
+                            closed.id(),
+                            new CreateMakeupLesson(
+                                command.requestId(), "2026-03-13", "11:00", "12:00", "改参数重放"))))
+        .isInstanceOf(TeachingConflict.class)
+        .hasMessage("IDEMPOTENCY_MISMATCH");
+    var publishedMakeup =
+        asActor(
+            TEACHER,
+            () -> commands.publishLesson(makeup.id(), new LessonVersion(makeup.version())));
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    TEACHER,
+                    () ->
+                        commands.confirmAttendance(
+                            publishedMakeup.id(),
+                            new ConfirmAttendance(
+                                publishedMakeup.version(),
+                                List.of(
+                                    new AttendanceInput(member, "PRESENT"),
+                                    new AttendanceInput(otherEnrollment, "PRESENT"))))))
+        .isInstanceOf(TeachingConflict.class)
+        .hasMessage("MAKEUP_ATTENDANCE_NOT_ELIGIBLE");
+    var makeupAttendance =
+        asActor(
+            TEACHER,
+            () ->
+                commands.confirmAttendance(
+                    publishedMakeup.id(),
+                    new ConfirmAttendance(
+                        publishedMakeup.version(),
+                        List.of(
+                            new AttendanceInput(member, "PRESENT"),
+                            new AttendanceInput(otherEnrollment, "ABSENT")))));
+    asActor(
+        TEACHER,
+        () ->
+            commands.closeLesson(
+                makeupAttendance.id(), new LessonVersion(makeupAttendance.version())));
+    assertThat(asActor(READER, () -> queries.reconciliation(member)).consumedHours())
+        .isEqualTo("1.00");
+    assertThat(asActor(READER, () -> queries.reconciliation(otherEnrollment)).consumedHours())
+        .isEqualTo("1.00");
+    assertThat(
+            tx.execute(
+                TENANT,
+                () ->
+                    sql.fetchOne(
+                            "select count(*) from teaching.lesson_makeup where tenant_id=? and source_lesson_id=?",
+                            TENANT,
+                            closed.id())
                         .get(0, Long.class)))
         .isEqualTo(1L);
   }

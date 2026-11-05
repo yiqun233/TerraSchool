@@ -86,6 +86,8 @@ export function TeachingWorkspace({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [attendanceFor, setAttendanceFor] = useState<LessonView | null>(null);
   const [rescheduleFor, setRescheduleFor] = useState<LessonView | null>(null);
+  const [swapFor, setSwapFor] = useState<LessonView | null>(null);
+  const [makeupFor, setMakeupFor] = useState<LessonView | null>(null);
   const [reconcileFor, setReconcileFor] = useState<string | null>(null);
   const [teacherClassId, setTeacherClassId] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -1146,6 +1148,9 @@ export function TeachingWorkspace({
                         >
                           调课
                         </Button>
+                        <Button size="small" onClick={() => setSwapFor(row)}>
+                          换课
+                        </Button>
                         <Button
                           size="small"
                           onClick={() => setAttendanceFor(row)}
@@ -1160,6 +1165,11 @@ export function TeachingWorkspace({
                         onDone={() => void lessons.refetch()}
                         onError={setError}
                       />
+                    ) : null}
+                    {row.status === "CLOSED" && school?.maintainable ? (
+                      <Button size="small" onClick={() => setMakeupFor(row)}>
+                        安排补课
+                      </Button>
                     ) : null}
                   </Space>
                 ),
@@ -1351,6 +1361,34 @@ export function TeachingWorkspace({
           onCancel={() => setRescheduleFor(null)}
           onDone={() => {
             setRescheduleFor(null);
+            void lessons.refetch();
+          }}
+          onError={setError}
+        />
+      ) : null}
+      {swapFor ? (
+        <SwapLessonModal
+          lesson={swapFor}
+          candidates={(lessons.data ?? []).filter(
+            (item) =>
+              item.id !== swapFor.id &&
+              item.status === "PUBLISHED" &&
+              item.classId === swapFor.classId,
+          )}
+          onCancel={() => setSwapFor(null)}
+          onDone={() => {
+            setSwapFor(null);
+            void lessons.refetch();
+          }}
+          onError={setError}
+        />
+      ) : null}
+      {makeupFor ? (
+        <MakeupLessonModal
+          lesson={makeupFor}
+          onCancel={() => setMakeupFor(null)}
+          onDone={() => {
+            setMakeupFor(null);
             void lessons.refetch();
           }}
           onError={setError}
@@ -1577,6 +1615,236 @@ export function RescheduleLessonModal({
   );
 }
 
+export function SwapLessonModal({
+  lesson,
+  candidates,
+  onCancel,
+  onDone,
+  onError,
+}: {
+  lesson: LessonView;
+  candidates: LessonView[];
+  onCancel: () => void;
+  onDone: () => void;
+  onError: (message: string) => void;
+}) {
+  const [otherId, setOtherId] = useState<string>();
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const requestRef = useRef<{ fingerprint: string; requestId: string } | null>(
+    null,
+  );
+
+  async function submit() {
+    const other = candidates.find((item) => item.id === otherId);
+    if (!other) {
+      onError("请选择同班的另一节已发布课次。");
+      return;
+    }
+    const fingerprint = JSON.stringify([
+      lesson.id,
+      lesson.version,
+      other.id,
+      other.version,
+      reason.trim(),
+    ]);
+    if (!requestRef.current || requestRef.current.fingerprint !== fingerprint)
+      requestRef.current = { fingerprint, requestId: crypto.randomUUID() };
+    setBusy(true);
+    try {
+      const token = await csrf();
+      const { response } = await api.POST("/api/teaching/lessons/{id}/swap", {
+        params: { path: { id: lesson.id! } },
+        headers: { [token.headerName!]: token.token! },
+        body: {
+          requestId: requestRef.current.requestId,
+          otherLessonId: other.id!,
+          expectedVersion: lesson.version,
+          expectedOtherVersion: other.version,
+          reason: reason.trim(),
+        },
+      });
+      if (response.status === 409) {
+        onError("课次或资源状态已变化，请刷新后核对换课结果。");
+        onDone();
+        return;
+      }
+      if (!response.ok) {
+        onError("换课失败，请核对同班范围、考勤状态和时间冲突。");
+        return;
+      }
+      onDone();
+    } catch {
+      onError("换课结果未确认；保持本次内容重试可安全防重。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      title="交换课次时段"
+      open
+      okText="确认换课"
+      cancelText="取消"
+      confirmLoading={busy}
+      onOk={() => void submit()}
+      onCancel={onCancel}
+    >
+      <Typography.Paragraph type="secondary">
+        只允许同班、尚未登记考勤或消费的已发布课次；交换日期与时间，保留各自教师、教室和课题。
+      </Typography.Paragraph>
+      <Space orientation="vertical" style={{ width: "100%" }}>
+        <label>
+          交换对象
+          <Select
+            aria-label="换课对象"
+            style={{ width: "100%" }}
+            value={otherId}
+            onChange={setOtherId}
+            options={candidates.map((item) => ({
+              value: item.id!,
+              label: `${item.lessonDate} ${item.startsAt}–${item.endsAt} ${item.topic ?? ""}`,
+            }))}
+          />
+        </label>
+        <label>
+          换课原因
+          <Input.TextArea
+            aria-label="换课原因"
+            maxLength={200}
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+          />
+        </label>
+      </Space>
+    </Modal>
+  );
+}
+
+export function MakeupLessonModal({
+  lesson,
+  onCancel,
+  onDone,
+  onError,
+}: {
+  lesson: LessonView;
+  onCancel: () => void;
+  onDone: () => void;
+  onError: (message: string) => void;
+}) {
+  const nextDate = new Date(`${lesson.lessonDate}T00:00:00`);
+  nextDate.setDate(nextDate.getDate() + 1);
+  const [lessonDate, setLessonDate] = useState(
+    `${nextDate.getFullYear()}-${String(nextDate.getMonth() + 1).padStart(2, "0")}-${String(nextDate.getDate()).padStart(2, "0")}`,
+  );
+  const [startsAt, setStartsAt] = useState((lesson.startsAt ?? "").slice(0, 5));
+  const [endsAt, setEndsAt] = useState((lesson.endsAt ?? "").slice(0, 5));
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const requestRef = useRef<{ fingerprint: string; requestId: string } | null>(
+    null,
+  );
+
+  async function submit() {
+    const fingerprint = JSON.stringify([
+      lesson.id,
+      lessonDate,
+      startsAt,
+      endsAt,
+      reason.trim(),
+    ]);
+    if (!requestRef.current || requestRef.current.fingerprint !== fingerprint)
+      requestRef.current = { fingerprint, requestId: crypto.randomUUID() };
+    setBusy(true);
+    try {
+      const token = await csrf();
+      const { response } = await api.POST(
+        "/api/teaching/lessons/{id}/makeups",
+        {
+          params: { path: { id: lesson.id! } },
+          headers: { [token.headerName!]: token.token! },
+          body: {
+            requestId: requestRef.current.requestId,
+            lessonDate,
+            startsAt,
+            endsAt,
+            reason: reason.trim(),
+          },
+        },
+      );
+      if (response.status === 409) {
+        onError("原课次、班级或资源状态已变化，请刷新后核对补课结果。");
+        onDone();
+        return;
+      }
+      if (!response.ok) {
+        onError("补课安排失败，请核对原课次缺勤、班级状态和资源冲突。");
+        return;
+      }
+      onDone();
+    } catch {
+      onError("补课结果未确认；保持本次内容重试可安全防重。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      title="为缺勤课次安排补课"
+      open
+      okText="创建补课草稿"
+      cancelText="取消"
+      confirmLoading={busy}
+      onOk={() => void submit()}
+      onCancel={onCancel}
+    >
+      <Typography.Paragraph type="secondary">
+        仅已关闭且登记了缺勤/请假的课次可安排。新课次沿用班级、教师、教室和课时；后续正常发布、登记全班考勤并按实际出勤固化消费。
+      </Typography.Paragraph>
+      <Space orientation="vertical" style={{ width: "100%" }}>
+        <label>
+          补课日期
+          <Input
+            aria-label="补课日期"
+            type="date"
+            value={lessonDate}
+            onChange={(event) => setLessonDate(event.target.value)}
+          />
+        </label>
+        <label>
+          开始时间
+          <Input
+            aria-label="补课开始时间"
+            type="time"
+            value={startsAt}
+            onChange={(event) => setStartsAt(event.target.value)}
+          />
+        </label>
+        <label>
+          结束时间
+          <Input
+            aria-label="补课结束时间"
+            type="time"
+            value={endsAt}
+            onChange={(event) => setEndsAt(event.target.value)}
+          />
+        </label>
+        <label>
+          补课原因
+          <Input.TextArea
+            aria-label="补课原因"
+            maxLength={200}
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+          />
+        </label>
+      </Space>
+    </Modal>
+  );
+}
+
 /** 考勤确认：必须覆盖全部在班报名，提交后课次进入已确认。 */
 export function AttendanceModal({
   lesson,
@@ -1593,7 +1861,15 @@ export function AttendanceModal({
 }) {
   const [busy, setBusy] = useState(false);
   const [statuses, setStatuses] = useState<Record<string, string>>(() =>
-    Object.fromEntries(members.map((item) => [item.enrollmentId!, "PRESENT"])),
+    Object.fromEntries(
+      members.map((item) => [
+        item.enrollmentId!,
+        lesson.makeupSourceLessonId &&
+        !(lesson.makeupEnrollmentIds ?? []).includes(item.enrollmentId!)
+          ? "ABSENT"
+          : "PRESENT",
+      ]),
+    ),
   );
   const [attendedMinutes, setAttendedMinutes] = useState<
     Record<string, number>
@@ -1659,6 +1935,11 @@ export function AttendanceModal({
       mask={{ closable: !busy }}
       footer={null}
     >
+      {lesson.makeupSourceLessonId ? (
+        <Typography.Paragraph type="secondary">
+          补课默认只勾选原课次缺勤或请假学员，其他学员保持未出勤，避免重复扣课时。
+        </Typography.Paragraph>
+      ) : null}
       <Table
         rowKey="enrollmentId"
         size="small"

@@ -1,5 +1,6 @@
 package org.teraschool.teaching.api;
 
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -22,4 +23,6 @@ public record LessonView(
     long version,
     int attendanceCount,
     UUID teacherId,
-    UUID roomId) {}
+    UUID roomId,
+    UUID makeupSourceLessonId,
+    List<UUID> makeupEnrollmentIds) {}

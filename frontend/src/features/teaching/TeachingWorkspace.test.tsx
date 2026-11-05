@@ -6,7 +6,9 @@ import {
   AttendanceModal,
   CloseLessonButton,
   PublishLessonButton,
+  MakeupLessonModal,
   RescheduleLessonModal,
+  SwapLessonModal,
   TeachingWorkspace,
 } from "./TeachingWorkspace";
 
@@ -373,6 +375,85 @@ it("调课提交版本、原因与幂等标识", async () => {
   expect(done).toHaveBeenCalled();
 });
 
+it("换课提交两课次版本与稳定请求标识", async () => {
+  vi.clearAllMocks();
+  csrf.mockResolvedValue({ headerName: "X-CSRF-TOKEN", token: "test" });
+  post.mockResolvedValue({ response: { ok: true, status: 200 }, data: {} });
+  const user = userEvent.setup({ pointerEventsCheck: 0 });
+  renderWithClient(
+    <SwapLessonModal
+      lesson={{ ...lesson, status: "PUBLISHED", version: 2 } as never}
+      candidates={
+        [
+          {
+            ...lesson,
+            id: "lesson-2",
+            lessonDate: "2026-03-09",
+            status: "PUBLISHED",
+            version: 4,
+          },
+        ] as never
+      }
+      onCancel={vi.fn()}
+      onDone={vi.fn()}
+      onError={vi.fn()}
+    />,
+  );
+  await user.click(screen.getByRole("combobox", { name: "换课对象" }));
+  await user.click(await screen.findByText(/2026-03-09/));
+  await user.type(
+    screen.getByRole("textbox", { name: "换课原因" }),
+    "教师排班调整",
+  );
+  await user.click(screen.getByRole("button", { name: "确认换课" }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+  expect(post.mock.calls[0][0]).toBe("/api/teaching/lessons/{id}/swap");
+  expect(post.mock.calls[0][1]).toMatchObject({
+    params: { path: { id: "lesson-1" } },
+    body: {
+      otherLessonId: "lesson-2",
+      expectedVersion: 2,
+      expectedOtherVersion: 4,
+      reason: "教师排班调整",
+      requestId: expect.any(String),
+    },
+  });
+});
+
+it("补课表单提交原课次与日期时段原因", async () => {
+  vi.clearAllMocks();
+  csrf.mockResolvedValue({ headerName: "X-CSRF-TOKEN", token: "test" });
+  post.mockResolvedValue({ response: { ok: true, status: 201 }, data: {} });
+  const user = userEvent.setup({ pointerEventsCheck: 0 });
+  renderWithClient(
+    <MakeupLessonModal
+      lesson={
+        { ...lesson, status: "CLOSED", lessonDate: "2026-03-05" } as never
+      }
+      onCancel={vi.fn()}
+      onDone={vi.fn()}
+      onError={vi.fn()}
+    />,
+  );
+  await user.type(
+    screen.getByRole("textbox", { name: "补课原因" }),
+    "病假补课",
+  );
+  await user.click(screen.getByRole("button", { name: "创建补课草稿" }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+  expect(post.mock.calls[0][0]).toBe("/api/teaching/lessons/{id}/makeups");
+  expect(post.mock.calls[0][1]).toMatchObject({
+    params: { path: { id: "lesson-1" } },
+    body: {
+      lessonDate: "2026-03-06",
+      startsAt: "09:00",
+      endsAt: "10:00",
+      reason: "病假补课",
+      requestId: expect.any(String),
+    },
+  });
+});
+
 it("考勤确认提交全部在班报名，关闭课次单独提交版本", async () => {
   vi.clearAllMocks();
   csrf.mockResolvedValue({ headerName: "X-CSRF-TOKEN", token: "test" });
@@ -437,6 +518,35 @@ it("考勤确认提交全部在班报名，关闭课次单独提交版本", asyn
     (call) => call[0] === "/api/teaching/lessons/{id}/close",
   );
   expect(closeCall![1].body).toEqual({ expectedVersion: 4 });
+});
+
+it("补课考勤默认只将原缺勤学员标记为出勤", () => {
+  renderWithClient(
+    <AttendanceModal
+      lesson={
+        {
+          ...lesson,
+          status: "PUBLISHED",
+          makeupSourceLessonId: "source-lesson",
+          makeupEnrollmentIds: ["enrollment-1"],
+        } as never
+      }
+      members={members as never}
+      onCancel={vi.fn()}
+      onDone={vi.fn()}
+      onError={vi.fn()}
+    />,
+  );
+  const eligible = screen.getByLabelText("出勤-学员甲");
+  const ineligible = screen.getByLabelText("出勤-学员乙");
+  expect(
+    (eligible.querySelector('input[value="PRESENT"]') as HTMLInputElement)
+      .checked,
+  ).toBe(true);
+  expect(
+    (ineligible.querySelector('input[value="ABSENT"]') as HTMLInputElement)
+      .checked,
+  ).toBe(true);
 });
 
 it("展示逐报名累计消费与剩余课时对账", async () => {
