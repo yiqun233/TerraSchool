@@ -1151,6 +1151,9 @@ export function EnrollmentDetail({
             <Descriptions.Item label="冻结课时">
               {detail.data.hours}
             </Descriptions.Item>
+            <Descriptions.Item label="有效截止日">
+              {detail.data.validUntil ?? "未配置（历史报名）"}
+            </Descriptions.Item>
             <Descriptions.Item label="净应收">
               {detail.data.netAmount}
             </Descriptions.Item>

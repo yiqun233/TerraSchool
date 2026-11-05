@@ -115,6 +115,29 @@ export function ApprovalInbox({
     await requests.refetch();
   }
 
+  async function executeDefer(request: ApprovalRequestView) {
+    if (!request.id || !request.enrollmentId || !request.requestedUntil) {
+      setError("延期申请缺少报名或新有效截止日，请核对审批单。");
+      return;
+    }
+    setError("");
+    const token = await csrf();
+    const { response } = await api.POST(
+      "/api/enrollment/enrollments/{id}/defer",
+      {
+        params: { path: { id: request.enrollmentId } },
+        headers: { [token.headerName!]: token.token! },
+        body: { approvalId: request.id, validUntil: request.requestedUntil },
+      },
+    );
+    if (response.status === 409) {
+      setError("延期申请已消耗、日期不再有效或报名版本已变化，请刷新核对。");
+    } else if (!response.ok) {
+      setError("延期执行失败，请核对报名维护权限、有效期和审批策略。");
+    }
+    await requests.refetch();
+  }
+
   async function withdraw(request: ApprovalRequestView) {
     setError("");
     const token = await csrf();
@@ -192,23 +215,43 @@ export function ApprovalInbox({
         title="审批策略"
         size="small"
         extra={
-          school?.canManage &&
-          !(policies.data ?? []).some(
-            (policy) => policy.action === "ENROLLMENT_DISCOUNT",
-          ) ? (
-            <Button
-              size="small"
-              onClick={() =>
-                setEditing({
-                  action: "ENROLLMENT_DISCOUNT",
-                  freeBelow: "0.00",
-                  active: true,
-                  version: 0,
-                } as ApprovalPolicyView)
-              }
-            >
-              配置优惠审批
-            </Button>
+          school?.canManage ? (
+            <Space>
+              {!(policies.data ?? []).some(
+                (policy) => policy.action === "ENROLLMENT_DISCOUNT",
+              ) ? (
+                <Button
+                  size="small"
+                  onClick={() =>
+                    setEditing({
+                      action: "ENROLLMENT_DISCOUNT",
+                      freeBelow: "0.00",
+                      active: true,
+                      version: 0,
+                    } as ApprovalPolicyView)
+                  }
+                >
+                  配置优惠审批
+                </Button>
+              ) : null}
+              {!(policies.data ?? []).some(
+                (policy) => policy.action === "ENROLLMENT_DEFER",
+              ) ? (
+                <Button
+                  size="small"
+                  onClick={() =>
+                    setEditing({
+                      action: "ENROLLMENT_DEFER",
+                      freeBelow: "0.00",
+                      active: true,
+                      version: 0,
+                    } as ApprovalPolicyView)
+                  }
+                >
+                  配置延期审批
+                </Button>
+              ) : null}
+            </Space>
           ) : null
         }
       >
@@ -223,7 +266,12 @@ export function ApprovalInbox({
               dataIndex: "action",
               render: (action: string) => ACTION_LABEL[action] ?? action,
             },
-            { title: "免批额度（元）", dataIndex: "freeBelow" },
+            {
+              title: "免批额度（元）",
+              dataIndex: "freeBelow",
+              render: (value: string, policy: ApprovalPolicyView) =>
+                policy.action === "ENROLLMENT_DEFER" ? "不适用" : value,
+            },
             {
               title: "状态",
               dataIndex: "active",
@@ -258,6 +306,11 @@ export function ApprovalInbox({
               render: (action: string) => ACTION_LABEL[action] ?? action,
             },
             { title: "金额", dataIndex: "amount" },
+            {
+              title: "新有效截止日",
+              dataIndex: "requestedUntil",
+              render: (value: string | null) => value ?? "—",
+            },
             { title: "原因", dataIndex: "reason" },
             {
               title: "状态",
@@ -298,6 +351,15 @@ export function ApprovalInbox({
                       驳回
                     </Button>
                   </Space>
+                ) : request.action === "ENROLLMENT_DEFER" &&
+                  request.status === "APPROVED" &&
+                  !request.usedAt ? (
+                  <Button
+                    size="small"
+                    onClick={() => void executeDefer(request)}
+                  >
+                    执行延期
+                  </Button>
                 ) : null,
             },
           ]}
@@ -372,6 +434,10 @@ function RequestEditor({
           enrollmentId: values.enrollmentId,
           amount: String(values.amount),
           reason: values.reason,
+          requestedUntil:
+            values.action === "ENROLLMENT_DEFER"
+              ? values.requestedUntil
+              : undefined,
         },
       });
       if (response.status === 409) {
@@ -394,7 +460,11 @@ function RequestEditor({
       <Form
         form={form}
         layout="vertical"
-        onValuesChange={() => setRequestId(crypto.randomUUID())}
+        onValuesChange={(changed) => {
+          setRequestId(crypto.randomUUID());
+          if (changed.action === "ENROLLMENT_DEFER")
+            form.setFieldsValue({ amount: 0 });
+        }}
       >
         <Form.Item label="动作" name="action" rules={[{ required: true }]}>
           <Select
@@ -444,14 +514,44 @@ function RequestEditor({
           <Input />
         </Form.Item>
         <Form.Item
-          label="申请金额（元）"
+          label="申请金额（元；延期填 0）"
           name="amount"
-          rules={[{ required: true }]}
+          rules={[
+            { required: true },
+            ({ getFieldValue }) => ({
+              validator: async (_, value) => {
+                if (
+                  getFieldValue("action") === "ENROLLMENT_DEFER" &&
+                  Number(value) !== 0
+                ) {
+                  throw new Error("延期申请金额必须为 0");
+                }
+              },
+            }),
+          ]}
         >
           <InputNumber min={0} precision={2} style={{ width: "100%" }} />
         </Form.Item>
+        <Form.Item
+          noStyle
+          shouldUpdate={(previous, current) =>
+            previous.action !== current.action
+          }
+        >
+          {({ getFieldValue }) =>
+            getFieldValue("action") === "ENROLLMENT_DEFER" ? (
+              <Form.Item
+                label="申请延期至"
+                name="requestedUntil"
+                rules={[{ required: true, message: "请选择新的有效截止日" }]}
+              >
+                <Input type="date" />
+              </Form.Item>
+            ) : null
+          }
+        </Form.Item>
         <Typography.Text type="secondary">
-          转班、退班、延期等非金额动作可填 0；退费和减款必须填写正数金额。
+          转班、退班和延期属于非金额动作，金额填 0；延期必须填写新的有效截止日。
         </Typography.Text>
         <Form.Item label="原因" name="reason">
           <Input maxLength={200} />
@@ -536,7 +636,11 @@ export function PolicyEditor({
         initialValues={{ freeBelow: Number(policy.freeBelow) }}
       >
         <Form.Item
-          label="免批额度（元）"
+          label={
+            policy.action === "ENROLLMENT_DEFER"
+              ? "金额免批额度（不适用）"
+              : "免批额度（元）"
+          }
           name="freeBelow"
           rules={[{ required: true, message: "请输入额度" }]}
         >
@@ -545,10 +649,13 @@ export function PolicyEditor({
             precision={2}
             style={{ width: "100%" }}
             disabled={busy}
+            readOnly={policy.action === "ENROLLMENT_DEFER"}
           />
         </Form.Item>
         <Typography.Text type="secondary">
-          金额低于该额度免审批；填 0 表示所有金额都要审批。
+          {policy.action === "ENROLLMENT_DEFER"
+            ? "延期不按金额免批，执行时始终要求匹配且未消耗的已批准申请。"
+            : "金额低于该额度免审批；填 0 表示所有金额都要审批。"}
         </Typography.Text>
         <Button
           type="primary"

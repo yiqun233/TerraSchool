@@ -25,6 +25,7 @@ public record EnrollmentView(
     String netAmount,
     long version,
     String createdAt,
+    String validUntil,
     List<CourseView> courses) {
   public EnrollmentView {
     courses = courses == null ? List.of() : List.copyOf(courses);

@@ -1,6 +1,7 @@
 package org.teraschool.enrollment.api;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
@@ -22,6 +23,7 @@ public interface EnrollmentAccess {
       UUID id,
       UUID schoolId,
       UUID studentId,
+      LocalDate validUntil,
       String status,
       BigDecimal netAmount,
       BigDecimal price,

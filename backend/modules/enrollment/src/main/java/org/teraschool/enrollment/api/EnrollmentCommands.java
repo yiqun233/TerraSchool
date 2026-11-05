@@ -9,6 +9,9 @@ public interface EnrollmentCommands {
 
   EnrollmentView approve(UUID id, EnrollmentVersion command);
 
+  /** Extend the frozen learning period to an explicitly approved end date. */
+  EnrollmentView defer(UUID id, DeferEnrollment command);
+
   /**
    * 退课时：写本次退量并追加应收减项。
    *

@@ -76,8 +76,8 @@ class ApprovalWorkflowTest {
         CURRICULUM);
     update(
         "insert into product.price_version(id,tenant_id,product_id,version_no,status,price,hours,"
-            + " service_fee,settlement_mode,effective_from)"
-            + " values (?,?,?,1,'PUBLISHED',1000.00,10.00,0,1,'2026-01-01')",
+            + " service_fee,settlement_mode,study_days,effective_from)"
+            + " values (?,?,?,1,'PUBLISHED',1000.00,10.00,0,1,180,'2026-01-01')",
         PRICE,
         TENANT,
         PRODUCT);
@@ -209,12 +209,30 @@ class ApprovalWorkflowTest {
   }
 
   ApprovalRequestView request(EnrollmentView enrollment, String action, String amount) {
+    var requestAmount = "ENROLLMENT_DEFER".equals(action) ? "0.00" : amount;
     return asActor(
         APPLICANT,
         () ->
             approvalCommands.request(
                 new CreateApprovalRequest(
-                    UUID.randomUUID(), enrollment.id(), action, amount, "测试申请")));
+                    UUID.randomUUID(),
+                    enrollment.id(),
+                    action,
+                    requestAmount,
+                    "测试申请",
+                    "ENROLLMENT_DEFER".equals(action)
+                        ? java.time.LocalDate.parse(enrollment.validUntil()).plusDays(30)
+                        : null)));
+  }
+
+  private CreateApprovalRequest deferCommand(UUID requestId, UUID enrollmentId, String until) {
+    return new CreateApprovalRequest(
+        requestId,
+        enrollmentId,
+        "ENROLLMENT_DEFER",
+        "0.00",
+        "延期申请",
+        java.time.LocalDate.parse(until));
   }
 
   ApprovalRequestView approve(ApprovalRequestView request) {
@@ -324,8 +342,7 @@ class ApprovalWorkflowTest {
   void requestRetryWithSameIdentityReturnsOriginalApprovalRequest() {
     var enrollment = paidEnrollment(freshStudent());
     var requestId = UUID.randomUUID();
-    var command =
-        new CreateApprovalRequest(requestId, enrollment.id(), "ENROLLMENT_DEFER", "50.0", "延期申请");
+    var command = deferCommand(requestId, enrollment.id(), "2026-09-01");
 
     var first = asActor(APPLICANT, () -> approvalCommands.request(command));
     var retry = asActor(APPLICANT, () -> approvalCommands.request(command));
@@ -352,7 +369,12 @@ class ApprovalWorkflowTest {
         () ->
             approvalCommands.request(
                 new CreateApprovalRequest(
-                    requestId, enrollment.id(), "ENROLLMENT_DEFER", "50.00", "延期申请")));
+                    requestId,
+                    enrollment.id(),
+                    "ENROLLMENT_DEFER",
+                    "0.00",
+                    "延期申请",
+                    java.time.LocalDate.parse("2026-09-01"))));
 
     assertThatThrownBy(
             () ->
@@ -361,9 +383,90 @@ class ApprovalWorkflowTest {
                     () ->
                         approvalCommands.request(
                             new CreateApprovalRequest(
-                                requestId, enrollment.id(), "ENROLLMENT_DEFER", "60.00", "延期申请"))))
+                                requestId,
+                                enrollment.id(),
+                                "ENROLLMENT_DEFER",
+                                "0.00",
+                                "延期申请",
+                                java.time.LocalDate.parse("2026-10-01")))))
         .isInstanceOf(ApprovalConflict.class)
         .hasMessage("IDEMPOTENCY_KEY_REUSED");
+  }
+
+  @Test
+  void approvedEnrollmentDeferChangesOnlyTheFrozenEndDateAndRetryIsIdempotent() {
+    var enrollment = paidEnrollment(freshStudent());
+    policy("ENROLLMENT_DEFER", "0");
+    var requestedUntil = java.time.LocalDate.parse("2026-09-01");
+    var request =
+        asActor(
+            APPLICANT,
+            () ->
+                approvalCommands.request(
+                    deferCommand(UUID.randomUUID(), enrollment.id(), requestedUntil.toString())));
+    var approved = approve(request);
+
+    var deferred =
+        asActor(
+            OPS,
+            () ->
+                enrollments.defer(
+                    enrollment.id(), new DeferEnrollment(approved.id(), requestedUntil)));
+    var retry =
+        asActor(
+            OPS,
+            () ->
+                enrollments.defer(
+                    enrollment.id(), new DeferEnrollment(approved.id(), requestedUntil)));
+
+    assertThat(enrollment.validUntil()).isEqualTo("2026-08-08");
+    assertThat(deferred.validUntil()).isEqualTo("2026-09-01");
+    assertThat(retry.version()).isEqualTo(deferred.version());
+    assertThat(retry.validUntil()).isEqualTo(deferred.validUntil());
+    assertThat(
+            tx.execute(
+                TENANT,
+                () ->
+                    sql.fetchOne("select used_at from approval.request where id=?", approved.id())
+                        .get("used_at", java.time.OffsetDateTime.class)))
+        .isNotNull();
+  }
+
+  @Test
+  void approvedDeferCannotChangeItsRequestedDateOrExtendBackward() {
+    var enrollment = paidEnrollment(freshStudent());
+    policy("ENROLLMENT_DEFER", "0");
+    var requestedUntil = java.time.LocalDate.parse("2026-09-01");
+    var approved =
+        approve(
+            asActor(
+                APPLICANT,
+                () ->
+                    approvalCommands.request(
+                        deferCommand(
+                            UUID.randomUUID(), enrollment.id(), requestedUntil.toString()))));
+
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    OPS,
+                    () ->
+                        enrollments.defer(
+                            enrollment.id(),
+                            new DeferEnrollment(approved.id(), requestedUntil.plusDays(1)))))
+        .isInstanceOf(ApprovalConflict.class)
+        .hasMessage("APPROVAL_MISMATCH");
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    OPS,
+                    () ->
+                        enrollments.defer(
+                            enrollment.id(),
+                            new DeferEnrollment(
+                                approved.id(), java.time.LocalDate.parse("2026-08-01")))))
+        .isInstanceOf(EnrollmentConflict.class)
+        .hasMessage("DEFER_DATE_MUST_EXTEND_TERM");
   }
 
   @Test
@@ -387,9 +490,7 @@ class ApprovalWorkflowTest {
   @Test
   void concurrentRequestRetryWithSameIdentityCreatesOneApproval() throws Exception {
     var enrollment = paidEnrollment(freshStudent());
-    var command =
-        new CreateApprovalRequest(
-            UUID.randomUUID(), enrollment.id(), "ENROLLMENT_DEFER", "50.00", "并发重试");
+    var command = deferCommand(UUID.randomUUID(), enrollment.id(), "2026-09-01");
     var ready = new CountDownLatch(2);
     var start = new CountDownLatch(1);
     var pool = Executors.newFixedThreadPool(2);

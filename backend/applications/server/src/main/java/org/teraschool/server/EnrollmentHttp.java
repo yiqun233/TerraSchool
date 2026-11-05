@@ -61,6 +61,12 @@ class EnrollmentHttp {
     return commands.applyReduction(id, command);
   }
 
+  /** 经批准后将报名期限延至申请单中明确的日期。 */
+  @PostMapping(value = "/api/enrollment/enrollments/{id}/defer", consumes = "application/json")
+  EnrollmentView defer(@PathVariable UUID id, @RequestBody DeferEnrollment command) {
+    return commands.defer(id, command);
+  }
+
   /** 报名 CSV 导出：按学校，导出写审计。 */
   @GetMapping(value = "/api/enrollment/enrollments/export", produces = "text/csv; charset=UTF-8")
   org.springframework.http.ResponseEntity<String> export(@RequestParam UUID schoolId) {

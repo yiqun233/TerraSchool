@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.time.LocalDate;
 import java.util.*;
 import org.jooq.DSLContext;
 import org.jooq.Record;
@@ -120,7 +121,7 @@ public class ApprovalService
           if (!filter.isEmpty()) args.add(status);
           return sql.fetch(
                   "select id,school_id,action,enrollment_id,amount,reason,status,requested_by,"
-                      + "decided_by,decision_note,used_at,version,created_at from approval.request"
+                      + "decided_by,decision_note,used_at,version,created_at,requested_until from approval.request"
                       + " where school_id=?"
                       + filter
                       + " order by created_at desc, id limit 200",
@@ -142,6 +143,8 @@ public class ApprovalService
     if (command == null || command.schoolId() == null) throw new IllegalArgumentException("需要学校");
     var action = action(command.action());
     var freeBelow = amount(command.freeBelow(), "免批阈值", true);
+    if ("ENROLLMENT_DEFER".equals(action) && freeBelow.signum() != 0)
+      throw new IllegalArgumentException("延期审批不使用金额免批额度");
     var manage = actors.requireAction("APPROVAL_MANAGE");
     return tx.execute(
         manage.tenantId(),
@@ -219,12 +222,18 @@ public class ApprovalService
             Set.of("ENROLLMENT_TRANSFER", "ENROLLMENT_WITHDRAWAL", "ENROLLMENT_DEFER")
                 .contains(action));
     var reason = text(command.reason(), 200, "申请原因");
+    var requestedUntil = command.requestedUntil();
+    if ("ENROLLMENT_DEFER".equals(action) != (requestedUntil != null))
+      throw new IllegalArgumentException("延期申请必须明确新有效截止日，其他审批动作不得携带截止日");
+    if ("ENROLLMENT_DEFER".equals(action) && amount.signum() != 0)
+      throw new IllegalArgumentException("延期属于非金额审批，金额必须为零");
     var fingerprint =
         fingerprint(
             action,
             command.enrollmentId().toString(),
             amount.toPlainString(),
-            Objects.toString(reason, ""));
+            Objects.toString(reason, ""),
+            Objects.toString(requestedUntil, ""));
     var permission = requestPermission(action);
     var apply = actors.requireAction(permission);
     return tx.execute(
@@ -259,6 +268,12 @@ public class ApprovalService
           var schoolId = enrollment.schoolId();
           if (!verified.schools().contains(schoolId))
             throw new AccessDeniedException("无该学校的业务审批申请权限");
+          if ("ENROLLMENT_DEFER".equals(action)) {
+            if (enrollment.validUntil() == null)
+              throw new ApprovalConflict("ENROLLMENT_TERM_NOT_CONFIGURED");
+            if (!requestedUntil.isAfter(enrollment.validUntil()))
+              throw new ApprovalConflict("DEFER_DATE_MUST_EXTEND_TERM");
+          }
           if (!schools.require(schoolId).active()) throw new AccessDeniedException("学校已停用，不能申请审批");
           var pending =
               sql.fetchOne(
@@ -269,7 +284,7 @@ public class ApprovalService
           var id = UUID.randomUUID();
           sql.execute(
               "insert into approval.request(id,tenant_id,school_id,action,enrollment_id,amount,reason,"
-                  + "requested_by) values (?,?,?,?,?,?,?,?)",
+                  + "requested_by,requested_until) values (?,?,?,?,?,?,?,?,?)",
               id,
               apply.tenantId(),
               schoolId,
@@ -277,7 +292,8 @@ public class ApprovalService
               command.enrollmentId(),
               amount,
               reason,
-              apply.accountId());
+              apply.accountId(),
+              requestedUntil);
           sql.execute(
               "insert into approval.request_command(tenant_id,actor_id,request_id,fingerprint,approval_id)"
                   + " values (?,?,?,?,?)",
@@ -458,6 +474,42 @@ public class ApprovalService
     consume("ENROLLMENT_DISCOUNT", schoolId, enrollmentId, amount, approvalId);
   }
 
+  @Override
+  public boolean consumeDefer(
+      UUID schoolId, UUID enrollmentId, LocalDate validUntil, UUID approvalId) {
+    if (schoolId == null || enrollmentId == null || validUntil == null || approvalId == null)
+      throw new IllegalArgumentException("延期审批校验缺少参数");
+    var row = requireRequestForUpdate(approvalId);
+    if (!"APPROVED".equals(row.get("status", String.class)))
+      throw new ApprovalConflict("APPROVAL_NOT_APPROVED");
+    if (!"ENROLLMENT_DEFER".equals(row.get("action", String.class))
+        || !enrollmentId.equals(row.get("enrollment_id", UUID.class))
+        || !schoolId.equals(row.get("school_id", UUID.class))
+        || !validUntil.equals(row.get("requested_until", LocalDate.class))
+        || row.get("amount", BigDecimal.class).signum() != 0)
+      throw new ApprovalConflict("APPROVAL_MISMATCH");
+    if (row.get("used_at", java.time.OffsetDateTime.class) != null) return true;
+    var policy =
+        sql.fetchOne(
+            "select active from approval.policy where school_id=? and action='ENROLLMENT_DEFER'",
+            schoolId);
+    if (policy == null || !policy.get("active", Boolean.class))
+      throw new ApprovalConflict("APPROVAL_POLICY_NOT_CONFIGURED");
+    int updated =
+        sql.execute(
+            "update approval.request set used_at=CURRENT_TIMESTAMP where id=? and used_at is null",
+            approvalId);
+    if (updated != 1) throw new ApprovalConflict("APPROVAL_ALREADY_USED");
+    audit(
+        actors.requireIdentityInTransaction(),
+        "CONSUMED",
+        approvalId,
+        schoolId,
+        BigDecimal.ZERO,
+        "ENROLLMENT_DEFER:" + validUntil);
+    return false;
+  }
+
   // ---------------------------------------------------------------- 内部
 
   private Set<UUID> schoolsOf(String action) {
@@ -487,7 +539,7 @@ public class ApprovalService
     var row =
         sql.fetchOne(
             "select id,tenant_id,school_id,action,enrollment_id,amount,reason,status,requested_by,"
-                + "decided_by,decision_note,used_at,version,created_at from approval.request where id=?",
+                + "decided_by,decision_note,used_at,version,created_at,requested_until from approval.request where id=?",
             id);
     if (row == null) throw new AccessDeniedException("审批单不存在或不可访问");
     return row;
@@ -497,7 +549,7 @@ public class ApprovalService
     var row =
         sql.fetchOne(
             "select id,tenant_id,school_id,action,enrollment_id,amount,reason,status,requested_by,"
-                + "decided_by,decision_note,used_at,version,created_at from approval.request"
+                + "decided_by,decision_note,used_at,version,created_at,requested_until from approval.request"
                 + " where id=? for update",
             id);
     if (row == null) throw new AccessDeniedException("审批单不存在或不可访问");
@@ -531,7 +583,8 @@ public class ApprovalService
         row.get("version", Long.class),
         row.get("created_at", java.time.OffsetDateTime.class) == null
             ? null
-            : row.get("created_at", java.time.OffsetDateTime.class).toInstant().toString());
+            : row.get("created_at", java.time.OffsetDateTime.class).toInstant().toString(),
+        row.get("requested_until", LocalDate.class));
   }
 
   private String action(String value) {

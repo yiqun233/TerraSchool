@@ -1792,6 +1792,8 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
             }
             var enrollment = enrollments.require(enrollmentId);
             var mode = enrollment.settlementMode();
+            if (enrollment.validUntil() != null && lessonDate.isAfter(enrollment.validUntil()))
+              throw new TeachingConflict("ENROLLMENT_TERM_EXPIRED");
             if (mode < 1 || mode > 5) throw new TeachingConflict("SETTLEMENT_MODE_UNSUPPORTED");
             // 课程维度模式：2/3/5 只对「报名的课程」计价，课次课程不在明细内则本期不产生消耗。
             var perCourse = mode == 2 || mode == 3 || mode == 5;
@@ -2135,6 +2137,8 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
             if (!schools.require(enrollment.schoolId()).active())
               throw new AccessDeniedException("学校已停用，不能登记期初消费");
             var occurredOn = businessDate(command.occurredOn(), "期初日期");
+            if (enrollment.validUntil() != null && occurredOn.isAfter(enrollment.validUntil()))
+              throw new TeachingConflict("ENROLLMENT_TERM_EXPIRED");
             periods.requireOpen(enrollment.schoolId(), occurredOn);
             var hours = positiveHours(command.hours(), "期初消耗课时");
             // 旧库可能只有课时没有金额：允许 0，但不接受负数。

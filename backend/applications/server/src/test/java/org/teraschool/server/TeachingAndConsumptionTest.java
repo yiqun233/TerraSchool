@@ -889,6 +889,40 @@ class TeachingAndConsumptionTest {
   }
 
   @Test
+  void enrollmentExpiredOnLessonDateCannotPostConsumption() throws Exception {
+    var classView = newClass("有效期后课次拒绝消费");
+    var enrollment = activeEnrollment();
+    update("update enrollment.enrollment set valid_until='2026-03-04' where id=?", enrollment);
+    asActor(TEACHER, () -> commands.addMember(classView.id(), new AddClassMember(enrollment)));
+    var lesson = published(classView.id(), "2026-03-05");
+    var confirmed =
+        asActor(
+            TEACHER,
+            () ->
+                commands.confirmAttendance(
+                    lesson.id(),
+                    new ConfirmAttendance(
+                        lesson.version(), List.of(new AttendanceInput(enrollment, "PRESENT")))));
+
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    TEACHER,
+                    () ->
+                        commands.closeLesson(
+                            confirmed.id(), new LessonVersion(confirmed.version()))))
+        .isInstanceOf(TeachingConflict.class)
+        .hasMessage("ENROLLMENT_TERM_EXPIRED");
+    assertThat(asActor(READER, () -> queries.reconciliation(enrollment)).consumedHours())
+        .isEqualTo("0.00");
+    assertThat(asActor(TEACHER, () -> queries.lessons(classView.id())))
+        .filteredOn(item -> item.id().equals(confirmed.id()))
+        .singleElement()
+        .extracting(LessonView::status)
+        .isEqualTo("CONFIRMED");
+  }
+
+  @Test
   void partialAttendanceRequiresPositiveMinutesBelowLessonDuration() {
     var classView = classWithMember("部分缺勤分钟校验");
     var member = membershipOf(classView.id());

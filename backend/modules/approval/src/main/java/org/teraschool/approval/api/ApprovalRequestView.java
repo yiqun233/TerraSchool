@@ -1,5 +1,6 @@
 package org.teraschool.approval.api;
 
+import java.time.LocalDate;
 import java.util.UUID;
 
 /** 审批单：金额为十进制字符串；{@code usedAt} 非空表示已被业务动作消耗。 */
@@ -16,4 +17,5 @@ public record ApprovalRequestView(
     String decisionNote,
     String usedAt,
     long version,
-    String createdAt) {}
+    String createdAt,
+    LocalDate requestedUntil) {}

@@ -205,7 +205,7 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
     if (enrollmentId == null) throw new IllegalArgumentException("需要报名");
     var row =
         sql.fetchOne(
-            "select id,school_id,student_id,status,price,service_fee,hours,settlement_mode"
+            "select id,school_id,student_id,valid_until,status,price,service_fee,hours,settlement_mode"
                 + " from enrollment.enrollment where id=?",
             enrollmentId);
     if (row == null) throw new AccessDeniedException("报名不存在或不可访问");
@@ -213,6 +213,7 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
         row.get("id", UUID.class),
         row.get("school_id", UUID.class),
         row.get("student_id", UUID.class),
+        row.get("valid_until", LocalDate.class),
         row.get("status", String.class),
         netAmount(enrollmentId),
         row.get("price", java.math.BigDecimal.class),
@@ -333,8 +334,8 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
           var id = UUID.randomUUID();
           sql.execute(
               "insert into enrollment.enrollment(id,tenant_id,school_id,student_id,product_id,"
-                  + "price_version_id,curriculum_name,product_name,price,hours,service_fee,settlement_mode)"
-                  + " values (?,?,?,?,?,?,?,?,?,?,?,?)",
+                  + "price_version_id,curriculum_name,product_name,price,hours,service_fee,settlement_mode,valid_until)"
+                  + " values (?,?,?,?,?,?,?,?,?,?,?,?,?)",
               id,
               scope.tenantId(),
               schoolId,
@@ -346,7 +347,8 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
               new BigDecimal(snapshot.price()),
               new BigDecimal(snapshot.hours()),
               new BigDecimal(snapshot.serviceFee()),
-              snapshot.settlementMode());
+              snapshot.settlementMode(),
+              snapshot.studyDays() == null ? null : on.plusDays(snapshot.studyDays() - 1L));
           // 应收 = 商品价格 + 服务费；服务费在价格快照里单列，不摊进课时单价。
           var receivable =
               new BigDecimal(snapshot.price()).add(new BigDecimal(snapshot.serviceFee()));
@@ -403,6 +405,65 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
           var student = students.require(row.get("student_id", UUID.class));
           return view(requireEnrollmentByTenant(id), student.name());
         });
+  }
+
+  @Override
+  public EnrollmentView defer(UUID id, DeferEnrollment command) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      if (id == null
+          || command == null
+          || command.approvalId() == null
+          || command.validUntil() == null) throw new IllegalArgumentException("需要报名、延期审批和新有效期");
+      var maintain = actors.requireAction("ENROLLMENT_MAINTAIN");
+      return tx.execute(
+          maintain.tenantId(),
+          () -> {
+            schools.lockTenant(maintain.tenantId());
+            var verified = actors.requireActionInTransaction("ENROLLMENT_MAINTAIN");
+            var row = requireEnrollmentForUpdate(id);
+            var schoolId = row.get("school_id", UUID.class);
+            if (!verified.schools().contains(schoolId))
+              throw new AccessDeniedException("无该学校的报名维护权限");
+            if (!schools.require(schoolId).active())
+              throw new AccessDeniedException("学校已停用，不能延期报名");
+            if (!"ACTIVE".equals(row.get("status", String.class)))
+              throw new EnrollmentConflict("ENROLLMENT_NOT_ACTIVE");
+            var currentUntil = row.get("valid_until", LocalDate.class);
+            if (currentUntil == null)
+              throw new EnrollmentConflict("ENROLLMENT_TERM_NOT_CONFIGURED");
+            if (command.validUntil().isBefore(currentUntil))
+              throw new EnrollmentConflict("DEFER_DATE_MUST_EXTEND_TERM");
+            boolean alreadyUsed =
+                discountApproval.consumeDefer(
+                    schoolId, id, command.validUntil(), command.approvalId());
+            if (alreadyUsed) {
+              if (command.validUntil().equals(currentUntil))
+                return view(
+                    requireEnrollmentByTenant(id),
+                    students.require(row.get("student_id", UUID.class)).name());
+              throw new EnrollmentConflict("APPROVAL_ALREADY_USED");
+            }
+            if (!command.validUntil().isAfter(currentUntil))
+              throw new EnrollmentConflict("DEFER_DATE_MUST_EXTEND_TERM");
+            int updated =
+                sql.execute(
+                    "update enrollment.enrollment set valid_until=?,version=version+1 where id=? and version=? and valid_until=?",
+                    command.validUntil(),
+                    id,
+                    row.get("version", Long.class),
+                    currentUntil);
+            if (updated != 1) throw new EnrollmentConflict("VERSION_CONFLICT");
+            audit(
+                maintain,
+                "ENROLLMENT_DEFERRED",
+                id,
+                schoolId,
+                currentUntil + "->" + command.validUntil());
+            return view(
+                requireEnrollmentByTenant(id),
+                students.require(row.get("student_id", UUID.class)).name());
+          });
+    }
   }
 
   // ---------------------------------------------------------------- 退课时
@@ -519,7 +580,7 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
     var row =
         sql.fetchOne(
             "select id,school_id,student_id,product_id,price_version_id,curriculum_name,product_name,"
-                + "price,hours,service_fee,settlement_mode,status,version,created_at from enrollment.enrollment"
+                + "price,hours,service_fee,settlement_mode,status,version,created_at,valid_until from enrollment.enrollment"
                 + " where id=? for update",
             id);
     if (row == null) throw new AccessDeniedException("报名不存在或不可访问");
@@ -1076,7 +1137,7 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
         sql.fetchOne(
             "select e.id,e.school_id,e.student_id,e.product_id,e.price_version_id,e.curriculum_name,"
                 + "e.product_name,e.price,e.hours,e.service_fee,e.settlement_mode,e.status,e.version,"
-                + "e.created_at,"
+                + "e.created_at,e.valid_until,"
                 + "(select coalesce(sum(c.amount),0) from enrollment.charge c where c.enrollment_id=e.id)"
                 + " as net_amount from enrollment.enrollment e where e.id=?",
             id);
@@ -1124,6 +1185,9 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
         row.get("created_at", java.time.OffsetDateTime.class) == null
             ? null
             : row.get("created_at", java.time.OffsetDateTime.class).toInstant().toString(),
+        row.get("valid_until", LocalDate.class) == null
+            ? null
+            : row.get("valid_until", LocalDate.class).toString(),
         courseViews(row.get("id", UUID.class)));
   }
 

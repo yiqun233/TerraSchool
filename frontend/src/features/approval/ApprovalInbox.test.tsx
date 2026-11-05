@@ -137,8 +137,9 @@ it("申请人可以按版本撤回自己的待审批申请", async () => {
             schoolId: "school-1",
             action: "ENROLLMENT_DEFER",
             enrollmentId: "enrollment-1",
-            amount: "50.00",
+            amount: "0.00",
             reason: "延期申请",
+            requestedUntil: "2026-09-01",
             status: "PENDING",
             requestedBy: "user-a",
             version: 3,
@@ -179,7 +180,7 @@ it("审批申请遭遇网络中断后重试复用同一请求标识", async () =
   await user.click(screen.getByLabelText("动作"));
   await user.click(await screen.findByText("延期"));
   await user.type(screen.getByLabelText("报名编号"), "enrollment-1");
-  await user.type(screen.getByLabelText("申请金额（元）"), "50");
+  await user.type(screen.getByLabelText("申请延期至"), "2026-09-01");
   await user.click(screen.getByRole("button", { name: "提交申请" }));
   await screen.findByText("申请审批时网络中断，请刷新后核对申请状态。");
   await user.click(screen.getByRole("button", { name: "提交申请" }));
@@ -190,10 +191,52 @@ it("审批申请遭遇网络中断后重试复用同一请求标识", async () =
   expect(first).toMatchObject({
     action: "ENROLLMENT_DEFER",
     enrollmentId: "enrollment-1",
-    amount: "50",
+    amount: "0",
+    requestedUntil: "2026-09-01",
   });
   expect(first.requestId).toMatch(
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
   );
   expect(retry.requestId).toBe(first.requestId);
+});
+
+it("已通过的延期审批可执行并使用审批单中的截止日", async () => {
+  vi.clearAllMocks();
+  get.mockImplementation(async (path: string) => {
+    if (path === "/api/approval/capabilities")
+      return { response: { ok: true, status: 200 }, data: capabilities };
+    if (path === "/api/approval/policies")
+      return { response: { ok: true, status: 200 }, data: [] };
+    if (path === "/api/approval/requests")
+      return {
+        response: { ok: true, status: 200 },
+        data: [
+          {
+            id: "defer-approved",
+            schoolId: "school-1",
+            action: "ENROLLMENT_DEFER",
+            enrollmentId: "enrollment-1",
+            amount: "0.00",
+            reason: "补课安排",
+            requestedUntil: "2026-09-01",
+            status: "APPROVED",
+            requestedBy: "user-b",
+            version: 1,
+          },
+        ],
+      };
+    throw new Error("unexpected path " + path);
+  });
+  csrf.mockResolvedValue({ headerName: "X-CSRF-TOKEN", token: "test" });
+  post.mockResolvedValue({ response: { ok: true, status: 200 }, data: {} });
+  const user = userEvent.setup({ pointerEventsCheck: 0 });
+  renderWithClient(<ApprovalInbox onUnauthorized={vi.fn()} />);
+  await user.click(await screen.findByRole("button", { name: "执行延期" }));
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+  expect(post.mock.calls[0][0]).toBe("/api/enrollment/enrollments/{id}/defer");
+  expect(post.mock.calls[0][1].params.path.id).toBe("enrollment-1");
+  expect(post.mock.calls[0][1].body).toEqual({
+    approvalId: "defer-approved",
+    validUntil: "2026-09-01",
+  });
 });
