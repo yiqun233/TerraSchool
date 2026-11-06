@@ -326,6 +326,19 @@ class StudentExportTest {
   }
 
   @Test
+  void pdfRendererProducesDocumentWhenChromiumExecutableIsConfigured() {
+    String executablePath = System.getProperty("teraschool.export.pdf.chromium-path");
+    if (executablePath == null || executablePath.isBlank()) {
+      assertThat(Boolean.getBoolean("teraschool.test.require-pdf-renderer"))
+          .as("强制 PDF 渲染时必须配置 Chromium 可执行文件")
+          .isFalse();
+      return;
+    }
+    byte[] pdf = ExportPdf.fromCsv("字段,内容\n课程,中文 PDF 渲染冒烟测试\n", executablePath);
+    assertThat(pdf).startsWith("%PDF-".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+  }
+
+  @Test
   void exportRequestIdentityIncludesDateFiltersAndRejectsInvalidRanges() {
     var requestId = UUID.randomUUID();
     asActor(

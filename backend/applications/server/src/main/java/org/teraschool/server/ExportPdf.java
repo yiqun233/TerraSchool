@@ -2,9 +2,11 @@ package org.teraschool.server;
 
 import com.microsoft.playwright.Browser;
 import com.microsoft.playwright.BrowserContext;
+import com.microsoft.playwright.BrowserType;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.Playwright;
 import com.microsoft.playwright.options.WaitUntilState;
+import java.nio.file.Path;
 import java.util.List;
 
 /** 使用内置、无外部资源的 HTML 表格和匹配版本 Chromium 生成 PDF。 */
@@ -12,20 +14,29 @@ final class ExportPdf {
   private ExportPdf() {}
 
   static byte[] fromCsv(String csv) {
+    return fromCsv(csv, null);
+  }
+
+  static byte[] fromCsv(String csv, String executablePath) {
     String html = html(csv);
-    try (Playwright playwright = Playwright.create();
-        Browser browser = playwright.chromium().launch();
-        BrowserContext context =
-            browser.newContext(new Browser.NewContextOptions().setJavaScriptEnabled(false));
-        Page page = context.newPage()) {
-      page.setDefaultTimeout(15_000);
-      page.setContent(
-          html, new Page.SetContentOptions().setWaitUntil(WaitUntilState.LOAD).setTimeout(15_000));
-      return page.pdf(
-          new Page.PdfOptions()
-              .setFormat("A4")
-              .setPrintBackground(true)
-              .setPreferCSSPageSize(true));
+    try (Playwright playwright = Playwright.create()) {
+      var launchOptions = new BrowserType.LaunchOptions();
+      if (executablePath != null && !executablePath.isBlank())
+        launchOptions.setExecutablePath(Path.of(executablePath));
+      try (Browser browser = playwright.chromium().launch(launchOptions);
+          BrowserContext context =
+              browser.newContext(new Browser.NewContextOptions().setJavaScriptEnabled(false));
+          Page page = context.newPage()) {
+        page.setDefaultTimeout(15_000);
+        page.setContent(
+            html,
+            new Page.SetContentOptions().setWaitUntil(WaitUntilState.LOAD).setTimeout(15_000));
+        return page.pdf(
+            new Page.PdfOptions()
+                .setFormat("A4")
+                .setPrintBackground(true)
+                .setPreferCSSPageSize(true));
+      }
     } catch (Exception failure) {
       throw new IllegalStateException("PDF 渲染失败，请检查 Playwright Chromium 与运行依赖已安装", failure);
     }

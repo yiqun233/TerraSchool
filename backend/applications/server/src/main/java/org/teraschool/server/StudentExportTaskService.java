@@ -35,6 +35,7 @@ class StudentExportTaskService {
   private final FundsQueries funds;
   private final TeachingQueries teaching;
   private final int retentionHours;
+  private final String pdfChromiumPath;
 
   StudentExportTaskService(
       CurrentActor actors,
@@ -54,6 +55,7 @@ class StudentExportTaskService {
     this.enrollments = enrollments;
     this.funds = funds;
     this.teaching = teaching;
+    pdfChromiumPath = environment.getProperty("teraschool.export.pdf.chromium-path");
     retentionHours =
         environment.getProperty("teraschool.export.retention-hours", Integer.class, 24);
     if (retentionHours < 1 || retentionHours > 168)
@@ -364,7 +366,7 @@ class StudentExportTaskService {
       byte[] content =
           switch (task.format()) {
             case "XLSX" -> ExportWorkbook.fromCsv(csv);
-            case "PDF" -> ExportPdf.fromCsv(csv);
+            case "PDF" -> ExportPdf.fromCsv(csv, pdfChromiumPath);
             default -> csv.getBytes(StandardCharsets.UTF_8);
           };
       tx.execute(
