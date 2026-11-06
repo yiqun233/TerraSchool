@@ -25,6 +25,7 @@ ALTER ROLE ts_identity PASSWORD :'identity';
 ALTER ROLE ts_session PASSWORD :'session';
 ALTER ROLE ts_audit PASSWORD :'audit';
 ALTER ROLE ts_scheduler PASSWORD :'scheduler';
+ALTER ROLE ts_platform PASSWORD :'platform';
 ALTER ROLE ts_migrator PASSWORD :'migrator';
 SQL
 

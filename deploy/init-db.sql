@@ -7,7 +7,7 @@ DO $$
 DECLARE
     target text;
 BEGIN
-    FOREACH target IN ARRAY ARRAY['ts_app','ts_identity','ts_session','ts_audit','ts_scheduler','ts_migrator']
+    FOREACH target IN ARRAY ARRAY['ts_app','ts_identity','ts_session','ts_audit','ts_scheduler','ts_platform','ts_migrator']
     LOOP
         IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = target) THEN
             EXECUTE format(

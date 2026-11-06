@@ -47,17 +47,20 @@ backend:
       TS_SESSION_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"
       TS_AUDIT_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"
       TS_SCHEDULER_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"
+      TS_PLATFORM_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"
       export TS_ADMIN_PASSWORD="$POSTGRES_PASSWORD" \
-        TS_APP_PASSWORD TS_IDENTITY_PASSWORD TS_SESSION_PASSWORD TS_AUDIT_PASSWORD TS_SCHEDULER_PASSWORD
+        TS_APP_PASSWORD TS_IDENTITY_PASSWORD TS_SESSION_PASSWORD TS_AUDIT_PASSWORD TS_SCHEDULER_PASSWORD TS_PLATFORM_PASSWORD
       PGPASSWORD="$POSTGRES_PASSWORD" psql -h postgres -U postgres -d teraschool_test -v ON_ERROR_STOP=1 \
         -v app="$TS_APP_PASSWORD" -v identity="$TS_IDENTITY_PASSWORD" \
         -v session="$TS_SESSION_PASSWORD" -v audit="$TS_AUDIT_PASSWORD" \
-        -v scheduler="$TS_SCHEDULER_PASSWORD" <<'SQL'
+        -v scheduler="$TS_SCHEDULER_PASSWORD" \
+        -v platform="$TS_PLATFORM_PASSWORD" <<'SQL'
       CREATE ROLE ts_app LOGIN PASSWORD :'app' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
       CREATE ROLE ts_identity LOGIN PASSWORD :'identity' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
       CREATE ROLE ts_session LOGIN PASSWORD :'session' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
       CREATE ROLE ts_audit LOGIN PASSWORD :'audit' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
       CREATE ROLE ts_scheduler LOGIN PASSWORD :'scheduler' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+      CREATE ROLE ts_platform LOGIN PASSWORD :'platform' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
       SQL
   script:
     - python3 tools/migration/extract_legacy.py --self-check

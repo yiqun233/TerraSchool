@@ -33,7 +33,7 @@ if not java_bin.exists():
     raise SystemExit("请先配置 JDK 25 的 JAVA_HOME")
 env["MAVEN_USER_HOME"] = str(ROOT / ".local/maven")
 
-for name in ["ADMIN", "APP", "IDENTITY", "SESSION", "AUDIT", "SCHEDULER"]:
+for name in ["ADMIN", "APP", "IDENTITY", "SESSION", "AUDIT", "SCHEDULER", "PLATFORM"]:
     env["TS_" + name + "_PASSWORD"] = secrets.token_urlsafe(30)
 private = [v for k, v in env.items() if k.startswith("TS_") and k.endswith("_PASSWORD")]
 
@@ -144,7 +144,7 @@ try:
     roles = "\n".join(
         "CREATE ROLE ts_" + kind + " LOGIN PASSWORD '" + env["TS_" + kind.upper() + "_PASSWORD"] +
         "' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;"
-        for kind in ["app", "identity", "session", "audit", "scheduler"]
+        for kind in ["app", "identity", "session", "audit", "scheduler", "platform"]
     )
     run(
         [docker, "exec", "-i", container, "psql", "-v", "ON_ERROR_STOP=1", "-U", "postgres",

@@ -214,7 +214,7 @@ def ensure_database(config):
         raise RuntimeError('当前工程需要已验证的PostgreSQL18。')
     roles = json.loads(wsl_admin(config, "SELECT coalesce(json_object_agg(rolname, "
         "coalesce(shobj_description(oid,'pg_authid'),'')),'{}'::json) FROM pg_roles "
-        "WHERE rolname IN ('ts_migrator','ts_app','ts_identity','ts_session','ts_audit','ts_scheduler');"))
+        "WHERE rolname IN ('ts_migrator','ts_app','ts_identity','ts_session','ts_audit','ts_scheduler','ts_platform');"))
     for name, marker in roles.items():
         if marker != database_marker(config):
             raise RuntimeError('已有角色不属于当前项目，拒绝更改：' + name)
@@ -222,7 +222,7 @@ def ensure_database(config):
     if existing == '1':
         assert_wsl_database(config)
     statements = []
-    for key, role in [('migrator','ts_migrator'),('app','ts_app'),('identity','ts_identity'),('session','ts_session'),('audit','ts_audit'),('scheduler','ts_scheduler')]:
+    for key, role in [('migrator','ts_migrator'),('app','ts_app'),('identity','ts_identity'),('session','ts_session'),('audit','ts_audit'),('scheduler','ts_scheduler'),('platform','ts_platform')]:
         if role not in roles:
             statements.append('CREATE ROLE ' + role + ' LOGIN PASSWORD ' + literal(config['passwords'][key]) +
                 ' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS; COMMENT ON ROLE ' + role + ' IS ' +
@@ -234,7 +234,7 @@ def ensure_database(config):
                   literal(database_marker(config)) + ';')
     assert_wsl_database(config)
     wsl_admin(config, 'REVOKE ALL ON DATABASE teraschool_dev FROM PUBLIC; '
-              'GRANT CONNECT ON DATABASE teraschool_dev TO ts_app,ts_identity,ts_session,ts_audit,ts_scheduler;')
+              'GRANT CONNECT ON DATABASE teraschool_dev TO ts_app,ts_identity,ts_session,ts_audit,ts_scheduler,ts_platform;')
 
 
 def tools():
