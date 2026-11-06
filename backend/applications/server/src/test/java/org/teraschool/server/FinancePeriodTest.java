@@ -582,7 +582,8 @@ class FinancePeriodTest {
     asActor(OPS, () -> teaching.addMember(source.id(), new AddClassMember(enrollment.id())));
     update(
         "insert into approval.policy(tenant_id,school_id,action,free_below)"
-            + " values (?,?,'ENROLLMENT_TRANSFER',0)",
+            + " values (?,?,'ENROLLMENT_TRANSFER',0)"
+            + " on conflict (tenant_id,school_id,action) do update set free_below=excluded.free_below",
         TENANT,
         SCHOOL);
     var approval =
@@ -681,6 +682,67 @@ class FinancePeriodTest {
     var afterTransfer = asActor(OPS, () -> enrollmentQueries.detail(enrollment.id()));
     assertThat(afterTransfer.price()).isEqualTo("1000.00");
     assertThat(afterTransfer.hours()).isEqualTo("10.00");
+  }
+
+  @Test
+  void transferCannotExceedTargetClassCapacityOrConsumeApproval() throws Exception {
+    var enrollment = activeEnrollment(freshStudent());
+    var source =
+        asActor(
+            OPS,
+            () ->
+                teaching.createClass(
+                    new CreateClass(
+                        UUID.randomUUID(), SCHOOL, CURRICULUM, "容量转班源" + UUID.randomUUID())));
+    var target =
+        asActor(
+            OPS,
+            () ->
+                teaching.createClass(
+                    new CreateClass(
+                        UUID.randomUUID(),
+                        SCHOOL,
+                        CURRICULUM,
+                        "容量转班目标" + UUID.randomUUID(),
+                        "NORMAL",
+                        false,
+                        0)));
+    asActor(OPS, () -> teaching.addMember(source.id(), new AddClassMember(enrollment.id())));
+    update(
+        "insert into approval.policy(tenant_id,school_id,action,free_below)"
+            + " values (?,?,'ENROLLMENT_TRANSFER',0) on conflict do nothing",
+        TENANT,
+        SCHOOL);
+    var pending =
+        asActor(
+            OPS,
+            () ->
+                approvalCommands.request(
+                    new CreateApprovalRequest(
+                        UUID.randomUUID(), enrollment.id(), "ENROLLMENT_TRANSFER", "0", "申请转班")));
+    var approved =
+        asActor(
+            LOCKER,
+            () ->
+                approvalCommands.decide(
+                    pending.id(), new DecideApproval(pending.version(), "APPROVED", "同意")));
+    var command =
+        new TransferClassMember(
+            UUID.randomUUID(), source.id(), target.id(), approved.id(), "目标班已满");
+    assertThatThrownBy(() -> asActor(OPS, () -> teaching.transferMember(enrollment.id(), command)))
+        .isInstanceOf(TeachingConflict.class)
+        .hasMessage("CLASS_CAPACITY_REACHED");
+    assertThat(asActor(OPS, () -> teachingQueries.members(source.id()).getFirst().status()))
+        .isEqualTo("ACTIVE");
+    assertThat(asActor(OPS, () -> teachingQueries.members(target.id()))).isEmpty();
+    var approvalState =
+        tx.execute(
+            TENANT,
+            () ->
+                sql.fetchOne(
+                    "select status,used_at from approval.request where id=?", approved.id()));
+    assertThat(approvalState.get("status", String.class)).isEqualTo("APPROVED");
+    assertThat(approvalState.get("used_at")).isNull();
   }
 
   @Test

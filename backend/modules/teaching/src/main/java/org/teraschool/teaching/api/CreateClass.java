@@ -14,13 +14,24 @@ public record CreateClass(
     UUID curriculumId,
     String name,
     String classType,
-    boolean groupTraining) {
+    boolean groupTraining,
+    Integer capacity) {
   public CreateClass(UUID requestId, UUID schoolId, UUID curriculumId, String name) {
-    this(requestId, schoolId, curriculumId, name, "NORMAL", false);
+    this(requestId, schoolId, curriculumId, name, "NORMAL", false, null);
   }
 
   public CreateClass(
       UUID requestId, UUID schoolId, UUID curriculumId, String name, String classType) {
-    this(requestId, schoolId, curriculumId, name, classType, false);
+    this(requestId, schoolId, curriculumId, name, classType, false, null);
+  }
+
+  public CreateClass(
+      UUID requestId,
+      UUID schoolId,
+      UUID curriculumId,
+      String name,
+      String classType,
+      boolean groupTraining) {
+    this(requestId, schoolId, curriculumId, name, classType, groupTraining, null);
   }
 }

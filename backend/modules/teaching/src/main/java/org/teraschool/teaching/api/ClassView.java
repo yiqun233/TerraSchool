@@ -13,4 +13,5 @@ public record ClassView(
     String status,
     boolean groupTraining,
     int memberCount,
-    long version) {}
+    long version,
+    Integer capacity) {}

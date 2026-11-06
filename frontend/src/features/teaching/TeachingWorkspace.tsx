@@ -540,7 +540,7 @@ export function TeachingWorkspace({
         setError(
           response.status === 403
             ? "加入班级失败：需要教务维护权限；同时请确认报名读取权限和审批要求。"
-            : "加入班级失败：请确认报名仍有效、班级可维护且符合当前业务规则。",
+            : "加入班级失败：请确认报名仍有效、课程匹配、班级有可用名额且符合审批规则。",
         );
         return;
       }
@@ -1110,6 +1110,12 @@ export function TeachingWorkspace({
             { title: "班级", dataIndex: "name" },
             { title: "课程", dataIndex: "curriculumName" },
             {
+              title: "名额上限",
+              dataIndex: "capacity",
+              render: (capacity: number | undefined) =>
+                capacity == null ? "不限" : capacity,
+            },
+            {
               title: "类型",
               dataIndex: "groupTraining",
               render: (groupTraining: boolean) =>
@@ -1413,12 +1419,12 @@ export function TeachingWorkspace({
             .filter((item) => item.status === "ACTIVE")
             .map((item) => ({
               value: item.id!,
-              label: `${item.name} · ${item.curriculumName}`,
+              label: `${item.name} · ${item.curriculumName} · ${item.memberCount ?? 0}/${item.capacity ?? "不限"}${item.capacity != null && (item.memberCount ?? 0) >= item.capacity ? "（已满）" : ""}`,
             }))}
           style={{ width: "100%" }}
         />
         <Typography.Text type="secondary">
-          服务端会校验报名课程与班级课程匹配；同课程多班并行、名额和插班细则待确认。
+          服务端会校验报名课程与班级课程匹配和名额；容量未设置视为不限，满班不能新增，暂不支持候补。
         </Typography.Text>
         <Space style={{ marginTop: 12 }}>
           <Button
@@ -2185,6 +2191,7 @@ export function ClassCreator({
           name: values.name,
           classType: values.classType ?? "NORMAL",
           groupTraining: values.groupTraining ?? false,
+          capacity: values.capacity ?? null,
         },
       });
       if (!response.ok) {
@@ -2245,6 +2252,25 @@ export function ClassCreator({
               { value: "NORMAL", label: "普通班" },
             ]}
           />
+        </Form.Item>
+        <Form.Item
+          label="名额上限"
+          name="capacity"
+          extra="留空表示不限；已满班级拒绝新增学员，当前不提供候补。"
+          rules={[
+            {
+              validator: async (_, value?: number) => {
+                if (
+                  value == null ||
+                  (Number.isInteger(value) && value >= 0 && value <= 100000)
+                )
+                  return;
+                throw new Error("名额上限须为 0–100000 的整数");
+              },
+            },
+          ]}
+        >
+          <InputNumber min={0} max={100000} precision={0} disabled={busy} />
         </Form.Item>
         <Form.Item
           label="课程"

@@ -644,6 +644,22 @@ class TeachingAndConsumptionTest {
                             new CreateClass(UUID.randomUUID(), SCHOOL, OTHER_CURRICULUM, "跨校班"))))
         .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
     assertThat(countAudit("audit.teaching_event", first.id())).isEqualTo(1);
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    TEACHER,
+                    () ->
+                        commands.createClass(
+                            new CreateClass(
+                                input.requestId(),
+                                SCHOOL,
+                                CURRICULUM,
+                                input.name(),
+                                "NORMAL",
+                                false,
+                                1))))
+        .isInstanceOf(TeachingConflict.class)
+        .hasMessage("IDEMPOTENCY_MISMATCH");
   }
 
   @Test
@@ -690,6 +706,69 @@ class TeachingAndConsumptionTest {
             asActor(TEACHER, () -> commands.addMember(other.id(), new AddClassMember(enrollment)))
                 .memberCount())
         .isEqualTo(1);
+  }
+
+  @Test
+  void classCapacityBlocksNewMembersButKeepsExistingMembershipRetryIdempotent() {
+    var limited =
+        asActor(
+            TEACHER,
+            () ->
+                commands.createClass(
+                    new CreateClass(
+                        UUID.randomUUID(), SCHOOL, CURRICULUM, "限额班", "NORMAL", false, 1)));
+    assertThat(limited.capacity()).isEqualTo(1);
+    var first = activeEnrollment();
+    assertThat(
+            asActor(TEACHER, () -> commands.addMember(limited.id(), new AddClassMember(first)))
+                .memberCount())
+        .isEqualTo(1);
+    // 已在班的相同请求即使班级已满仍返回原事实。
+    assertThat(
+            asActor(TEACHER, () -> commands.addMember(limited.id(), new AddClassMember(first)))
+                .memberCount())
+        .isEqualTo(1);
+    var second = activeEnrollment();
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    TEACHER, () -> commands.addMember(limited.id(), new AddClassMember(second))))
+        .isInstanceOf(TeachingConflict.class)
+        .hasMessage("CLASS_CAPACITY_REACHED");
+    assertThat(asActor(TEACHER, () -> queries.members(limited.id())))
+        .extracting(ClassMemberView::enrollmentId)
+        .containsExactly(first);
+  }
+
+  @Test
+  void multiClassCapacityFailureRollsBackEarlierClassInsertions() {
+    var available =
+        asActor(
+            TEACHER,
+            () ->
+                commands.createClass(
+                    new CreateClass(
+                        UUID.randomUUID(), SCHOOL, CURRICULUM, "批次可用班", "NORMAL", false, 1)));
+    var full =
+        asActor(
+            TEACHER,
+            () ->
+                commands.createClass(
+                    new CreateClass(
+                        UUID.randomUUID(), SCHOOL, CURRICULUM, "批次满额班", "NORMAL", false, 0)));
+    var targetStudent = activeEnrollment();
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    TEACHER,
+                    () ->
+                        commands.addMembers(
+                            new AddClassMembers(
+                                targetStudent, List.of(available.id(), full.id())))))
+        .isInstanceOf(TeachingConflict.class)
+        .hasMessage("CLASS_CAPACITY_REACHED");
+    assertThat(asActor(TEACHER, () -> queries.members(available.id()))).isEmpty();
+    assertThat(asActor(TEACHER, () -> queries.members(full.id()))).isEmpty();
   }
 
   @Test

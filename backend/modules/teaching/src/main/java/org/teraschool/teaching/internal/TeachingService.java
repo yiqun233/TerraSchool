@@ -581,7 +581,7 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
         () -> {
           var schoolName = schools.require(schoolId).name();
           return sql.fetch(
-                  "select c.id,c.school_id,c.curriculum_id,c.name,c.status,c.version,c.group_training,"
+                  "select c.id,c.school_id,c.curriculum_id,c.name,c.status,c.version,c.group_training,c.capacity,"
                       + "cur.name as curriculum_name,"
                       + "(select count(*) from teaching.enrollment_class m where m.class_id=c.id and m.active)"
                       + " as member_count from teaching.class c"
@@ -832,6 +832,9 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
       throw new IllegalArgumentException("需要请求身份和学校");
     var name = text(command.name(), 100, "班级名称");
     if (name == null) throw new IllegalArgumentException("班级名称必填");
+    var capacity = command.capacity();
+    if (capacity != null && (capacity < 0 || capacity > 100000))
+      throw new IllegalArgumentException("班级名额上限须为 0–100000");
     var scope = actors.requireResourceScope("TEACHING");
     requireMaintainable(scope, command.schoolId());
     var fingerprint =
@@ -840,7 +843,8 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
             name,
             String.valueOf(command.curriculumId()),
             classType(command.classType()),
-            Boolean.toString(command.groupTraining()));
+            Boolean.toString(command.groupTraining()),
+            Objects.toString(capacity, ""));
     return tx.execute(
         scope.tenantId(),
         () -> {
@@ -858,15 +862,16 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
           var id = UUID.randomUUID();
           try {
             sql.execute(
-                "insert into teaching.class(id,tenant_id,school_id,curriculum_id,name,class_type,group_training)"
-                    + " values (?,?,?,?,?,?,?)",
+                "insert into teaching.class(id,tenant_id,school_id,curriculum_id,name,class_type,group_training,capacity)"
+                    + " values (?,?,?,?,?,?,?,?)",
                 id,
                 scope.tenantId(),
                 command.schoolId(),
                 command.curriculumId(),
                 name,
                 classType(command.classType()),
-                command.groupTraining());
+                command.groupTraining(),
+                capacity);
           } catch (RuntimeException error) {
             if (uniqueViolation(error)) throw new TeachingConflict("DUPLICATE_CLASS_NAME");
             throw error;
@@ -956,6 +961,10 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
                         classId)
                     != null;
             if (!alreadyMember) {
+              var capacity = target.get("capacity", Integer.class);
+              var memberCount = target.get("member_count", Integer.class);
+              if (capacity != null && memberCount >= capacity)
+                throw new TeachingConflict("CLASS_CAPACITY_REACHED");
               sql.execute(
                   "insert into teaching.enrollment_class(tenant_id,enrollment_id,class_id,joined_on)"
                       + " values (?,?,?,CURRENT_DATE)",
@@ -1044,6 +1053,10 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
                     enrollmentId,
                     command.toClassId());
             if (targetMembership != null) throw new TeachingConflict("TARGET_CLASS_ALREADY_ACTIVE");
+            var targetCapacity = target.get("capacity", Integer.class);
+            var targetMembers = target.get("member_count", Integer.class);
+            if (targetCapacity != null && targetMembers >= targetCapacity)
+              throw new TeachingConflict("CLASS_CAPACITY_REACHED");
 
             approvals.consume(
                 "ENROLLMENT_TRANSFER",
@@ -2021,7 +2034,7 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
   private Record requireClass(ResourceScope scope, UUID id) {
     var row =
         sql.fetchOne(
-            "select c.id,c.school_id,c.curriculum_id,c.name,c.status,c.version,c.group_training,c.class_type,"
+            "select c.id,c.school_id,c.curriculum_id,c.name,c.status,c.version,c.group_training,c.class_type,c.capacity,"
                 + "cur.name as curriculum_name,"
                 + "(select count(*) from teaching.enrollment_class m where m.class_id=c.id and m.active)"
                 + " as member_count from teaching.class c"
@@ -2075,7 +2088,8 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
         row.get("status", String.class),
         row.get("group_training", Boolean.class),
         row.get("member_count", Integer.class),
-        row.get("version", Long.class));
+        row.get("version", Long.class),
+        row.get("capacity", Integer.class));
   }
 
   /** 课次的教师/教室：给了实体就校验并取名称快照，否则退回自由文本。 */

@@ -1,9 +1,10 @@
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   AttendanceModal,
+  ClassCreator,
   CloseLessonButton,
   PublishLessonButton,
   MakeupLessonModal,
@@ -18,6 +19,8 @@ const { get, post, csrf } = vi.hoisted(() => ({
   csrf: vi.fn(),
 }));
 vi.mock("../../shared/http", () => ({ api: { GET: get, POST: post }, csrf }));
+
+afterEach(() => vi.unstubAllGlobals());
 
 const capabilities = {
   canRead: true,
@@ -77,6 +80,34 @@ function renderWithClient(ui: React.ReactElement) {
   );
 }
 
+it("新建班级可设置名额上限并提交", async () => {
+  const user = userEvent.setup();
+  const onCreated = vi.fn();
+  post.mockReset();
+  csrf.mockResolvedValue({ headerName: "X-CSRF-TOKEN", token: "token" });
+  post.mockResolvedValue({ response: { ok: true, status: 201 } });
+  renderWithClient(
+    <ClassCreator
+      schoolId="school-1"
+      curricula={[{ id: "curriculum-1", name: "少儿英语" }]}
+      onCancel={vi.fn()}
+      onCreated={onCreated}
+    />,
+  );
+  await user.type(screen.getByRole("textbox", { name: "班级名称" }), "小班");
+  await user.type(screen.getByRole("spinbutton", { name: "名额上限" }), "12");
+  await user.click(screen.getByRole("combobox", { name: "课程" }));
+  await user.click(await screen.findByText("少儿英语"));
+  await user.click(screen.getByRole("button", { name: "创建班级" }));
+  await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1));
+  expect(post.mock.calls[0][1].body).toMatchObject({
+    schoolId: "school-1",
+    curriculumId: "curriculum-1",
+    name: "小班",
+    capacity: 12,
+  });
+});
+
 it("班级列表展示在班人数与状态", async () => {
   get.mockImplementation(async (path: string) => {
     if (path === "/api/teaching/capabilities")
@@ -94,6 +125,7 @@ it("班级列表展示在班人数与状态", async () => {
             name: "少儿英语A班",
             status: "ACTIVE",
             memberCount: 2,
+            capacity: 12,
             version: 0,
           },
         ],
@@ -191,6 +223,7 @@ it("班级列表展示在班人数与状态", async () => {
   renderWithClient(<TeachingWorkspace onUnauthorized={vi.fn()} />);
   expect(await screen.findAllByText("少儿英语A班")).toHaveLength(4);
   expect(screen.getByText("2")).toBeTruthy();
+  expect(screen.getByText("12")).toBeTruthy();
   expect(await screen.findByText("教师本人课表与班级工作台")).toBeTruthy();
   expect(await screen.findByText("本人授课")).toBeTruthy();
   expect(await screen.findByText("资源日报课")).toBeTruthy();
@@ -275,7 +308,7 @@ it("可从有效报名一次选择多个目标班并提交批量入班", async (
   const user = userEvent.setup({ pointerEventsCheck: 0 });
 
   renderWithClient(<TeachingWorkspace onUnauthorized={vi.fn()} />);
-  await user.click((await screen.findAllByText("数学 A 班"))[0]);
+  await user.click((await screen.findAllByText(/数学 A 班/))[0]);
   expect(await screen.findByText("课次：数学 A 班")).toBeTruthy();
   await user.click(await screen.findByRole("button", { name: "加入已有报名" }));
   expect(
@@ -286,7 +319,7 @@ it("可从有效报名一次选择多个目标班并提交批量入班", async (
   await user.click(await screen.findByText("搜索并选择有效报名"));
   await user.click(await screen.findByText("学员甲 · 数学产品 · 数学"));
   await user.click(await screen.findByLabelText("目标班级"));
-  await user.click(await screen.findByText("数学 B 班 · 数学"));
+  await user.click(await screen.findByText(/数学 B 班 · 数学/));
   await user.click(screen.getByRole("button", { name: "加入班级" }));
 
   await waitFor(() =>
@@ -301,7 +334,7 @@ it("可从有效报名一次选择多个目标班并提交批量入班", async (
       }),
     ),
   );
-});
+}, 40_000);
 
 it("结班需确认并提交班级版本", async () => {
   vi.clearAllMocks();

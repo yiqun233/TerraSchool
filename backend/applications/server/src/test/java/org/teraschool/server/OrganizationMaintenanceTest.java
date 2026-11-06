@@ -394,6 +394,8 @@ class OrganizationMaintenanceTest {
       assertThat(schema.path("OrganizationUnit").path("properties").has(field)).isTrue();
       assertThat(schema.path("RenameOrganizationUnit").path("properties").has(field)).isTrue();
     }
+    assertThat(schema.path("CreateClass").path("properties").has("capacity")).isTrue();
+    assertThat(schema.path("ClassView").path("properties").has("capacity")).isTrue();
     token = json.readTree(get(c, "/api/session/csrf").body()).get("token").asText();
     var body = json.writeValueAsString(command());
     assertThat(post(c, "/api/organization/units", body, null).statusCode()).isEqualTo(403);
