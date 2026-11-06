@@ -12,9 +12,9 @@ it("预览卡片展示可排与跳过数量，并把原因码翻译成中文", (
     <SchedulePreviewCard
       preview={{
         classId: "class-1",
-        total: 5,
+        total: 6,
         available: 2,
-        skipped: 3,
+        skipped: 4,
         teacherName: "教师甲",
         roomName: "教室乙",
         slots: [
@@ -52,15 +52,24 @@ it("预览卡片展示可排与跳过数量，并把原因码翻译成中文", (
             reason: "NO_FEASIBLE_RESOURCE_PAIR",
             severity: "HARD",
           },
+          {
+            lessonDate: "2026-06-06",
+            startsAt: "09:00",
+            endsAt: "10:00",
+            available: false,
+            reason: "ROOM_CAPACITY_INSUFFICIENT",
+            severity: "HARD",
+          },
         ],
       }}
     />,
   );
   expect(screen.getByText(/可排\s*2/)).toBeTruthy();
-  expect(screen.getByText(/跳过\s*3/)).toBeTruthy();
+  expect(screen.getByText(/跳过\s*4/)).toBeTruthy();
   expect(screen.getByText("教师已有课")).toBeTruthy();
   expect(screen.getByText("该时段已存在课次")).toBeTruthy();
   expect(screen.getByText("所选日期范围内无可行的教师与教室组合")).toBeTruthy();
+  expect(screen.getByText("所选教室容量不足以容纳当前班级学员")).toBeTruthy();
   expect(screen.getByText("2026-05-02")).toBeTruthy();
   expect(screen.getByText("教师：教师甲；教室：教室乙")).toBeTruthy();
 });

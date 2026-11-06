@@ -666,6 +666,18 @@ public class SchedulingService implements org.teraschool.teaching.api.Scheduling
       List<Reservation> reservations) {
     var fixedTeacher = resource(rule.teacherId(), "TEACHER", schoolId, rule.teacherName());
     var fixedRoom = resource(rule.roomId(), "ROOM", schoolId, rule.roomName());
+    var memberCount =
+        sql.fetchOne(
+                "select count(*) as total from teaching.enrollment_class where class_id=? and active",
+                classId)
+            .get("total", Long.class);
+    if (fixedRoom.id() != null) {
+      var capacity =
+          sql.fetchOne("select capacity from organization.room where id=?", fixedRoom.id())
+              .get("capacity", Integer.class);
+      if (capacity != null && capacity < memberCount)
+        return new ResourceAssignment(fixedTeacher, fixedRoom, "ROOM_CAPACITY_INSUFFICIENT");
+    }
     if (!rule.autoAssignResources()) return new ResourceAssignment(fixedTeacher, fixedRoom, null);
 
     var teachers =
@@ -680,11 +692,6 @@ public class SchedulingService implements org.teraschool.teaching.api.Scheduling
     if (teachers.isEmpty())
       return new ResourceAssignment(fixedTeacher, fixedRoom, "NO_TEACHER_CANDIDATE");
 
-    var memberCount =
-        sql.fetchOne(
-                "select count(*) as total from teaching.enrollment_class where class_id=? and active",
-                classId)
-            .get("total", Long.class);
     var rooms =
         fixedRoom.id() != null || fixedRoom.name() != null
             ? List.of(fixedRoom)

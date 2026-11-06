@@ -41,6 +41,7 @@ const REASON_LABEL: Record<string, string> = {
   ROOM_CLASH: "教室已占用",
   NO_TEACHER_CANDIDATE: "学校内没有可用教师",
   NO_ROOM_CANDIDATE: "没有容量足够的可用教室",
+  ROOM_CAPACITY_INSUFFICIENT: "所选教室容量不足以容纳当前班级学员",
   NO_FEASIBLE_RESOURCE_PAIR: "所选日期范围内无可行的教师与教室组合",
 };
 

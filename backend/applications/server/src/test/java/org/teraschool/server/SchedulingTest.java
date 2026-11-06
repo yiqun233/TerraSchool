@@ -24,6 +24,8 @@ class SchedulingTest {
       OTHER_TENANT = UUID.randomUUID(),
       SCHOOL = UUID.randomUUID(),
       CURRICULUM = UUID.randomUUID(),
+      PRODUCT = UUID.randomUUID(),
+      PRICE = UUID.randomUUID(),
       OPS = UUID.randomUUID(),
       READER = UUID.randomUUID();
   static final String PASSWORD = UUID.randomUUID().toString();
@@ -58,6 +60,20 @@ class SchedulingTest {
         CURRICULUM,
         TENANT,
         SCHOOL);
+    update(
+        "insert into product.product(id,tenant_id,school_id,curriculum_id,name,settlement_mode)"
+            + " values (?,?,?,?,'排课产品',1)",
+        PRODUCT,
+        TENANT,
+        SCHOOL,
+        CURRICULUM);
+    update(
+        "insert into product.price_version(id,tenant_id,product_id,version_no,status,price,hours,"
+            + "service_fee,settlement_mode,effective_from)"
+            + " values (?,?,?,1,'PUBLISHED',1000.00,10.00,0,1,'2026-01-01')",
+        PRICE,
+        TENANT,
+        PRODUCT);
     var encoder =
         org.springframework.security.crypto.factory.PasswordEncoderFactories
             .createDelegatingPasswordEncoder();
@@ -107,6 +123,44 @@ class SchedulingTest {
                     new CreateClass(
                         UUID.randomUUID(), SCHOOL, CURRICULUM, "排课班" + UUID.randomUUID())));
     return view.id();
+  }
+
+  UUID activeEnrollment() {
+    var id = UUID.randomUUID();
+    var studentId = UUID.randomUUID();
+    try {
+      update(
+          "insert into archive.student(id,tenant_id,student_no,name,sex,school_id)"
+              + " values (?,?,?,'排课学员','UNKNOWN',?)",
+          studentId,
+          TENANT,
+          "SC" + id.toString().replace("-", "").substring(0, 8),
+          SCHOOL);
+      update(
+          "insert into enrollment.enrollment(id,tenant_id,school_id,student_id,product_id,"
+              + "price_version_id,curriculum_name,product_name,price,hours,service_fee,settlement_mode,status)"
+              + " values (?,?,?,?,?,?,'排课课程','排课产品',1000.00,10.00,0,1,'ACTIVE')",
+          id,
+          TENANT,
+          SCHOOL,
+          studentId,
+          PRODUCT,
+          PRICE);
+      update(
+          "insert into enrollment.charge(tenant_id,enrollment_id,kind,amount)"
+              + " values (?,?,'ORIGINAL',1000.00)",
+          TENANT,
+          id);
+      update(
+          "insert into enrollment.enrollment_course(tenant_id,enrollment_id,curriculum_id,hours,amount)"
+              + " values (?,?,?,10.00,1000.00)",
+          TENANT,
+          id,
+          CURRICULUM);
+    } catch (Exception error) {
+      throw new IllegalStateException(error);
+    }
+    return id;
   }
 
   /** 2026-05-02 是周六；再加 3 个周六。 */
@@ -182,6 +236,48 @@ class SchedulingTest {
                     teacherId,
                     roomId));
     assertThat(assigned.get("total", Long.class)).isEqualTo(4);
+  }
+
+  @Test
+  void fixedCatalogRoomCannotBeUsedWhenItsCapacityIsBelowCurrentClassSize() throws Exception {
+    var classId = newClass();
+    var enrollment = activeEnrollment();
+    asActor(OPS, () -> teaching.addMember(classId, new AddClassMember(enrollment)));
+    var teacherId = UUID.randomUUID();
+    var roomId = UUID.randomUUID();
+    update(
+        "insert into organization.teacher(id,tenant_id,school_id,name) values (?,?,?,'容量教师')",
+        teacherId,
+        TENANT,
+        SCHOOL);
+    update(
+        "insert into organization.room(id,tenant_id,school_id,name,capacity)"
+            + " values (?,?,?,'容量不足教室',0)",
+        roomId,
+        TENANT,
+        SCHOOL);
+    var base = rule(null, null);
+    var fixed =
+        new ScheduleRule(
+            base.startDate(),
+            base.endDate(),
+            base.weekdays(),
+            base.startsAt(),
+            base.endsAt(),
+            base.hours(),
+            null,
+            null,
+            base.topic(),
+            teacherId,
+            roomId);
+
+    var preview = asActor(OPS, () -> scheduling.preview(classId, fixed));
+    assertThat(preview.available()).isZero();
+    assertThat(preview.slots())
+        .allSatisfy(slot -> assertThat(slot.reason()).isEqualTo("ROOM_CAPACITY_INSUFFICIENT"));
+    var result = asActor(OPS, () -> scheduling.confirm(classId, fixed));
+    assertThat(result.created()).isZero();
+    assertThat(result.skipped()).isEqualTo(preview.total());
   }
 
   @Test
