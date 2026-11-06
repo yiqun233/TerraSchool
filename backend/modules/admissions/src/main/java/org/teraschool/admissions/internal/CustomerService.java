@@ -3,6 +3,7 @@ package org.teraschool.admissions.internal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.LocalTime;
 import java.util.*;
 import org.jooq.DSLContext;
 import org.jooq.Record;
@@ -93,6 +94,149 @@ class CustomerService implements CustomerQueries, CustomerCommands {
                               assignmentSchools.contains(id)))
                   .toList());
         });
+  }
+
+  @Override
+  public CustomerRecyclePolicy recyclePolicy(UUID schoolId) {
+    if (schoolId == null) throw new IllegalArgumentException("需要学校");
+    var scope = actors.requireResourceScope("CUSTOMER");
+    if (!scope.readableSchoolIds().contains(schoolId))
+      throw new AccessDeniedException("无该学校客户查看权限");
+    return tx.execute(
+        scope.tenantId(),
+        () -> {
+          schools.lockTenant(scope.tenantId());
+          var verified = actors.requireResourceScopeInTransaction("CUSTOMER");
+          if (!verified.readableSchoolIds().contains(schoolId))
+            throw new AccessDeniedException("无该学校客户查看权限");
+          return loadRecyclePolicy(schoolId);
+        });
+  }
+
+  @Override
+  public CustomerRecyclePolicy updateRecyclePolicy(
+      UUID schoolId, UpdateCustomerRecyclePolicy command) {
+    if (schoolId == null || command == null || command.requestId() == null)
+      throw new IllegalArgumentException("需要学校和请求身份");
+    if (command.expectedVersion() < 0) throw new IllegalArgumentException("策略版本无效");
+    if (command.inactivityDays() < 1 || command.inactivityDays() > 365)
+      throw new IllegalArgumentException("未跟进回收天数须在 1 到 365 天之间");
+    if (command.assignmentAgeDays() < 1 || command.assignmentAgeDays() > 365)
+      throw new IllegalArgumentException("负责人分派回收天数须在 1 到 365 天之间");
+    LocalTime cutoff;
+    try {
+      cutoff = LocalTime.parse(command.firstDayCutoff());
+    } catch (RuntimeException invalid) {
+      throw new IllegalArgumentException("首次未联系截止时间格式应为 HH:mm");
+    }
+    var reason = command.reason() == null ? null : command.reason().strip();
+    if (reason == null || reason.isEmpty() || reason.length() > 40)
+      throw new IllegalArgumentException("修改原因必填且不能超过 40 字");
+    var fingerprint =
+        fingerprint(
+            "RECYCLE_POLICY",
+            schoolId.toString(),
+            Long.toString(command.expectedVersion()),
+            Boolean.toString(command.enabled()),
+            Integer.toString(command.inactivityDays()),
+            Boolean.toString(command.assignmentAgeEnabled()),
+            Integer.toString(command.assignmentAgeDays()),
+            Boolean.toString(command.firstDayNoContactEnabled()),
+            cutoff.toString(),
+            reason);
+    var scope = actors.requireResourceScope("CUSTOMER");
+    if (!scope.maintainableSchoolIds().contains(schoolId))
+      throw new AccessDeniedException("无该学校客户维护权限");
+    return tx.execute(
+        scope.tenantId(),
+        () -> {
+          schools.lockTenant(scope.tenantId());
+          var verified = actors.requireResourceScopeInTransaction("CUSTOMER");
+          if (!verified.maintainableSchoolIds().contains(schoolId))
+            throw new AccessDeniedException("无该学校客户维护权限");
+          if (!schools.require(schoolId).active())
+            throw new AccessDeniedException("学校已停用，不能修改自动回收规则");
+          var previous =
+              sql.fetchOne(
+                  "select fingerprint from admissions.customer_recycle_policy_request"
+                      + " where tenant_id=? and actor_id=? and request_id=?",
+                  verified.tenantId(),
+                  verified.accountId(),
+                  command.requestId());
+          if (previous != null) {
+            if (!fingerprint.equals(previous.get("fingerprint", String.class)))
+              throw new CustomerConflict("IDEMPOTENCY_MISMATCH");
+            return loadRecyclePolicy(schoolId);
+          }
+          var current =
+              sql.fetchOne(
+                  "select version from admissions.customer_recycle_policy"
+                      + " where tenant_id=? and school_id=? for update",
+                  verified.tenantId(),
+                  schoolId);
+          long currentVersion = current == null ? 0 : current.get("version", Long.class);
+          if (currentVersion != command.expectedVersion())
+            throw new CustomerConflict("VERSION_CONFLICT");
+          sql.execute(
+              "insert into admissions.customer_recycle_policy(tenant_id,school_id,enabled,inactivity_days,"
+                  + "assignment_age_enabled,assignment_age_days,first_day_no_contact_enabled,first_day_cutoff,"
+                  + "version,updated_by,updated_at) values (?,?,?,?,?,?,?,?,1,?,CURRENT_TIMESTAMP)"
+                  + " on conflict (tenant_id,school_id) do update set enabled=excluded.enabled,"
+                  + "inactivity_days=excluded.inactivity_days,assignment_age_enabled=excluded.assignment_age_enabled,"
+                  + "assignment_age_days=excluded.assignment_age_days,"
+                  + "first_day_no_contact_enabled=excluded.first_day_no_contact_enabled,"
+                  + "first_day_cutoff=excluded.first_day_cutoff,version=admissions.customer_recycle_policy.version+1,"
+                  + "updated_by=excluded.updated_by,updated_at=CURRENT_TIMESTAMP",
+              verified.tenantId(),
+              schoolId,
+              command.enabled(),
+              command.inactivityDays(),
+              command.assignmentAgeEnabled(),
+              command.assignmentAgeDays(),
+              command.firstDayNoContactEnabled(),
+              cutoff,
+              verified.accountId());
+          var updated = loadRecyclePolicy(schoolId);
+          sql.execute(
+              "insert into admissions.customer_recycle_policy_request(tenant_id,actor_id,request_id,"
+                  + "school_id,policy_version,fingerprint) values (?,?,?,?,?,?)",
+              verified.tenantId(),
+              verified.accountId(),
+              command.requestId(),
+              schoolId,
+              updated.version(),
+              fingerprint);
+          sql.execute(
+              "insert into audit.customer_event(tenant_id,actor_id,school_id,customer_id,request_id,"
+                  + "action,duplicate_confirmed,detail,trace_id) values (?,?,?,null,?,'RECYCLE_POLICY_UPDATED',false,?,?)",
+              verified.tenantId(),
+              verified.accountId(),
+              schoolId,
+              command.requestId(),
+              "version=" + updated.version() + ";reason=" + reason,
+              RequestTrace.id());
+          return updated;
+        });
+  }
+
+  private CustomerRecyclePolicy loadRecyclePolicy(UUID schoolId) {
+    var row =
+        sql.fetchOne(
+            "select enabled,inactivity_days,assignment_age_enabled,assignment_age_days,"
+                + "first_day_no_contact_enabled,first_day_cutoff,version"
+                + " from admissions.customer_recycle_policy where school_id=?",
+            schoolId);
+    if (row == null)
+      return new CustomerRecyclePolicy(schoolId, false, 7, false, 15, false, "23:59", 0);
+    return new CustomerRecyclePolicy(
+        schoolId,
+        row.get("enabled", Boolean.class),
+        row.get("inactivity_days", Integer.class),
+        row.get("assignment_age_enabled", Boolean.class),
+        row.get("assignment_age_days", Integer.class),
+        row.get("first_day_no_contact_enabled", Boolean.class),
+        row.get("first_day_cutoff", LocalTime.class).toString(),
+        row.get("version", Long.class));
   }
 
   @Override

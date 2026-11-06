@@ -17,6 +17,8 @@ public interface CustomerCommands {
 
   record CustomerAssign(UUID requestId, long expectedVersion, UUID ownerAccountId, String reason) {}
 
+  CustomerRecyclePolicy updateRecyclePolicy(UUID schoolId, UpdateCustomerRecyclePolicy command);
+
   CustomerCreateResult create(CustomerCreate command);
 
   /** 对请求身份记取消标记，阻止在途或未来相同请求创建。 */

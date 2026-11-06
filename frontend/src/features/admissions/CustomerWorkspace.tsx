@@ -4,10 +4,13 @@ import {
   Alert,
   Button,
   Card,
+  Form,
   Input,
+  InputNumber,
   Modal,
   Select,
   Space,
+  Switch,
   Table,
   Typography,
 } from "antd";
@@ -19,6 +22,7 @@ type Customer = components["schemas"]["Customer"];
 type MergedCustomer = components["schemas"]["MergedCustomer"];
 type CustomerStudentLink = components["schemas"]["CustomerStudentLinkView"];
 type CustomerConversion = components["schemas"]["CustomerConversionResult"];
+type CustomerRecyclePolicy = components["schemas"]["CustomerRecyclePolicy"];
 type Pending = {
   requestId: string;
   schoolId: string;
@@ -110,6 +114,7 @@ export function CustomerWorkspace({
   const conversionGuard = useRef(false);
   const [mergePrimaryId, setMergePrimaryId] = useState<string>();
   const [mergeHistoryFor, setMergeHistoryFor] = useState<string | null>(null);
+  const [recyclePolicyOpen, setRecyclePolicyOpen] = useState(false);
   const guard = useRef(false);
   const schools = useQuery({
     queryKey: ["customer-schools"],
@@ -770,6 +775,14 @@ export function CustomerWorkspace({
           style={{ marginBottom: 12 }}
         />
       ) : null}
+      {currentSchool?.maintainable ? (
+        <Button
+          onClick={() => setRecyclePolicyOpen(true)}
+          style={{ marginBottom: 12 }}
+        >
+          自动回收规则
+        </Button>
+      ) : null}
       {pending ? (
         <Alert
           type="warning"
@@ -1158,6 +1171,17 @@ export function CustomerWorkspace({
           onUnauthorized={onUnauthorized}
         />
       ) : null}
+      {recyclePolicyOpen && currentSchool?.maintainable ? (
+        <CustomerRecyclePolicyEditor
+          schoolId={currentSchool.id!}
+          onClose={() => setRecyclePolicyOpen(false)}
+          onUnauthorized={onUnauthorized}
+          onUpdated={() => {
+            setRecyclePolicyOpen(false);
+            setNotice("自动回收规则已保存；未启用规则不会触发自动回收。");
+          }}
+        />
+      ) : null}
       <Modal
         title="转派客户负责人"
         open={!!assignmentTarget}
@@ -1361,5 +1385,174 @@ export function CustomerWorkspace({
         <Typography.Text>{phoneDetail}</Typography.Text>
       </Modal>
     </section>
+  );
+}
+
+function CustomerRecyclePolicyEditor({
+  schoolId,
+  onClose,
+  onUnauthorized,
+  onUpdated,
+}: {
+  schoolId: string;
+  onClose: () => void;
+  onUnauthorized: () => void;
+  onUpdated: () => void;
+}) {
+  const [form] = Form.useForm();
+  const client = useQueryClient();
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const pending = useRef<{ fingerprint: string; requestId: string } | null>(
+    null,
+  );
+  const policy = useQuery({
+    queryKey: ["customer-recycle-policy", schoolId],
+    queryFn: async ({ signal }): Promise<CustomerRecyclePolicy> => {
+      const { data, response } = await api.GET(
+        "/api/admissions/customers/recycle-policy",
+        { params: { query: { schoolId } }, signal },
+      );
+      if (response.status === 401) onUnauthorized();
+      if (!response.ok || !data) throw new Error("无法读取自动回收规则。");
+      return data;
+    },
+  });
+  async function save(values: {
+    enabled: boolean;
+    inactivityDays: number;
+    assignmentAgeEnabled: boolean;
+    assignmentAgeDays: number;
+    firstDayNoContactEnabled: boolean;
+    firstDayCutoff: string;
+    reason: string;
+  }) {
+    if (!policy.data || saving) return;
+    const fingerprintValue = JSON.stringify([
+      schoolId,
+      policy.data.version,
+      values,
+    ]);
+    if (pending.current?.fingerprint !== fingerprintValue)
+      pending.current = {
+        fingerprint: fingerprintValue,
+        requestId: crypto.randomUUID(),
+      };
+    setSaving(true);
+    setError("");
+    try {
+      const headers = await csrf();
+      const { data, response } = await api.PUT(
+        "/api/admissions/customers/recycle-policy",
+        {
+          params: { query: { schoolId } },
+          headers,
+          body: {
+            requestId: pending.current.requestId,
+            expectedVersion: policy.data.version,
+            ...values,
+          },
+        },
+      );
+      if (response.status === 401) {
+        onUnauthorized();
+        throw new Error("登录已失效，请重新登录。");
+      }
+      if (response.status === 409)
+        throw new Error("规则已被其他人修改，请关闭后重新打开并核对。");
+      if (!response.ok || !data)
+        throw new Error("保存未确认，可重试相同内容。");
+      pending.current = null;
+      await client.invalidateQueries({
+        queryKey: ["customer-recycle-policy", schoolId],
+      });
+      onUpdated();
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "保存未确认，可重试相同内容。",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+  return (
+    <Modal
+      title="自动回收规则"
+      open
+      onCancel={onClose}
+      footer={null}
+      destroyOnHidden
+    >
+      {policy.error ? (
+        <Alert type="error" title={policy.error.message} showIcon />
+      ) : null}
+      {error ? <Alert type="error" title={error} showIcon /> : null}
+      {policy.data ? (
+        <Form
+          form={form}
+          layout="vertical"
+          initialValues={policy.data}
+          onFinish={(values) => void save(values)}
+        >
+          <Form.Item
+            name="enabled"
+            label="启用自动回收"
+            valuePropName="checked"
+          >
+            <Switch />
+          </Form.Item>
+          <Form.Item
+            name="inactivityDays"
+            label="未跟进回收天数"
+            rules={[{ required: true }]}
+          >
+            <InputNumber min={1} max={365} />
+          </Form.Item>
+          <Form.Item
+            name="assignmentAgeEnabled"
+            label="启用负责人分派时限"
+            valuePropName="checked"
+          >
+            <Switch />
+          </Form.Item>
+          <Form.Item
+            name="assignmentAgeDays"
+            label="负责人分派回收天数"
+            rules={[{ required: true }]}
+          >
+            <InputNumber min={1} max={365} />
+          </Form.Item>
+          <Form.Item
+            name="firstDayNoContactEnabled"
+            label="启用首日未联系回收"
+            valuePropName="checked"
+          >
+            <Switch />
+          </Form.Item>
+          <Form.Item
+            name="firstDayCutoff"
+            label="首日未联系截止时间"
+            rules={[{ required: true }]}
+          >
+            <Input type="time" />
+          </Form.Item>
+          <Form.Item
+            name="reason"
+            label="修改原因"
+            rules={[{ required: true, max: 40 }]}
+          >
+            <Input maxLength={40} />
+          </Form.Item>
+          <Space>
+            <Button onClick={onClose}>取消</Button>
+            <Button type="primary" htmlType="submit" loading={saving}>
+              保存规则
+            </Button>
+          </Space>
+        </Form>
+      ) : null}
+    </Modal>
   );
 }

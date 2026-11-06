@@ -23,6 +23,8 @@ public interface CustomerQueries {
 
   CustomerCapabilities capabilities();
 
+  CustomerRecyclePolicy recyclePolicy(UUID schoolId);
+
   CustomerPage list(UUID schoolId, int page, int size);
 
   CustomerPage pool(UUID schoolId, int page, int size);

@@ -1,15 +1,19 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { CustomerWorkspace } from "./CustomerWorkspace";
 
-const { get, post, csrf } = vi.hoisted(() => ({
+const { get, post, put, csrf } = vi.hoisted(() => ({
   get: vi.fn(),
   post: vi.fn(),
+  put: vi.fn(),
   csrf: vi.fn(),
 }));
-vi.mock("../../shared/http", () => ({ api: { GET: get, POST: post }, csrf }));
+vi.mock("../../shared/http", () => ({
+  api: { GET: get, POST: post, PUT: put },
+  csrf,
+}));
 const response = (data: unknown, status = 200) => ({
   response: { ok: status < 400, status },
   data,
@@ -61,7 +65,50 @@ beforeEach(() => {
     });
   });
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
+
+it("仅学校维护人员可打开并保存版本化自动回收规则", async () => {
+  const user = userEvent.setup();
+  const saved = {
+    schoolId: "s1",
+    enabled: true,
+    inactivityDays: 7,
+    assignmentAgeEnabled: false,
+    assignmentAgeDays: 15,
+    firstDayNoContactEnabled: false,
+    firstDayCutoff: "23:59",
+    version: 1,
+  };
+  get.mockImplementation(async (path: string) => {
+    if (path.endsWith("/capabilities"))
+      return response({
+        schools: [{ id: "s1", name: "学校一", maintainable: true }],
+      });
+    if (path.endsWith("/recycle-policy"))
+      return response({ ...saved, enabled: false, version: 0 });
+    return response({ items: [], hasMore: false });
+  });
+  put.mockResolvedValue(response(saved));
+  setup();
+  await user.click(await screen.findByRole("button", { name: "自动回收规则" }));
+  expect(await screen.findByRole("dialog")).toBeTruthy();
+  await user.type(screen.getByLabelText("修改原因"), "负责人确认初版规则");
+  await user.click(screen.getByRole("switch", { name: "启用自动回收" }));
+  await user.click(screen.getByRole("button", { name: "保存规则" }));
+  await waitFor(() => expect(put).toHaveBeenCalledTimes(1));
+  expect(put.mock.calls[0]?.[0]).toBe(
+    "/api/admissions/customers/recycle-policy",
+  );
+  expect(put.mock.calls[0]?.[1].body).toMatchObject({
+    expectedVersion: 0,
+    enabled: true,
+    reason: "负责人确认初版规则",
+  });
+  expect(await screen.findByText(/规则已保存/)).toBeTruthy();
+});
 
 it("只在完整电话授权范围显示本人待回访提醒", async () => {
   get.mockImplementation(async (path: string) => {

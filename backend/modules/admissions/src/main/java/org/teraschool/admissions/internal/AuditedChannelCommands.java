@@ -65,6 +65,15 @@ class AuditedChannelCommands
   }
 
   @Override
+  public CustomerRecyclePolicy updateRecyclePolicy(
+      UUID schoolId, UpdateCustomerRecyclePolicy command) {
+    return invoke(
+        FailureAudit.Action.CUSTOMER_RECYCLE_POLICY_UPDATE,
+        schoolId,
+        () -> customers.updateRecyclePolicy(schoolId, command));
+  }
+
+  @Override
   public CustomerPhone revealPhone(UUID id) {
     return invoke(FailureAudit.Action.CUSTOMER_PHONE_VIEW, id, () -> customers.revealPhone(id));
   }

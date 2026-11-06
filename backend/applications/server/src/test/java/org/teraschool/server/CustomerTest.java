@@ -955,6 +955,22 @@ class CustomerTest {
 
   @Test
   void automaticRecycleReturnsOnlyStaleUnconvertedCustomersAndAuditsSystemActor() throws Exception {
+    var policy = as(A, () -> queries.recyclePolicy(SCHOOL));
+    as(
+        A,
+        () ->
+            commands.updateRecyclePolicy(
+                SCHOOL,
+                new UpdateCustomerRecyclePolicy(
+                    UUID.randomUUID(),
+                    policy.version(),
+                    true,
+                    7,
+                    false,
+                    15,
+                    false,
+                    "23:59",
+                    "自动回收集成用例")));
     var stale = created(A, input("超期未跟进客户", "13900001772"));
     var fresh = created(A, input("新分配客户", "13900001773"));
     update(
@@ -988,6 +1004,47 @@ class CustomerTest {
                 stale.id()))
         .isEqualTo("SYSTEM:INACTIVITY");
     assertThat(autoRecycle.sweepTenant(TENANT)).isZero();
+  }
+
+  @Test
+  void recyclePolicyIsSchoolScopedVersionedIdempotentAndOffByDefault() throws Exception {
+    var initial = as(A, () -> queries.recyclePolicy(OTHER));
+    assertThat(initial.enabled()).isFalse();
+    assertThat(initial.version()).isZero();
+    var requestId = UUID.randomUUID();
+    var command =
+        new UpdateCustomerRecyclePolicy(
+            requestId, 0, true, 9, true, 20, false, "20:30", "确认回收规则初版");
+    var updated = as(A, () -> commands.updateRecyclePolicy(OTHER, command));
+    assertThat(updated.version()).isEqualTo(1);
+    assertThat(as(A, () -> commands.updateRecyclePolicy(OTHER, command))).isEqualTo(updated);
+    assertThatThrownBy(
+            () ->
+                as(
+                    A,
+                    () ->
+                        commands.updateRecyclePolicy(
+                            OTHER,
+                            new UpdateCustomerRecyclePolicy(
+                                requestId, 0, false, 9, true, 20, false, "20:30", "修改同请求"))))
+        .isInstanceOf(CustomerConflict.class)
+        .hasMessage("IDEMPOTENCY_MISMATCH");
+    assertThatThrownBy(
+            () ->
+                as(
+                    B,
+                    () ->
+                        commands.updateRecyclePolicy(
+                            OTHER,
+                            new UpdateCustomerRecyclePolicy(
+                                UUID.randomUUID(), 0, false, 7, false, 15, false, "23:59", "无权限"))))
+        .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
+    assertThat(
+            count(
+                "select count(*) from audit.customer_event where tenant_id=? and school_id=? and action='RECYCLE_POLICY_UPDATED'",
+                TENANT,
+                OTHER))
+        .isEqualTo(1);
   }
 
   private long count(String query, Object... args) throws Exception {

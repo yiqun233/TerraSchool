@@ -27,12 +27,9 @@ class CustomerAutoRecycleJob {
   private final JdbcTemplate identity;
   private final DSLContext sql;
   private final TenantTransactions tx;
+
+  /** Global operational kill switch; actual rules and enablement are school-scoped in the DB. */
   private final boolean enabled;
-  private final int inactiveDays;
-  private final boolean assignmentAgeEnabled;
-  private final int assignmentAgeDays;
-  private final boolean firstDayNoContactEnabled;
-  private final LocalTime firstDayCutoff;
 
   CustomerAutoRecycleJob(
       @Qualifier("identityDataSource") DataSource identityDataSource,
@@ -43,29 +40,11 @@ class CustomerAutoRecycleJob {
     this.sql = sql;
     this.tx = tx;
     enabled =
-        environment.getProperty("teraschool.admissions.auto-recycle.enabled", Boolean.class, false);
-    inactiveDays = boundedDays(environment, "inactive-days", 7);
-    assignmentAgeEnabled =
         environment.getProperty(
-            "teraschool.admissions.auto-recycle.assignment-age-enabled", Boolean.class, false);
-    assignmentAgeDays = boundedDays(environment, "assignment-age-days", 15);
-    firstDayNoContactEnabled =
-        environment.getProperty(
-            "teraschool.admissions.auto-recycle.first-day-no-contact-enabled",
+            "teraschool.admissions.auto-recycle.scheduler-enabled",
             Boolean.class,
-            false);
-    firstDayCutoff =
-        LocalTime.parse(
             environment.getProperty(
-                "teraschool.admissions.auto-recycle.first-day-cutoff", "23:59"));
-  }
-
-  private int boundedDays(Environment environment, String name, int fallback) {
-    int days =
-        environment.getProperty(
-            "teraschool.admissions.auto-recycle." + name, Integer.class, fallback);
-    if (days < 1 || days > 365) throw new IllegalArgumentException(name + " 必须在 1 到 365 天之间");
-    return days;
+                "teraschool.admissions.auto-recycle.enabled", Boolean.class, true));
   }
 
   void scheduledSweep() {
@@ -98,19 +77,32 @@ class CustomerAutoRecycleJob {
   private int recycleTenantSchools(UUID tenantId) {
     var schools =
         sql.fetch(
-                "select id from organization.unit where tenant_id=? and kind='SCHOOL' and active order by id",
+                "select s.id,p.inactivity_days,p.assignment_age_enabled,p.assignment_age_days,"
+                    + "p.first_day_no_contact_enabled,p.first_day_cutoff"
+                    + " from organization.unit s join admissions.customer_recycle_policy p"
+                    + " on p.tenant_id=s.tenant_id and p.school_id=s.id"
+                    + " where s.tenant_id=? and s.kind='SCHOOL' and s.active and p.enabled order by s.id",
                 tenantId)
-            .map(row -> row.get("id", UUID.class));
+            .map(
+                row ->
+                    new RecyclePolicy(
+                        row.get("id", UUID.class),
+                        row.get("inactivity_days", Integer.class),
+                        row.get("assignment_age_enabled", Boolean.class),
+                        row.get("assignment_age_days", Integer.class),
+                        row.get("first_day_no_contact_enabled", Boolean.class),
+                        row.get("first_day_cutoff", LocalTime.class)));
     int total = 0;
-    for (UUID schoolId : schools) total += recycleSchool(tenantId, schoolId);
+    for (var policy : schools) total += recycleSchool(tenantId, policy);
     return total;
   }
 
-  private int recycleSchool(UUID tenantId, UUID schoolId) {
+  private int recycleSchool(UUID tenantId, RecyclePolicy policy) {
+    var schoolId = policy.schoolId();
+    var inactiveDays = policy.inactivityDays();
     var now = java.time.OffsetDateTime.now(BUSINESS_ZONE);
     var today = LocalDate.now(BUSINESS_ZONE);
     var inactivityBoundary = today.minusDays(inactiveDays);
-    var assignmentBoundary = today.minusDays(assignmentAgeDays);
     var rows =
         sql.fetch(
             "select c.id,c.version,case "
@@ -131,19 +123,20 @@ class CustomerAutoRecycleJob {
             true,
             now.minusDays(inactiveDays),
             inactivityBoundary,
-            assignmentAgeEnabled,
-            now.minusDays(assignmentAgeDays),
+            policy.assignmentAgeEnabled(),
+            now.minusDays(policy.assignmentAgeDays()),
             tenantId,
             schoolId,
             now.minusDays(inactiveDays),
             inactivityBoundary,
-            assignmentAgeEnabled,
-            now.minusDays(assignmentAgeDays),
-            firstDayNoContactEnabled,
+            policy.assignmentAgeEnabled(),
+            now.minusDays(policy.assignmentAgeDays()),
+            policy.firstDayNoContactEnabled(),
             today,
             today,
             today,
-            !now.toLocalTime().isBefore(firstDayCutoff));
+            !now.toLocalTime().isBefore(policy.firstDayCutoff()));
+    int recycled = 0;
     for (var row : rows) {
       var customerId = row.get("id", UUID.class);
       var version = row.get("version", Long.class);
@@ -163,7 +156,16 @@ class CustomerAutoRecycleJob {
           customerId,
           reason,
           RequestTrace.id());
+      recycled++;
     }
-    return rows.size();
+    return recycled;
   }
+
+  private record RecyclePolicy(
+      UUID schoolId,
+      int inactivityDays,
+      boolean assignmentAgeEnabled,
+      int assignmentAgeDays,
+      boolean firstDayNoContactEnabled,
+      LocalTime firstDayCutoff) {}
 }

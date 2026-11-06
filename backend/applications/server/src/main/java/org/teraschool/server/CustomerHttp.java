@@ -33,6 +33,17 @@ class CustomerHttp {
     return noStore(queries.capabilities());
   }
 
+  @GetMapping("/recycle-policy")
+  ResponseEntity<CustomerRecyclePolicy> recyclePolicy(@RequestParam UUID schoolId) {
+    return noStore(queries.recyclePolicy(schoolId));
+  }
+
+  @PutMapping(value = "/recycle-policy", consumes = "application/json")
+  ResponseEntity<CustomerRecyclePolicy> updateRecyclePolicy(
+      @RequestParam UUID schoolId, @RequestBody UpdateCustomerRecyclePolicy command) {
+    return noStore(commands.updateRecyclePolicy(schoolId, command));
+  }
+
   @GetMapping
   ResponseEntity<CustomerQueries.CustomerPage> list(
       @RequestParam UUID schoolId,

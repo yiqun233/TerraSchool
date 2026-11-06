@@ -19,6 +19,8 @@ class RejectedRequestAudit {
 
   void record(HttpServletRequest request, String code) {
     if (!request.getMethod().equals("POST")
+        && !(request.getMethod().equals("PUT")
+            && request.getServletPath().equals("/api/admissions/customers/recycle-policy"))
         && !(request.getMethod().equals("GET")
             && (request
                     .getServletPath()
@@ -77,6 +79,8 @@ class RejectedRequestAudit {
       action = FailureAudit.Action.CUSTOMER_CREATE;
     else if (path.equals("/api/admissions/customers/cancel"))
       action = FailureAudit.Action.CUSTOMER_CANCEL;
+    else if (path.equals("/api/admissions/customers/recycle-policy"))
+      action = FailureAudit.Action.CUSTOMER_RECYCLE_POLICY_UPDATE;
     else if (path.matches("/api/admissions/customers/[^/]+/release-to-pool")) {
       action = FailureAudit.Action.CUSTOMER_POOL_RELEASE;
       try {
