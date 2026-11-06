@@ -32,6 +32,11 @@ import {
   SwapLessonModal,
 } from "./TeachingDialogs";
 import { LESSON_STATUS, TeacherWorkbenchPanel } from "./TeachingPanels";
+import {
+  AttendanceReportPanel,
+  ResourceDailyPanel,
+  TeachingOverviewPanel,
+} from "./TeachingReportPanels";
 import type { components } from "../../shared/generated/api";
 import type {
   LessonView,
@@ -809,211 +814,34 @@ export function TeachingWorkspace({
           />
         )}
       </Card>
-      <Card title="资源日程日报" size="small" style={{ marginBottom: 12 }}>
-        <Space wrap style={{ marginBottom: 12 }}>
-          <Input
-            aria-label="资源日程日期"
-            type="date"
-            value={resourceDay}
-            onChange={(event) => {
-              setResourceDay(event.target.value);
-              setResourcePage(1);
-            }}
-            style={{ width: 170 }}
-          />
-          <Button
-            onClick={() => void resourceSchedule.refetch()}
-            loading={resourceSchedule.isFetching}
-          >
-            刷新资源日程
-          </Button>
-          <Typography.Text type="secondary">
-            未分配教师 {resourceSchedule.data?.missingTeacher ?? "—"}
-            ，未分配教室 {resourceSchedule.data?.missingRoom ?? "—"}
-          </Typography.Text>
-        </Space>
-        {resourceSchedule.error ? (
-          <Alert type="error" title={resourceSchedule.error.message} showIcon />
-        ) : null}
-        <Table
-          rowKey="lessonId"
-          size="small"
-          loading={resourceSchedule.isFetching}
-          dataSource={resourceSchedule.data?.lessons ?? []}
-          pagination={{
-            current: resourcePage,
-            pageSize: 100,
-            total: resourceSchedule.data?.total ?? 0,
-            onChange: setResourcePage,
-            showSizeChanger: false,
-          }}
-          columns={[
-            {
-              title: "时间",
-              render: (
-                _: unknown,
-                row: NonNullable<DailyResourceSchedule["lessons"]>[number],
-              ) => `${row.startsAt}–${row.endsAt}`,
-            },
-            { title: "班级", dataIndex: "className" },
-            {
-              title: "教师",
-              dataIndex: "teacherName",
-              render: (name: string | null) => name ?? "未分配",
-            },
-            {
-              title: "教室",
-              dataIndex: "roomName",
-              render: (name: string | null) => name ?? "未分配",
-            },
-            { title: "课题", dataIndex: "topic" },
-            {
-              title: "状态",
-              dataIndex: "status",
-              render: (status: string) => LESSON_STATUS[status] ?? status,
-            },
-          ]}
-          locale={{ emptyText: "该日没有已排课次" }}
-        />
-      </Card>
+      <ResourceDailyPanel
+        day={resourceDay}
+        onDayChange={(value) => {
+          setResourceDay(value);
+          setResourcePage(1);
+        }}
+        data={resourceSchedule.data}
+        error={resourceSchedule.error}
+        fetching={resourceSchedule.isFetching}
+        onRefresh={() => void resourceSchedule.refetch()}
+        page={resourcePage}
+        onPageChange={setResourcePage}
+      />
       {overviewOpen ? (
-        <Card
-          title="教务综合情况（候选口径）"
-          size="small"
-          style={{ marginBottom: 12 }}
-        >
-          <Space wrap style={{ marginBottom: 12 }}>
-            <Typography.Text type="secondary">
-              班级数为当前状态快照；课次与考勤按课次日期统计。候选数据待 Q62
-              确认。
-            </Typography.Text>
-          </Space>
-          {teachingOverview.error ? (
-            <Alert
-              type="error"
-              title={teachingOverview.error.message}
-              showIcon
-            />
-          ) : null}
-          {teachingOverview.data ? (
-            <>
-              <Descriptions
-                title="当前班级状态快照"
-                column={3}
-                size="small"
-                bordered
-              >
-                <Descriptions.Item label="活动班级">
-                  {teachingOverview.data.activeClasses}
-                </Descriptions.Item>
-                <Descriptions.Item label="已结班">
-                  {teachingOverview.data.closedClasses}
-                </Descriptions.Item>
-                <Descriptions.Item label="已取消">
-                  {teachingOverview.data.cancelledClasses}
-                </Descriptions.Item>
-              </Descriptions>
-              <Descriptions
-                title={`课次状态（${teachingOverview.data.from} 至 ${teachingOverview.data.to}）`}
-                column={5}
-                size="small"
-                bordered
-                style={{ marginTop: 12 }}
-              >
-                <Descriptions.Item label="课次总数">
-                  {teachingOverview.data.lessons}
-                </Descriptions.Item>
-                <Descriptions.Item label="草稿">
-                  {teachingOverview.data.draftLessons}
-                </Descriptions.Item>
-                <Descriptions.Item label="已发布">
-                  {teachingOverview.data.publishedLessons}
-                </Descriptions.Item>
-                <Descriptions.Item label="已确认">
-                  {teachingOverview.data.confirmedLessons}
-                </Descriptions.Item>
-                <Descriptions.Item label="已关闭">
-                  {teachingOverview.data.closedLessons}
-                </Descriptions.Item>
-              </Descriptions>
-              <Descriptions
-                title="已登记考勤状态"
-                column={5}
-                size="small"
-                bordered
-              >
-                <Descriptions.Item label="出勤">
-                  {teachingOverview.data.present}
-                </Descriptions.Item>
-                <Descriptions.Item label="部分缺勤">
-                  {teachingOverview.data.partial}
-                </Descriptions.Item>
-                <Descriptions.Item label="缺勤">
-                  {teachingOverview.data.absent}
-                </Descriptions.Item>
-                <Descriptions.Item label="请假">
-                  {teachingOverview.data.leave}
-                </Descriptions.Item>
-                <Descriptions.Item label="已登记">
-                  {teachingOverview.data.recorded}
-                </Descriptions.Item>
-              </Descriptions>
-            </>
-          ) : null}
-        </Card>
-      ) : null}
-      <Card title="课次考勤统计" size="small" style={{ marginBottom: 12 }}>
-        <Space wrap style={{ marginBottom: 12 }}>
-          <Input
-            aria-label="考勤统计开始日期"
-            type="date"
-            value={attendanceFrom}
-            onChange={(event) => setAttendanceFrom(event.target.value)}
-            style={{ width: 170 }}
-          />
-          <Input
-            aria-label="考勤统计结束日期"
-            type="date"
-            value={attendanceTo}
-            onChange={(event) => setAttendanceTo(event.target.value)}
-            style={{ width: 170 }}
-          />
-          <Typography.Text type="secondary">
-            各状态仅统计已登记考勤；未登记课次显示为零。日期范围最多 31 天。
-          </Typography.Text>
-        </Space>
-        {attendanceReport.error ? (
-          <Alert type="error" title={attendanceReport.error.message} showIcon />
-        ) : null}
-        <Table
-          rowKey="lessonId"
-          size="small"
-          loading={attendanceReport.isFetching}
-          dataSource={attendanceReport.data?.lessons ?? []}
-          pagination={{ pageSize: 50, showSizeChanger: false }}
-          columns={[
-            { title: "日期", dataIndex: "lessonDate" },
-            {
-              title: "时间",
-              render: (
-                _: unknown,
-                row: NonNullable<AttendanceReport["lessons"]>[number],
-              ) => `${row.startsAt}–${row.endsAt}`,
-            },
-            { title: "班级", dataIndex: "className" },
-            {
-              title: "课次状态",
-              dataIndex: "lessonStatus",
-              render: (status: string) => LESSON_STATUS[status] ?? status,
-            },
-            { title: "出勤", dataIndex: "present" },
-            { title: "部分缺勤", dataIndex: "partial" },
-            { title: "缺勤", dataIndex: "absent" },
-            { title: "请假", dataIndex: "leave" },
-            { title: "已登记", dataIndex: "recorded" },
-          ]}
+        <TeachingOverviewPanel
+          data={teachingOverview.data}
+          error={teachingOverview.error}
         />
-      </Card>
+      ) : null}
+      <AttendanceReportPanel
+        from={attendanceFrom}
+        to={attendanceTo}
+        onFromChange={setAttendanceFrom}
+        onToChange={setAttendanceTo}
+        data={attendanceReport.data}
+        error={attendanceReport.error}
+        fetching={attendanceReport.isFetching}
+      />
       {classes.error ? (
         <Alert title={classes.error.message} type="error" />
       ) : null}

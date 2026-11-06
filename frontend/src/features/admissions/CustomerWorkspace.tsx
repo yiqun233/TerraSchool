@@ -14,6 +14,10 @@ import { api, csrf } from "../../shared/http";
 import type { components } from "../../shared/generated/api";
 import { CustomerRecyclePolicyEditor } from "./CustomerRecyclePolicyEditor";
 import { CustomerPoolCard, CustomerRemindersCard } from "./CustomerPanels";
+import {
+  CustomerCreateFields,
+  type CustomerDraft,
+} from "./CustomerCreateFields";
 import { CustomerFollowups } from "./CustomerFollowups";
 
 type Customer = components["schemas"]["Customer"];
@@ -85,8 +89,6 @@ export function CustomerWorkspace({
   const [channelId, setChannelId] = useState<string | undefined>(
     () => pending?.channelId ?? undefined,
   );
-  const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
   const [duplicate, setDuplicate] = useState<{ token: string } | null>(null);
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
@@ -113,6 +115,9 @@ export function CustomerWorkspace({
   const [mergeHistoryFor, setMergeHistoryFor] = useState<string | null>(null);
   const [recyclePolicyOpen, setRecyclePolicyOpen] = useState(false);
   const guard = useRef(false);
+  // 逐字符输入的状态在 CustomerCreateFields 里；主组件只保留最新草稿与重置键。
+  const draft = useRef<CustomerDraft>({ name: "", phone: "" });
+  const [formKey, setFormKey] = useState(0);
   const schools = useQuery({
     queryKey: ["customer-schools"],
     queryFn: async ({ signal }) => {
@@ -280,18 +285,10 @@ export function CustomerWorkspace({
       setFollowupTarget(null);
     }
   }, [currentSchool?.phoneReadable, schools.error, rows.error]);
-  function editName(value: string) {
-    setName(value);
-    setDuplicate(null);
-  }
-  function editPhone(value: string) {
-    setPhone(value);
-    setDuplicate(null);
-  }
   async function create(confirmationToken?: string) {
     if (guard.current || !current || !canEdit || channelUnavailable) return;
-    const cleanName = name.trim(),
-      cleanPhone = phone.trim();
+    const cleanName = draft.current.name.trim(),
+      cleanPhone = draft.current.phone.trim();
     if (!cleanName || !cleanPhone) {
       setNotice("请填写客户姓名和联系电话。");
       return;
@@ -371,8 +368,8 @@ export function CustomerWorkspace({
       }
       localStorage.removeItem(storageKey);
       setPending(null);
-      setName("");
-      setPhone("");
+      draft.current = { name: "", phone: "" };
+      setFormKey((key) => key + 1);
       setChannelId(undefined);
       setDuplicate(null);
       setPage(0);
@@ -391,8 +388,8 @@ export function CustomerWorkspace({
   }
   async function cancel() {
     if (!pending || guard.current) return;
-    const cleanName = name.trim(),
-      cleanPhone = phone.trim();
+    const cleanName = draft.current.name.trim(),
+      cleanPhone = draft.current.phone.trim();
     if (!cleanName || !cleanPhone) {
       setNotice("请先填写原姓名、电话和渠道以核对待取消请求。");
       return;
@@ -440,8 +437,8 @@ export function CustomerWorkspace({
       localStorage.removeItem(storageKey);
       setPending(null);
       setDuplicate(null);
-      setName("");
-      setPhone("");
+      draft.current = { name: "", phone: "" };
+      setFormKey((key) => key + 1);
       setChannelId(undefined);
       setNotice(
         data.status === "CANCELLED"
@@ -854,23 +851,13 @@ export function CustomerWorkspace({
         />
         {canEdit || pending ? (
           <>
-            <Input
-              aria-label="客户姓名"
-              placeholder="客户姓名"
-              maxLength={50}
-              value={name}
+            <CustomerCreateFields
+              key={formKey}
               disabled={busy || !!duplicate}
-              onChange={(event) => editName(event.target.value)}
-              style={{ width: 150 }}
-            />
-            <Input
-              aria-label="客户电话"
-              placeholder="联系电话"
-              maxLength={30}
-              value={phone}
-              disabled={busy || !!duplicate}
-              onChange={(event) => editPhone(event.target.value)}
-              style={{ width: 170 }}
+              onDraftChange={(next) => {
+                draft.current = next;
+              }}
+              onEdit={() => setDuplicate(null)}
             />
             {visibleChannels ? (
               <Select
