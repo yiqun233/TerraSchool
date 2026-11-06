@@ -5,6 +5,7 @@ import static org.teraschool.server.EngineeringTest.update;
 
 import java.util.*;
 import java.util.function.Supplier;
+import org.jooq.DSLContext;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -13,6 +14,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.teraschool.archive.api.*;
+import org.teraschool.platform.api.TenantTransactions;
 
 /** 学员导出：字段按授权脱敏，导出写审计，跨学校范围受限。 */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -26,6 +28,8 @@ class StudentExportTest {
 
   @Autowired StudentQueries students;
   @Autowired StudentExportTaskService exportTasks;
+  @Autowired TenantTransactions tx;
+  @Autowired DSLContext sql;
 
   @DynamicPropertySource
   static void config(DynamicPropertyRegistry r) {
@@ -187,6 +191,49 @@ class StudentExportTest {
                     exportTasks.download(created.id()), java.nio.charset.StandardCharsets.UTF_8));
     assertThat(content).contains("导出学员").contains("138****1111");
     assertThat(content).doesNotContain("13800001111");
+  }
+
+  /** 清理任务尚未运行时也须拒绝到期原件；事务内推进有效期避免后台调度竞争掩盖缺陷。 */
+  @Test
+  void downloadRejectsExpiredCompletedArtifactsBeforeCleanup() throws Exception {
+    var content = "private export".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    for (var type : List.of("STUDENT", "ENROLLMENT", "RECEIPTS", "LESSONS")) {
+      for (var format : List.of("CSV", "XLSX", "PDF")) {
+        var id = UUID.randomUUID();
+        update(
+            "insert into infra.export_task(id,tenant_id,owner_account_id,school_id,principal_name,"
+                + "request_id,request_hash,status,expires_at,content,row_count,export_type,export_format)"
+                + " values (?,?,?,?,?,?,?,'COMPLETED',clock_timestamp()+interval '1 hour',?,1,?,?)",
+            id,
+            TENANT,
+            READER,
+            SCHOOL,
+            EngineeringTest.principal(READER),
+            UUID.randomUUID(),
+            "a".repeat(64),
+            content,
+            type,
+            format);
+        assertThat(asActor(READER, () -> exportTasks.download(id))).isEqualTo(content);
+        assertThatThrownBy(
+                () ->
+                    asActor(
+                        READER,
+                        () ->
+                            tx.execute(
+                                TENANT,
+                                () -> {
+                                  sql.execute(
+                                      "update infra.export_task set expires_at=clock_timestamp() where id=?",
+                                      id);
+                                  assertThat(exportTasks.get(id).status()).isEqualTo("COMPLETED");
+                                  return exportTasks.download(id);
+                                })))
+            .as("%s/%s 到期后不可下载", type, format)
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("过期");
+      }
+    }
   }
 
   @Test

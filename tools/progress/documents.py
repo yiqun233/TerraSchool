@@ -19,7 +19,12 @@ def document_hash(path: str, anchor: str = "") -> str:
 
 
 def bundle_documents(root: Path, output: Path):
-    paths = sorted({root / "README.md", root / "AGENT.md", *(root / "doc").rglob("*.md")})
+    # Path 的原生排序在 Windows 忽略大小写、Linux 区分大小写；显式按 POSIX 字符串
+    # 排序，使文档顺序、指纹与生成物可在本机和 Linux CI 之间逐字校验。
+    paths = sorted(
+        {root / "README.md", root / "AGENT.md", *(root / "doc").rglob("*.md")},
+        key=lambda path: path.relative_to(root).as_posix(),
+    )
     keys = {path.resolve(): path.relative_to(root).as_posix() for path in paths}
     renderer = MarkdownIt("commonmark", {"html": False}).enable(["table", "strikethrough"])
     documents = {}

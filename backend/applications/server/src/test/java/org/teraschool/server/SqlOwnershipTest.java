@@ -37,7 +37,15 @@ class SqlOwnershipTest {
           Map.entry(
               "finance/FundsReconciliationService.java",
               Set.of(
-                  "archive.student", "funds.account_entry", "funds.allocation", "funds.receipt")),
+                  "archive.student",
+                  "funds.account_entry",
+                  "funds.allocation",
+                  "funds.receipt",
+                  // 每日概况只读聚合；入口和机构锁内均复检报名/资金/教务的同校交集。
+                  "enrollment.enrollment",
+                  "teaching.class",
+                  "teaching.lesson",
+                  "teaching.attendance")),
           Map.entry("identity/AccountAuthorizations.java", Set.of("organization.unit")),
           Map.entry("identity/SchoolProvisioner.java", Set.of("organization.unit")),
           Map.entry(

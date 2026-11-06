@@ -768,7 +768,29 @@ class SettlementModePricingTest {
         other,
         TENANT,
         SCHOOL);
-    // 课次课程不在报名明细内：模式 2 不计消耗（金额保持 0）。
+    var otherClass =
+        asActor(
+            OPS,
+            () ->
+                teaching.createClass(
+                    new CreateClass(
+                        UUID.randomUUID(), SCHOOL, other, "历史错课班" + UUID.randomUUID())));
+    // 当前普通入班入口已拒绝课程不匹配；不能为了构造计价样本绕过这项生产保护。
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    OPS,
+                    () -> teaching.addMember(otherClass.id(), new AddClassMember(enrollment.id()))))
+        .isInstanceOf(TeachingConflict.class)
+        .hasMessage("ENROLLMENT_COURSE_MISMATCH");
+    // 管理连接只构造历史异常关系，继续验证计价层不会对不在报名明细中的课程收钱。
+    update(
+        "insert into teaching.enrollment_class(tenant_id,enrollment_id,class_id,joined_on)"
+            + " values (?,?,?,'2026-02-10')",
+        TENANT,
+        enrollment.id(),
+        otherClass.id());
+    classes.put(other, otherClass.id());
     assertThat(consume(enrollment, other, "1.00")).isEqualTo("0.00");
   }
 

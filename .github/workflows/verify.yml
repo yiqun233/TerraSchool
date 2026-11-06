@@ -9,6 +9,16 @@ on:
   pull_request:
 
 jobs:
+  documentation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m pip install -r tools/progress/requirements.txt
+      - run: python -X utf8 tools/progress/build.py --check
+
   backend:
     runs-on: ubuntu-latest
     services:
@@ -32,6 +42,7 @@ jobs:
       TS_IDENTITY_PASSWORD: ci-identity
       TS_SESSION_PASSWORD: ci-session
       TS_AUDIT_PASSWORD: ci-audit
+      TS_SCHEDULER_PASSWORD: ci-scheduler
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -46,6 +57,7 @@ jobs:
           CREATE ROLE ts_identity LOGIN PASSWORD 'ci-identity' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
           CREATE ROLE ts_session LOGIN PASSWORD 'ci-session' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
           CREATE ROLE ts_audit LOGIN PASSWORD 'ci-audit' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+          CREATE ROLE ts_scheduler LOGIN PASSWORD 'ci-scheduler' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
           SQL
       - name: migrate, generate, verify
         working-directory: backend

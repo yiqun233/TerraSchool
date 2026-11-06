@@ -181,7 +181,9 @@ class StudentExportTaskService {
         scope.tenantId(),
         () -> {
           var row = taskRow(scope, id, false);
-          if (!"COMPLETED".equals(row.get("status"))) throw new IllegalStateException("导出尚未完成或已过期");
+          // 有效期按数据库时钟检查，不能依赖后台清理及时将状态改为 EXPIRED。
+          if (!"COMPLETED".equals(row.get("status")) || !Boolean.TRUE.equals(row.get("unexpired")))
+            throw new IllegalStateException("导出尚未完成或已过期");
           String type = (String) row.get("export_type");
           var dataScope = actors.requireResourceScopeInTransaction(resource(type));
           requireSchool(dataScope, (UUID) row.get("school_id"));
@@ -240,7 +242,7 @@ class StudentExportTaskService {
   private Map<String, Object> taskRow(ResourceScope scope, UUID id, boolean lock) {
     var rows =
         app.queryForList(
-            "select id,school_id,export_type,export_format,date_from,date_to,status,attempt_count,row_count,error_code,created_at,started_at,finished_at,exposed_fields,content,manual_retry_count"
+            "select id,school_id,export_type,export_format,date_from,date_to,status,attempt_count,row_count,error_code,created_at,started_at,finished_at,exposed_fields,content,manual_retry_count,expires_at>clock_timestamp() as unexpired"
                 + " from infra.export_task where id=? and tenant_id=? and owner_account_id=?"
                 + (lock ? " for update" : ""),
             id,

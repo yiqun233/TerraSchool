@@ -127,7 +127,7 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
               sql.fetch(
                   "select e.id,e.school_id,e.student_id,e.product_id,e.price_version_id,"
                       + "e.curriculum_name,e.product_name,e.price,e.hours,e.service_fee,"
-                      + "e.settlement_mode,e.status,e.version,e.created_at,"
+                      + "e.settlement_mode,e.status,e.version,e.created_at,e.valid_until,"
                       + "(select coalesce(sum(c.amount),0) from enrollment.charge c where c.enrollment_id=e.id)"
                       + " as net_amount"
                       + " from enrollment.enrollment e where e.school_id=?"

@@ -39,6 +39,7 @@ container=None;report={'run_id':RUN,'status':'running','task':f'targeted-backend
 try:
  report['java']=capture([str(Path(java)/'bin'/('java.exe' if os.name=='nt' else 'java')),'--version'])
  if '25.' not in report['java'].splitlines()[0]:raise RuntimeError('正式工程要求 JDK 25')
+ step('progress',[sys.executable,'-X','utf8',str(ROOT/'tools/progress/build.py'),'--check'],cwd=ROOT)
  context=capture([docker,'context','show']);env['DOCKER_HOST']=capture([docker,'context','inspect',context,'--format','{{.Endpoints.docker.Host}}'])
  image='postgres@sha256:979bccfde35445db618c65107d27d08c6c21339d8dc3ad4c830c6633947be0e4';env['TS_POSTGRES_IMAGE']=image
  env['POSTGRES_PASSWORD']=env['TS_ADMIN_PASSWORD'];env['POSTGRES_DB']='teraschool_test'
