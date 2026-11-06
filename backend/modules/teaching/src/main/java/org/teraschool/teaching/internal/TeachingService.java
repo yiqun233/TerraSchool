@@ -774,6 +774,76 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
   }
 
   @Override
+  public ClassView updateClassCapacity(UUID classId, UpdateClassCapacity command) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      if (classId == null
+          || command == null
+          || command.requestId() == null
+          || command.expectedVersion() == null) throw new IllegalArgumentException("需要班级、请求身份和版本");
+      if (command.capacity() != null && (command.capacity() < 0 || command.capacity() > 100000))
+        throw new IllegalArgumentException("班级名额上限须为 0–100000 或不限");
+      var reason = text(command.reason(), 200, "修改名额原因");
+      if (reason == null) throw new IllegalArgumentException("修改名额原因必填");
+      var scope = actors.requireResourceScope("TEACHING");
+      var capacityText = Objects.toString(command.capacity(), "UNLIMITED");
+      var fingerprint =
+          fingerprint(
+              "CLASS_CAPACITY",
+              classId.toString(),
+              command.expectedVersion().toString(),
+              capacityText,
+              reason);
+      return tx.execute(
+          scope.tenantId(),
+          () -> {
+            schools.lockTenant(scope.tenantId());
+            var verified = actors.requireResourceScopeInTransaction("TEACHING");
+            var current =
+                sql.fetchOne(
+                    "select c.school_id,c.status,c.version,c.capacity,"
+                        + "(select count(*) from teaching.enrollment_class m"
+                        + " where m.class_id=c.id and m.active) as member_count"
+                        + " from teaching.class c where c.id=? for update",
+                    classId);
+            if (current == null) throw new AccessDeniedException("班级不存在或不可访问");
+            var schoolId = current.get("school_id", UUID.class);
+            if (!verified.maintainableSchoolIds().contains(schoolId))
+              throw new AccessDeniedException("无该学校班级维护权限");
+            var school = schools.require(schoolId);
+            if (!school.active()) throw new AccessDeniedException("学校已停用，不能修改班级名额");
+            var previous =
+                previousRequest(scope, command.requestId(), "CLASS_CAPACITY", fingerprint);
+            if (previous != null) return classView(requireClass(verified, previous), school.name());
+            if (!"ACTIVE".equals(current.get("status", String.class)))
+              throw new TeachingConflict("CLASS_NOT_ACTIVE");
+            if (!current.get("version", Long.class).equals(command.expectedVersion()))
+              throw new TeachingConflict("VERSION_CONFLICT");
+            var members = current.get("member_count", Long.class).intValue();
+            if (command.capacity() != null && command.capacity() < members)
+              throw new TeachingConflict("CAPACITY_BELOW_MEMBER_COUNT");
+            if (Objects.equals(command.capacity(), current.get("capacity", Integer.class)))
+              throw new TeachingConflict("CLASS_CAPACITY_UNCHANGED");
+            int changed =
+                sql.execute(
+                    "update teaching.class set capacity=?,version=version+1"
+                        + " where id=? and version=? and status='ACTIVE'",
+                    command.capacity(),
+                    classId,
+                    command.expectedVersion());
+            if (changed != 1) throw new TeachingConflict("VERSION_CONFLICT");
+            rememberRequest(scope, command.requestId(), "CLASS_CAPACITY", classId, fingerprint);
+            audit(
+                verified,
+                "CLASS_CAPACITY_UPDATED",
+                classId,
+                schoolId,
+                "capacity=" + capacityText + ";reason=" + reason);
+            return classView(requireClass(verified, classId), school.name());
+          });
+    }
+  }
+
+  @Override
   public ClassView cancelClass(UUID classId, CancelClass command) {
     try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
       if (classId == null

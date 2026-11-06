@@ -83,6 +83,9 @@ export function TeachingWorkspace({
   const [enrollmentPage, setEnrollmentPage] = useState(0);
   const [addingMemberBusy, setAddingMemberBusy] = useState(false);
   const [creatingClass, setCreatingClass] = useState(false);
+  const [capacityFor, setCapacityFor] = useState<
+    components["schemas"]["ClassView"] | null
+  >(null);
   const [creatingLesson, setCreatingLesson] = useState(false);
   const [scheduling, setScheduling] = useState(false);
   const [batchScheduling, setBatchScheduling] = useState(false);
@@ -1141,6 +1144,15 @@ export function TeachingWorkspace({
                   <Space>
                     <Button
                       size="small"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setCapacityFor(row);
+                      }}
+                    >
+                      调整名额
+                    </Button>
+                    <Button
+                      size="small"
                       danger
                       onClick={(event) => {
                         event.stopPropagation();
@@ -1457,6 +1469,18 @@ export function TeachingWorkspace({
             setCreatingClass(false);
             void classes.refetch();
           }}
+        />
+      ) : null}
+      {capacityFor ? (
+        <ClassCapacityEditor
+          key={capacityFor.id}
+          classView={capacityFor}
+          onCancel={() => setCapacityFor(null)}
+          onUpdated={() => {
+            setCapacityFor(null);
+            void classes.refetch();
+          }}
+          onUnauthorized={onUnauthorized}
         />
       ) : null}
       {creatingLesson && classId ? (
@@ -2157,6 +2181,134 @@ export function AttendanceModal({
       >
         确认考勤
       </Button>
+    </Modal>
+  );
+}
+
+export function ClassCapacityEditor({
+  classView,
+  onCancel,
+  onUpdated,
+  onUnauthorized,
+}: {
+  classView: components["schemas"]["ClassView"];
+  onCancel: () => void;
+  onUpdated: () => void;
+  onUnauthorized: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [form] = Form.useForm();
+  const pendingRequest = useRef<{
+    fingerprint: string;
+    requestId: string;
+  } | null>(null);
+
+  async function save() {
+    const values = await form.validateFields();
+    const capacity = values.capacity ?? null;
+    const reason = String(values.reason ?? "").trim();
+    const fingerprint = `${classView.id}|${classView.version}|${capacity ?? "UNLIMITED"}|${reason}`;
+    if (pendingRequest.current?.fingerprint !== fingerprint) {
+      pendingRequest.current = { fingerprint, requestId: crypto.randomUUID() };
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const token = await csrf();
+      const { response } = await api.POST(
+        "/api/teaching/classes/{id}/capacity",
+        {
+          params: { path: { id: classView.id! } },
+          headers: { [token.headerName!]: token.token! },
+          body: {
+            requestId: pendingRequest.current.requestId,
+            expectedVersion: classView.version ?? 0,
+            capacity,
+            reason,
+          },
+        },
+      );
+      if (response.status === 401) {
+        onUnauthorized();
+        return;
+      }
+      if (!response.ok) {
+        setError(
+          response.status === 409
+            ? "班级状态或版本已变化，或名额低于当前在班人数；刷新后核对。"
+            : "调整名额失败，请核对教务维护权限和填写内容。",
+        );
+        return;
+      }
+      onUpdated();
+    } catch {
+      setError("调整结果暂未确认；保持相同内容重试可安全防重。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      title={`调整班级名额 · ${classView.name ?? ""}`}
+      open
+      onCancel={onCancel}
+      mask={{ closable: !busy }}
+      footer={null}
+    >
+      {error ? <Alert title={error} type="error" showIcon /> : null}
+      <Form
+        form={form}
+        layout="vertical"
+        initialValues={{ capacity: classView.capacity ?? undefined }}
+      >
+        <Form.Item
+          label="名额上限"
+          name="capacity"
+          extra={`当前在班 ${classView.memberCount ?? 0} 人；留空表示不限。新上限不能低于当前在班人数。`}
+          rules={[
+            {
+              validator: async (_, value?: number) => {
+                if (
+                  value == null ||
+                  (Number.isInteger(value) &&
+                    value >= (classView.memberCount ?? 0) &&
+                    value <= 100000)
+                )
+                  return;
+                throw new Error(
+                  `名额须为 ${classView.memberCount ?? 0}–100000 的整数`,
+                );
+              },
+            },
+          ]}
+        >
+          <InputNumber
+            min={classView.memberCount ?? 0}
+            max={100000}
+            precision={0}
+            disabled={busy}
+          />
+        </Form.Item>
+        <Form.Item
+          label="调整原因"
+          name="reason"
+          rules={[
+            { required: true, whitespace: true, message: "请填写调整原因" },
+          ]}
+        >
+          <Input maxLength={200} disabled={busy} />
+        </Form.Item>
+      </Form>
+      <Space>
+        <Button onClick={onCancel} disabled={busy}>
+          取消
+        </Button>
+        <Button type="primary" onClick={() => void save()} loading={busy}>
+          保存名额
+        </Button>
+      </Space>
     </Modal>
   );
 }

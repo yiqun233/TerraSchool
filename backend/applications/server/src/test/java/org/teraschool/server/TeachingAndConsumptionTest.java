@@ -741,6 +741,65 @@ class TeachingAndConsumptionTest {
   }
 
   @Test
+  void classCapacityCanBeChangedWithVersionIdempotencyAndMemberFloor() throws Exception {
+    var created =
+        asActor(
+            TEACHER,
+            () ->
+                commands.createClass(
+                    new CreateClass(
+                        UUID.randomUUID(), SCHOOL, CURRICULUM, "可调整名额班", "NORMAL", false, 2)));
+    var requestId = UUID.randomUUID();
+    var increase = new UpdateClassCapacity(requestId, created.version(), 3, "扩增班级名额");
+    var beforeAudit = countAudit("audit.teaching_event", created.id());
+
+    var updated = asActor(TEACHER, () -> commands.updateClassCapacity(created.id(), increase));
+    assertThat(updated.capacity()).isEqualTo(3);
+    assertThat(updated.version()).isEqualTo(created.version() + 1);
+    assertThat(asActor(TEACHER, () -> commands.updateClassCapacity(created.id(), increase)))
+        .isEqualTo(updated);
+    assertThat(countAudit("audit.teaching_event", created.id())).isEqualTo(beforeAudit + 1);
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    TEACHER,
+                    () ->
+                        commands.updateClassCapacity(
+                            created.id(),
+                            new UpdateClassCapacity(requestId, created.version(), 4, "改成另一个名额"))))
+        .isInstanceOf(TeachingConflict.class)
+        .hasMessage("IDEMPOTENCY_MISMATCH");
+
+    var enrollment = activeEnrollment();
+    asActor(TEACHER, () -> commands.addMember(created.id(), new AddClassMember(enrollment)));
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    TEACHER,
+                    () ->
+                        commands.updateClassCapacity(
+                            created.id(),
+                            new UpdateClassCapacity(
+                                UUID.randomUUID(), updated.version(), 0, "不能低于在班人数"))))
+        .isInstanceOf(TeachingConflict.class)
+        .hasMessage("CAPACITY_BELOW_MEMBER_COUNT");
+    assertThat(asActor(TEACHER, () -> queries.classes(SCHOOL)))
+        .filteredOn(item -> item.id().equals(created.id()))
+        .singleElement()
+        .extracting(ClassView::capacity)
+        .isEqualTo(3);
+
+    var unlimited =
+        asActor(
+            TEACHER,
+            () ->
+                commands.updateClassCapacity(
+                    created.id(),
+                    new UpdateClassCapacity(UUID.randomUUID(), updated.version(), null, "取消人数上限")));
+    assertThat(unlimited.capacity()).isNull();
+  }
+
+  @Test
   void multiClassCapacityFailureRollsBackEarlierClassInsertions() {
     var available =
         asActor(

@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   AttendanceModal,
+  ClassCapacityEditor,
   ClassCreator,
   CloseLessonButton,
   PublishLessonButton,
@@ -106,6 +107,46 @@ it("新建班级可设置名额上限并提交", async () => {
     name: "小班",
     capacity: 12,
   });
+});
+
+it("调整班级名额提交版本、请求身份、原因和新的容量", async () => {
+  const user = userEvent.setup();
+  const onUpdated = vi.fn();
+  post.mockReset();
+  csrf.mockResolvedValue({ headerName: "X-CSRF-TOKEN", token: "token" });
+  post.mockResolvedValue({ response: { ok: true, status: 200 } });
+  renderWithClient(
+    <ClassCapacityEditor
+      classView={{
+        id: "class-1",
+        name: "少儿英语A班",
+        memberCount: 4,
+        capacity: 8,
+        version: 3,
+      }}
+      onCancel={vi.fn()}
+      onUpdated={onUpdated}
+      onUnauthorized={vi.fn()}
+    />,
+  );
+  await user.clear(screen.getByRole("spinbutton", { name: "名额上限" }));
+  await user.type(screen.getByRole("spinbutton", { name: "名额上限" }), "12");
+  await user.type(
+    screen.getByRole("textbox", { name: "调整原因" }),
+    "新增名额",
+  );
+  await user.click(screen.getByRole("button", { name: "保存名额" }));
+  await waitFor(() => expect(onUpdated).toHaveBeenCalledTimes(1));
+  expect(post.mock.calls[0][0]).toBe("/api/teaching/classes/{id}/capacity");
+  expect(post.mock.calls[0][1]).toMatchObject({
+    params: { path: { id: "class-1" } },
+    body: {
+      expectedVersion: 3,
+      capacity: 12,
+      reason: "新增名额",
+    },
+  });
+  expect(post.mock.calls[0][1].body.requestId).toEqual(expect.any(String));
 });
 
 it("班级列表展示在班人数与状态", async () => {

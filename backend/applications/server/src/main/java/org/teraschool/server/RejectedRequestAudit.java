@@ -244,6 +244,13 @@ class RejectedRequestAudit {
       } catch (IllegalArgumentException invalid) {
         /* 不记录原路径 */
       }
+    } else if (path.matches("/api/teaching/classes/[^/]+/capacity")) {
+      action = FailureAudit.Action.CLASS_CAPACITY_UPDATE;
+      try {
+        resource = UUID.fromString(path.split("/")[4]);
+      } catch (IllegalArgumentException invalid) {
+        /* 不记录原路径 */
+      }
     } else if (path.matches("/api/teaching/classes/[^/]+/members")) {
       action = FailureAudit.Action.CLASS_MEMBER_ADD;
       try {

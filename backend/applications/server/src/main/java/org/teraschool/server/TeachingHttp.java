@@ -134,6 +134,11 @@ class TeachingHttp {
     return commands.createClass(command);
   }
 
+  @PostMapping(value = "/api/teaching/classes/{id}/capacity", consumes = "application/json")
+  ClassView updateClassCapacity(@PathVariable UUID id, @RequestBody UpdateClassCapacity command) {
+    return commands.updateClassCapacity(id, command);
+  }
+
   @PostMapping(value = "/api/teaching/classes/{id}/close", consumes = "application/json")
   ClassView closeClass(@PathVariable UUID id, @RequestBody LessonVersion command) {
     return commands.closeClass(id, command);

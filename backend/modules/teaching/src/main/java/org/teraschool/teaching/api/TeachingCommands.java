@@ -6,6 +6,9 @@ import java.util.UUID;
 public interface TeachingCommands {
   ClassView createClass(CreateClass command);
 
+  /** 修改班级容量；不得低于当前在班人数，null 表示不限。 */
+  ClassView updateClassCapacity(UUID classId, UpdateClassCapacity command);
+
   /** 结班并关闭其报名在班关系；只允许没有未结课次的班级。 */
   ClassView closeClass(UUID classId, LessonVersion command);
 
