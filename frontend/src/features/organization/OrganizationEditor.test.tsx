@@ -101,7 +101,9 @@ describe("组织维护提交保护", () => {
       </QueryClientProvider>
     );
     const result = render(view(0));
-    await user.click(await screen.findByRole("button", { name: /改\s*名/ }));
+    await user.click(
+      await screen.findByRole("button", { name: /编辑校区资料/ }),
+    );
     result.rerender(view(1));
     await user.clear(screen.getByRole("textbox", { name: "名称" }));
     await user.type(screen.getByRole("textbox", { name: "名称" }), "编辑草稿");
@@ -137,5 +139,47 @@ describe("组织维护提交保护", () => {
     release({ headerName: "X-CSRF-TOKEN", token: "token" });
     await waitFor(() => expect(saved).toHaveBeenCalledTimes(1));
     expect(post).toHaveBeenCalledTimes(1);
+  });
+  it("编辑校区资料时提交当前资料和名称的同一版本更新", async () => {
+    const user = userEvent.setup();
+    const saved = vi.fn();
+    post.mockResolvedValue({ response: { ok: true, status: 200 } });
+    render(
+      wrapper(
+        <OrganizationEditor
+          selected={{
+            id: "campus-a",
+            schoolId: "school-a",
+            kind: "CAMPUS",
+            name: "校区甲",
+            version: 4,
+            shortName: "甲校区",
+            address: "旧地址",
+            postalCode: "100000",
+            busRoutes: "1路",
+          }}
+          identityKey="a"
+          onSaved={saved}
+        />,
+      ),
+    );
+    await user.click(
+      await screen.findByRole("button", { name: /编辑校区资料/ }),
+    );
+    await user.clear(screen.getByRole("textbox", { name: "地址" }));
+    await user.type(screen.getByRole("textbox", { name: "地址" }), "新地址");
+    await user.click(screen.getByRole("button", { name: /保\s*存/ }));
+    await waitFor(() => expect(saved).toHaveBeenCalledTimes(1));
+    expect(post.mock.calls[0][1]).toMatchObject({
+      params: { path: { id: "campus-a" } },
+      body: {
+        expectedVersion: 4,
+        name: "校区甲",
+        shortName: "甲校区",
+        address: "新地址",
+        postalCode: "100000",
+        busRoutes: "1路",
+      },
+    });
   });
 });

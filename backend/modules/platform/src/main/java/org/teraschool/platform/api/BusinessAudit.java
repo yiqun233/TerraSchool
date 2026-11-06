@@ -22,10 +22,23 @@ public class BusinessAudit {
       UUID school,
       String before,
       String after) {
+    append(tenant, actor, action, resource, school, before, after, null, null);
+  }
+
+  public void append(
+      UUID tenant,
+      UUID actor,
+      String action,
+      UUID resource,
+      UUID school,
+      String before,
+      String after,
+      String detailBefore,
+      String detailAfter) {
     if (!TransactionSynchronizationManager.isActualTransactionActive())
       throw new IllegalStateException("审计必须在业务事务内");
     sql.execute(
-        "insert into audit.business_event(tenant_id,actor_id,action,resource_id,school_id,old_name,new_name,trace_id) values (?,?,?,?,?,?,?,?)",
+        "insert into audit.business_event(tenant_id,actor_id,action,resource_id,school_id,old_name,new_name,trace_id,detail_before,detail_after) values (?,?,?,?,?,?,?,?,?,?)",
         tenant,
         actor,
         action,
@@ -33,6 +46,8 @@ public class BusinessAudit {
         school,
         before,
         after,
-        RequestTrace.id());
+        RequestTrace.id(),
+        detailBefore,
+        detailAfter);
   }
 }

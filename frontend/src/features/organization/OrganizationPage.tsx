@@ -350,9 +350,41 @@ function Workspace({ reset }: { reset: () => void }) {
               columns={[
                 { title: "名称", dataIndex: "name" },
                 {
+                  title: "简称",
+                  dataIndex: "shortName",
+                  render: (
+                    value: string | undefined,
+                    unit: components["schemas"]["OrganizationUnit"],
+                  ) => (unit.kind === "CAMPUS" ? value || "—" : "—"),
+                },
+                {
                   title: "类型",
                   dataIndex: "kind",
                   render: (kind: string) => labels[kind] ?? kind,
+                },
+                {
+                  title: "地址",
+                  dataIndex: "address",
+                  render: (
+                    value: string | undefined,
+                    unit: components["schemas"]["OrganizationUnit"],
+                  ) => (unit.kind === "CAMPUS" ? value || "—" : "—"),
+                },
+                {
+                  title: "邮编",
+                  dataIndex: "postalCode",
+                  render: (
+                    value: string | undefined,
+                    unit: components["schemas"]["OrganizationUnit"],
+                  ) => (unit.kind === "CAMPUS" ? value || "—" : "—"),
+                },
+                {
+                  title: "公交线路",
+                  dataIndex: "busRoutes",
+                  render: (
+                    value: string | undefined,
+                    unit: components["schemas"]["OrganizationUnit"],
+                  ) => (unit.kind === "CAMPUS" ? value || "—" : "—"),
                 },
                 { title: "学校标识", dataIndex: "schoolId" },
                 {

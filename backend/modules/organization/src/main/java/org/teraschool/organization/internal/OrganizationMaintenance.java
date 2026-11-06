@@ -120,21 +120,65 @@ public class OrganizationMaintenance {
             throw new OrganizationConflict("UNIT_KIND_NOT_EDITABLE");
           if (!current.getVersion().equals(command.expectedVersion()))
             throw new OrganizationConflict("VERSION_CONFLICT");
+          boolean campusProfileSupplied =
+              command.shortName() != null
+                  || command.address() != null
+                  || command.postalCode() != null
+                  || command.busRoutes() != null;
+          if (campusProfileSupplied && !"CAMPUS".equals(current.getKind()))
+            throw new OrganizationConflict("CAMPUS_PROFILE_NOT_EDITABLE");
+          String shortName =
+              campusProfileSupplied
+                  ? profileValue(command.shortName(), current.getShortName(), 20, "简称")
+                  : current.getShortName();
+          String address =
+              campusProfileSupplied
+                  ? profileValue(command.address(), current.getAddress(), 200, "地址")
+                  : current.getAddress();
+          String postalCode =
+              campusProfileSupplied
+                  ? profileValue(command.postalCode(), current.getPostalCode(), 50, "邮编")
+                  : current.getPostalCode();
+          String busRoutes =
+              campusProfileSupplied
+                  ? profileValue(command.busRoutes(), current.getBusRoutes(), 300, "公交线路")
+                  : current.getBusRoutes();
           var changed =
               sql.update(UNIT)
                   .set(UNIT.NAME, name)
+                  .set(UNIT.SHORT_NAME, shortName)
+                  .set(UNIT.ADDRESS, address)
+                  .set(UNIT.POSTAL_CODE, postalCode)
+                  .set(UNIT.BUS_ROUTES, busRoutes)
                   .set(UNIT.VERSION, UNIT.VERSION.plus(1L))
                   .where(UNIT.ID.eq(id).and(UNIT.VERSION.eq(command.expectedVersion())))
                   .returning()
                   .fetchOne();
           if (changed == null) throw new OrganizationConflict("VERSION_CONFLICT");
-          audit(
-              actor,
-              "ORGANIZATION_UNIT_RENAMED",
-              id,
-              current.getSchoolId(),
-              current.getName(),
-              name);
+          if (campusProfileSupplied) {
+            audit.append(
+                actor.tenantId(),
+                actor.accountId(),
+                "ORGANIZATION_CAMPUS_PROFILE_UPDATED",
+                id,
+                current.getSchoolId(),
+                current.getName(),
+                name,
+                campusProfileJson(
+                    current.getShortName(),
+                    current.getAddress(),
+                    current.getPostalCode(),
+                    current.getBusRoutes()),
+                campusProfileJson(shortName, address, postalCode, busRoutes));
+          } else {
+            audit(
+                actor,
+                "ORGANIZATION_UNIT_RENAMED",
+                id,
+                current.getSchoolId(),
+                current.getName(),
+                name);
+          }
           return view(changed);
         });
   }
@@ -146,6 +190,41 @@ public class OrganizationMaintenance {
         || name.codePoints().anyMatch(Character::isISOControl))
       throw new IllegalArgumentException("名称须为1–100字符且不含控制字符");
     return name.strip();
+  }
+
+  private static String profileValue(String incoming, String current, int limit, String label) {
+    if (incoming == null) return current;
+    String value = incoming.strip();
+    if (value.length() > limit || value.codePoints().anyMatch(Character::isISOControl))
+      throw new IllegalArgumentException(label + "不得超过" + limit + "字符且不能包含控制字符");
+    return value.isEmpty() ? null : value;
+  }
+
+  private static String campusProfileJson(
+      String shortName, String address, String postalCode, String busRoutes) {
+    return "{\"shortName\":"
+        + json(shortName)
+        + ",\"address\":"
+        + json(address)
+        + ",\"postalCode\":"
+        + json(postalCode)
+        + ",\"busRoutes\":"
+        + json(busRoutes)
+        + "}";
+  }
+
+  private static String json(String value) {
+    if (value == null) return "null";
+    var result = new StringBuilder("\"");
+    for (int i = 0; i < value.length(); i++) {
+      char c = value.charAt(i);
+      if (c == '\\' || c == '"') result.append('\\').append(c);
+      else if (c == '\n') result.append("\\n");
+      else if (c == '\r') result.append("\\r");
+      else if (c == '\t') result.append("\\t");
+      else result.append(c);
+    }
+    return result.append('"').toString();
   }
 
   private void requireSchool(Actor actor, UUID school) {
@@ -160,6 +239,15 @@ public class OrganizationMaintenance {
   private OrganizationUnit view(
       org.teraschool.organization.internal.generated.tables.records.UnitRecord row) {
     return new OrganizationUnit(
-        row.getId(), row.getSchoolId(), row.getKind(), row.getName(), row.getVersion());
+        row.getId(),
+        row.getSchoolId(),
+        row.getKind(),
+        row.getName(),
+        row.getVersion(),
+        row.getActive(),
+        row.getShortName(),
+        row.getAddress(),
+        row.getPostalCode(),
+        row.getBusRoutes());
   }
 }

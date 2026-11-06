@@ -5,6 +5,8 @@ import static org.teraschool.server.EngineeringTest.update;
 
 import java.net.*;
 import java.net.http.*;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.function.Supplier;
@@ -133,6 +135,83 @@ class OrganizationMaintenanceTest {
           USER,
           SCHOOL);
     }
+  }
+
+  @Test
+  void campusProfileUpdatesWithVersionAndAuditsBeforeAndAfter() throws Exception {
+    var campus = asActor(() -> commands.createChild(command()));
+    var updated =
+        asActor(
+            () ->
+                commands.rename(
+                    campus.id(),
+                    new RenameOrganizationUnit(0L, "合成校区", "合成", "新地址", "200000", "2路、8路")));
+    assertThat(updated.version()).isEqualTo(1);
+    assertThat(updated.shortName()).isEqualTo("合成");
+    assertThat(updated.address()).isEqualTo("新地址");
+    assertThat(updated.postalCode()).isEqualTo("200000");
+    assertThat(updated.busRoutes()).isEqualTo("2路、8路");
+    assertThat(
+            asActor(() -> queries.list(0, 100)).items().stream()
+                .filter(unit -> unit.id().equals(campus.id()))
+                .findFirst()
+                .orElseThrow())
+        .isEqualTo(updated);
+    String detailBefore;
+    String detailAfter;
+    try (var connection = EngineeringTest.admin();
+        var statement =
+            connection.prepareStatement(
+                "select detail_before, detail_after from audit.business_event where resource_id=? and action='ORGANIZATION_CAMPUS_PROFILE_UPDATED'")) {
+      statement.setObject(1, campus.id());
+      try (var result = statement.executeQuery()) {
+        assertThat(result.next()).isTrue();
+        detailBefore = result.getString("detail_before");
+        detailAfter = result.getString("detail_after");
+      }
+    }
+    assertThat(detailBefore)
+        .isEqualTo("{\"shortName\":null,\"address\":null,\"postalCode\":null,\"busRoutes\":null}");
+    assertThat(detailAfter)
+        .isEqualTo(
+            "{\"shortName\":\"合成\",\"address\":\"新地址\",\"postalCode\":\"200000\",\"busRoutes\":\"2路、8路\"}");
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    () ->
+                        commands.rename(
+                            campus.id(),
+                            new RenameOrganizationUnit(0L, "过期", "新简称", null, null, null))))
+        .isInstanceOf(OrganizationConflict.class)
+        .hasMessage("VERSION_CONFLICT");
+  }
+
+  @Test
+  void campusProfileIsCampusOnlyAndLengthLimited() {
+    var department =
+        asActor(
+            () ->
+                commands.createChild(
+                    new CreateOrganizationUnit(UUID.randomUUID(), SCHOOL, "DEPARTMENT", "财务部")));
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    () ->
+                        commands.rename(
+                            department.id(),
+                            new RenameOrganizationUnit(0L, "财务部", "财务", null, null, null))))
+        .isInstanceOf(OrganizationConflict.class)
+        .hasMessage("CAMPUS_PROFILE_NOT_EDITABLE");
+    var campus = asActor(() -> commands.createChild(command()));
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    () ->
+                        commands.rename(
+                            campus.id(),
+                            new RenameOrganizationUnit(
+                                0L, "合成校区", "甲".repeat(21), null, null, null))))
+        .isInstanceOf(IllegalArgumentException.class);
   }
 
   @Test
@@ -307,6 +386,14 @@ class OrganizationMaintenanceTest {
             post(c, "/api/session/login", "username=maintainer-fixture&password=" + PASSWORD, token)
                 .statusCode())
         .isEqualTo(204);
+    var openApi = get(c, "/v3/api-docs");
+    assertThat(openApi.statusCode()).isEqualTo(200);
+    Files.writeString(Path.of("target/openapi.json"), openApi.body());
+    var schema = json.readTree(openApi.body()).path("components").path("schemas");
+    for (var field : List.of("shortName", "address", "postalCode", "busRoutes")) {
+      assertThat(schema.path("OrganizationUnit").path("properties").has(field)).isTrue();
+      assertThat(schema.path("RenameOrganizationUnit").path("properties").has(field)).isTrue();
+    }
     token = json.readTree(get(c, "/api/session/csrf").body()).get("token").asText();
     var body = json.writeValueAsString(command());
     assertThat(post(c, "/api/organization/units", body, null).statusCode()).isEqualTo(403);

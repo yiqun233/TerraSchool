@@ -6,7 +6,15 @@ import type { components } from "../../shared/generated/api";
 
 type Unit = components["schemas"]["OrganizationUnit"];
 type Create = components["schemas"]["CreateOrganizationUnit"];
-type Draft = { schoolId: string; kind: string; name: string };
+type Draft = {
+  schoolId: string;
+  kind: string;
+  name: string;
+  shortName: string;
+  address: string;
+  postalCode: string;
+  busRoutes: string;
+};
 
 function traceReference(response: Response) {
   const trace = response.headers?.get("X-Trace-Id");
@@ -79,6 +87,10 @@ export function OrganizationEditor({
       schoolId: selected?.schoolId,
       kind: selected?.kind ?? "CAMPUS",
       name: selected?.name ?? "",
+      shortName: selected?.shortName ?? "",
+      address: selected?.address ?? "",
+      postalCode: selected?.postalCode ?? "",
+      busRoutes: selected?.busRoutes ?? "",
     });
     setOpen(true);
   }
@@ -96,7 +108,18 @@ export function OrganizationEditor({
         const result = await api.POST("/api/organization/units/{id}/rename", {
           params: { path: { id: snapshot.id } },
           headers,
-          body: { expectedVersion: snapshot.version, name: values.name },
+          body: {
+            expectedVersion: snapshot.version,
+            name: values.name,
+            ...(selected.kind === "CAMPUS"
+              ? {
+                  shortName: values.shortName,
+                  address: values.address,
+                  postalCode: values.postalCode,
+                  busRoutes: values.busRoutes,
+                }
+              : {}),
+          },
         });
         reference = traceReference(result.response);
         if (!result.response.ok)
@@ -149,10 +172,20 @@ export function OrganizationEditor({
   return (
     <>
       <Button onClick={begin} disabled={open || busy}>
-        {selected ? "改名" : "新增校区 / 部门"}
+        {selected
+          ? selected.kind === "CAMPUS"
+            ? "编辑校区资料"
+            : "改名"
+          : "新增校区 / 部门"}
       </Button>
       <Modal
-        title={selected ? "组织改名" : "新增校区 / 部门"}
+        title={
+          selected
+            ? selected.kind === "CAMPUS"
+              ? "校区资料"
+              : "组织改名"
+            : "新增校区 / 部门"
+        }
         open={open}
         onCancel={() => {
           if (!locked && !busy) setOpen(false);
@@ -220,6 +253,30 @@ export function OrganizationEditor({
           >
             <Input disabled={locked || busy} maxLength={100} />
           </Form.Item>
+          {selected?.kind === "CAMPUS" ? (
+            <>
+              <Form.Item
+                name="shortName"
+                label="校区简称"
+                rules={[{ max: 20 }]}
+              >
+                <Input maxLength={20} />
+              </Form.Item>
+              <Form.Item name="address" label="地址" rules={[{ max: 200 }]}>
+                <Input maxLength={200} />
+              </Form.Item>
+              <Form.Item name="postalCode" label="邮编" rules={[{ max: 50 }]}>
+                <Input maxLength={50} />
+              </Form.Item>
+              <Form.Item
+                name="busRoutes"
+                label="公交线路"
+                rules={[{ max: 300 }]}
+              >
+                <Input maxLength={300} />
+              </Form.Item>
+            </>
+          ) : null}
         </Form>
       </Modal>
     </>
