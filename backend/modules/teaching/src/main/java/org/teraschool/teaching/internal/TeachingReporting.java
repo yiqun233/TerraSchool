@@ -22,8 +22,7 @@ import org.teraschool.teaching.api.*;
  * 教务只读报表：教师本人课表与班级工作台、资源日报、学员消费、班级消费、考勤统计、综合情况。
  *
  * <p>与 TeachingService 分开，是因为这些方法只读、不写业务状态。失败语义也有限：可读学校为空时
- * 返回空集（例如教师课表），其余情况与写路径一样按权限拒绝，不做静默降级。共享的行读取与格式化
- * 统一走 {@link TeachingLookups}。
+ * 返回空集（例如教师课表），其余情况与写路径一样按权限拒绝，不做静默降级。共享的行读取与格式化 统一走 {@link TeachingLookups}。
  */
 @Component
 class TeachingReporting {
