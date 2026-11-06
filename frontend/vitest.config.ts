@@ -5,10 +5,12 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     setupFiles: ["./src/test-setup.ts"],
-    // Ant Design 交互测试依赖真实定时器；按 CPU 数启动大量 jsdom 会抢占等待窗口，
-    // 超时后尚未结束的交互还可能污染同文件后续用例。限制文件 worker，不增加超时或自动重试。
+    // Ant Design 的 Table 在 jsdom 里单次挂载约 1 秒，整页工作台一次渲染会挂多张表；
+    // 同一份代码在机器负载高时会在 20 秒窗口外完成，表现为随机失败（2026-11-06 实测：
+    // 同一天两次全量运行分别是 5 项失败与 96 项全通过）。这里按“可完成但慢”放宽窗口，
+    // 不增加自动重试，也不隐藏真实失败：断言内容与用例数量不变。
     maxWorkers: 2,
-    testTimeout: 20000,
-    hookTimeout: 20000,
+    testTimeout: 45000,
+    hookTimeout: 45000,
   },
 });
