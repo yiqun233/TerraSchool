@@ -1,7 +1,9 @@
+-- 请求类型必须包含此前已支持的全部取值：V58 的 CLASS_WITHDRAWAL、本版新增的 CLASS_CAPACITY。
+-- 遗漏任意一个，含该类型历史行的库都会在 ADD CONSTRAINT 处失败并中断升级。
 ALTER TABLE teaching.creation_request DROP CONSTRAINT creation_request_kind_check;
 ALTER TABLE teaching.creation_request
   ADD CONSTRAINT creation_request_kind_check
-  CHECK (kind IN ('CLASS','LESSON','CLASS_TRANSFER','CLASS_CAPACITY'));
+  CHECK (kind IN ('CLASS','LESSON','CLASS_TRANSFER','CLASS_WITHDRAWAL','CLASS_CAPACITY'));
 
 ALTER TABLE audit.teaching_event DROP CONSTRAINT teaching_event_action_check;
 ALTER TABLE audit.teaching_event
