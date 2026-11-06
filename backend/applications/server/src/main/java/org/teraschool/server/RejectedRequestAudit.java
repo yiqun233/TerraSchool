@@ -27,6 +27,9 @@ class RejectedRequestAudit {
                 || request.getServletPath().matches("/api/admissions/customers/[^/]+/followups")
                 || request.getServletPath().matches("/api/admissions/customers/[^/]+/merges")
                 || request.getServletPath().matches("/api/admissions/customers/[^/]+/student-link")
+                || request
+                    .getServletPath()
+                    .matches("/api/organization/schools/[^/]+/dictionaries/[^/]+/items")
                 || request.getServletPath().equals("/api/admissions/customers/pool")))) return;
     String path = request.getServletPath();
     UUID resource = null;
@@ -520,6 +523,24 @@ class RejectedRequestAudit {
       }
     } else if (path.equals("/api/organization/schools")) {
       action = FailureAudit.Action.ORGANIZATION_SCHOOL_CREATE;
+    } else if (path.matches("/api/organization/schools/[^/]+/dictionaries/[^/]+/items")) {
+      String[] parts = path.split("/");
+      try {
+        resource = UUID.fromString(parts[4]);
+      } catch (IllegalArgumentException invalid) {
+        /* 不记录原路径。 */
+      }
+      action =
+          request.getMethod().equals("GET")
+              ? FailureAudit.Action.ORGANIZATION_DICTIONARY_READ
+              : FailureAudit.Action.ORGANIZATION_DICTIONARY_CREATE;
+    } else if (path.matches("/api/organization/dictionary-items/[^/]+/update")) {
+      action = FailureAudit.Action.ORGANIZATION_DICTIONARY_UPDATE;
+      try {
+        resource = UUID.fromString(path.split("/")[4]);
+      } catch (IllegalArgumentException invalid) {
+        /* 不记录原路径。 */
+      }
     } else if (path.matches(
         "/api/organization/resources/(EMPLOYEE|TEACHER|ROOM)(/[^/]+/update)?")) {
       String tail = path.substring("/api/organization/resources/".length());

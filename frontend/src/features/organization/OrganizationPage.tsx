@@ -20,6 +20,7 @@ import { PeriodManager } from "../finance/PeriodManager";
 import { MigrationConsole } from "../migration/MigrationConsole";
 import { ChannelWorkspace } from "../admissions/ChannelWorkspace";
 import { CustomerWorkspace } from "../admissions/CustomerWorkspace";
+import { DictionaryWorkspace } from "./DictionaryWorkspace";
 import type { components } from "../../shared/generated/api";
 const labels: Record<string, string> = {
   SCHOOL: "学校",
@@ -70,6 +71,7 @@ function Workspace({ reset }: { reset: () => void }) {
     | "MIGRATION"
     | "CHANNELS"
     | "CUSTOMERS"
+    | "DICTIONARIES"
   >("ORGANIZATION");
   const [page, setPage] = useState(0);
   const [error, setError] = useState("");
@@ -213,6 +215,14 @@ function Workspace({ reset }: { reset: () => void }) {
             >
               数据迁移
             </Button>
+            {me.data?.canMaintainOrganizations ? (
+              <Button
+                type={section === "DICTIONARIES" ? "primary" : "text"}
+                onClick={() => setSection("DICTIONARIES")}
+              >
+                统一字典
+              </Button>
+            ) : null}
           </Space>
         </nav>
       </aside>
@@ -236,6 +246,7 @@ function Workspace({ reset }: { reset: () => void }) {
                   MIGRATION: "数据迁移",
                   CHANNELS: "招生渠道",
                   CUSTOMERS: "本人客户",
+                  DICTIONARIES: "统一字典",
                 }[section]
               }
             </Typography.Title>
@@ -311,6 +322,10 @@ function Workspace({ reset }: { reset: () => void }) {
           <PeriodManager onUnauthorized={() => void signOut()} />
         ) : section === "MIGRATION" ? (
           <MigrationConsole onUnauthorized={() => void signOut()} />
+        ) : section === "DICTIONARIES" ? (
+          <DictionaryWorkspace
+            identityKey={`${me.data.tenantId}:${me.data.accountId}`}
+          />
         ) : section !== "ORGANIZATION" ? (
           <ResourceWorkspace key={section} kind={section} />
         ) : !me.data.canReadOrganizations ? (

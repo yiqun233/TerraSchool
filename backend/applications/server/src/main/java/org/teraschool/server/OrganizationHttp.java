@@ -11,12 +11,17 @@ class OrganizationHttp {
   private final OrganizationQueries queries;
   private final CurrentActor actors;
   private final OrganizationCommands commands;
+  private final DataDictionaries dictionaries;
 
   OrganizationHttp(
-      OrganizationQueries queries, CurrentActor actors, OrganizationCommands commands) {
+      OrganizationQueries queries,
+      CurrentActor actors,
+      OrganizationCommands commands,
+      DataDictionaries dictionaries) {
     this.queries = queries;
     this.actors = actors;
     this.commands = commands;
+    this.dictionaries = dictionaries;
   }
 
   public record CsrfView(String token, String headerName, String parameterName) {}
@@ -64,5 +69,32 @@ class OrganizationHttp {
   OrganizationPage list(
       @RequestParam(defaultValue = "0") int page, @RequestParam(defaultValue = "20") int size) {
     return queries.list(page, size);
+  }
+
+  @GetMapping("/api/organization/schools/{schoolId}/dictionaries/{dictionaryCode}/items")
+  java.util.List<DataDictionaries.Item> dictionaryItems(
+      @PathVariable java.util.UUID schoolId,
+      @PathVariable String dictionaryCode,
+      @RequestParam(defaultValue = "false") boolean includeInactive) {
+    return dictionaries.list(schoolId, dictionaryCode, includeInactive);
+  }
+
+  @PostMapping(
+      value = "/api/organization/schools/{schoolId}/dictionaries/{dictionaryCode}/items",
+      consumes = "application/json")
+  @ResponseStatus(org.springframework.http.HttpStatus.CREATED)
+  DataDictionaries.Item createDictionaryItem(
+      @PathVariable java.util.UUID schoolId,
+      @PathVariable String dictionaryCode,
+      @RequestBody DataDictionaries.CreateItem command) {
+    return dictionaries.create(schoolId, dictionaryCode, command);
+  }
+
+  @PostMapping(
+      value = "/api/organization/dictionary-items/{id}/update",
+      consumes = "application/json")
+  DataDictionaries.Item updateDictionaryItem(
+      @PathVariable java.util.UUID id, @RequestBody DataDictionaries.UpdateItem command) {
+    return dictionaries.update(id, command);
   }
 }

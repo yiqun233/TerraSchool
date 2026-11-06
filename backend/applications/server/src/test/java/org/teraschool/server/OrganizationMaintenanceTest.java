@@ -33,6 +33,7 @@ class OrganizationMaintenanceTest {
   static final String PASSWORD = UUID.randomUUID().toString();
   @LocalServerPort int port;
   @Autowired OrganizationCommands commands;
+  @Autowired DataDictionaries dictionaries;
   @Autowired OrganizationQueries queries;
   @Autowired org.jooq.DSLContext sql;
   @Autowired TenantTransactions tx;
@@ -184,6 +185,115 @@ class OrganizationMaintenanceTest {
                             new RenameOrganizationUnit(0L, "过期", "新简称", null, null, null))))
         .isInstanceOf(OrganizationConflict.class)
         .hasMessage("VERSION_CONFLICT");
+  }
+
+  @Test
+  void schoolDictionaryCreateRetryUpdateAndSoftDisableAreAudited() throws Exception {
+    var category = testDictionaryCode();
+    var create = new DataDictionaries.CreateItem(UUID.randomUUID(), "PENDING", "待联系", 10);
+    var item = asActor(() -> dictionaries.create(SCHOOL, category, create));
+    assertThat(asActor(() -> dictionaries.create(SCHOOL, category, create))).isEqualTo(item);
+    assertThat(asActor(() -> dictionaries.list(SCHOOL, category, false))).containsExactly(item);
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    () ->
+                        dictionaries.create(
+                            SCHOOL,
+                            category,
+                            new DataDictionaries.CreateItem(
+                                create.requestId(), "PENDING", "已联系", 10))))
+        .isInstanceOf(OrganizationConflict.class)
+        .hasMessage("IDEMPOTENCY_MISMATCH");
+    var updated =
+        asActor(
+            () ->
+                dictionaries.update(
+                    item.id(), new DataDictionaries.UpdateItem(0L, "暂不跟进", 20, false)));
+    assertThat(updated.version()).isEqualTo(1);
+    assertThat(updated.active()).isFalse();
+    assertThat(asActor(() -> dictionaries.list(SCHOOL, category, false))).isEmpty();
+    assertThat(asActor(() -> dictionaries.list(SCHOOL, category, true))).containsExactly(updated);
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    () ->
+                        dictionaries.update(
+                            item.id(), new DataDictionaries.UpdateItem(0L, "过期写入", 0, true))))
+        .isInstanceOf(OrganizationConflict.class)
+        .hasMessage("VERSION_CONFLICT");
+    assertThat(count("organization.dictionary_item", item.id())).isEqualTo(1);
+    assertThat(count("audit.business_event", item.id())).isEqualTo(2);
+  }
+
+  @Test
+  void schoolDictionaryIsScopedAndStableCodesCannotBeReused() {
+    var category = testDictionaryCode();
+    var item =
+        asActor(
+            () ->
+                dictionaries.create(
+                    SCHOOL,
+                    category,
+                    new DataDictionaries.CreateItem(UUID.randomUUID(), "NEW", "新客户", 0)));
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    () ->
+                        dictionaries.create(
+                            SCHOOL,
+                            category,
+                            new DataDictionaries.CreateItem(
+                                UUID.randomUUID(), "NEW", "另一个新客户", 1))))
+        .isInstanceOf(OrganizationConflict.class)
+        .hasMessage("DICTIONARY_ITEM_EXISTS");
+    assertThat(asActor(() -> dictionaries.list(OTHER, category, true))).isEmpty();
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    () ->
+                        dictionaries.create(
+                            OTHER,
+                            category,
+                            new DataDictionaries.CreateItem(UUID.randomUUID(), "NEW", "跨校新增", 0))))
+        .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
+    assertThat(item.schoolId()).isEqualTo(SCHOOL);
+  }
+
+  private String testDictionaryCode() {
+    return "TEST_" + UUID.randomUUID().toString().replace("-", "").toUpperCase(Locale.ROOT);
+  }
+
+  @Test
+  void schoolDictionaryRejectsMalformedCodesAndLabels() {
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    () ->
+                        dictionaries.create(
+                            SCHOOL,
+                            "invalid-category",
+                            new DataDictionaries.CreateItem(UUID.randomUUID(), "VALID", "标签", 0))))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    () ->
+                        dictionaries.create(
+                            SCHOOL,
+                            "VALID_CATEGORY",
+                            new DataDictionaries.CreateItem(
+                                UUID.randomUUID(), "INVALID-CODE", "标签", 0))))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    () ->
+                        dictionaries.create(
+                            SCHOOL,
+                            "VALID_CATEGORY",
+                            new DataDictionaries.CreateItem(UUID.randomUUID(), "VALID", "\n", 0))))
+        .isInstanceOf(IllegalArgumentException.class);
   }
 
   @Test
@@ -396,7 +506,25 @@ class OrganizationMaintenanceTest {
     }
     assertThat(schema.path("CreateClass").path("properties").has("capacity")).isTrue();
     assertThat(schema.path("ClassView").path("properties").has("capacity")).isTrue();
+    assertThat(
+            json.readTree(openApi.body())
+                .path("paths")
+                .has("/api/organization/schools/{schoolId}/dictionaries/{dictionaryCode}/items"))
+        .isTrue();
     token = json.readTree(get(c, "/api/session/csrf").body()).get("token").asText();
+    assertThat(
+            get(c, "/api/organization/schools/not-a-uuid/dictionaries/CUSTOMER_STATUS/items")
+                .statusCode())
+        .isEqualTo(400);
+    assertThat(
+            tx.execute(
+                TENANT,
+                () ->
+                    sql.fetchOne(
+                            "select count(*) from audit.operation_failure where action='ORGANIZATION_DICTIONARY_READ' and tenant_id=? and code='INVALID_INPUT'",
+                            TENANT)
+                        .get(0, Long.class)))
+        .isEqualTo(1);
     var body = json.writeValueAsString(command());
     assertThat(post(c, "/api/organization/units", body, null).statusCode()).isEqualTo(403);
     var response = post(c, "/api/organization/units", body, token);
