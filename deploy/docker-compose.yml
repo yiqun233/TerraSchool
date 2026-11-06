@@ -1,0 +1,126 @@
+# 最小可运行交付链路：PostgreSQL → 角色初始化 → 迁移 → 后端 → Nginx 静态站点。
+#
+# 这不是生产发布方案：HTTPS/证书、密钥文件与轮换、备份恢复、升级回退
+# 仍未验证（见 REV-016 / F35 / REV-017）。本文件用于本地与内网试用，
+# 也是这些能力后续落地的起点。
+#
+# 前置构建物（镜像只装运行时，见 deploy/README.md）：
+#   backend/applications/server/target/server-0.1.0-SNAPSHOT.jar
+#   frontend/dist
+#
+# 顺序：迁移是显式步骤，不隐含在启动里，避免“起来了但库没迁移”：
+#   docker compose -f deploy/docker-compose.yml --profile migrate run --rm migrate
+#   docker compose -f deploy/docker-compose.yml up -d --build
+name: teraschool
+
+services:
+  db:
+    # 基础镜像统一走变量，便于在无法直连 Docker Hub 的环境切到可用镜像源。
+    image: ${TS_IMAGE_POSTGRES:-postgres:18}
+    environment:
+      POSTGRES_DB: ${TS_DATABASE_NAME:-teraschool}
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${TS_ADMIN_PASSWORD:?请在 deploy/.env 设置 TS_ADMIN_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d ${TS_DATABASE_NAME:-teraschool}"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    # 只绑定回环：即使给宿主机迁移使用，也不把数据库暴露到网络。
+    ports:
+      - "127.0.0.1:${TS_DB_PORT:-55432}:5432"
+    volumes:
+      # PostgreSQL 18 起官方镜像改为把数据放在 /var/lib/postgresql 下，
+      # 挂载点仍写 .../data 会导致容器反复重启。
+      - db-data:/var/lib/postgresql
+    restart: unless-stopped
+
+  db-init:
+    image: ${TS_IMAGE_POSTGRES:-postgres:18}
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      TS_ADMIN_PASSWORD: ${TS_ADMIN_PASSWORD:?}
+      TS_APP_PASSWORD: ${TS_APP_PASSWORD:?}
+      TS_IDENTITY_PASSWORD: ${TS_IDENTITY_PASSWORD:?}
+      TS_SESSION_PASSWORD: ${TS_SESSION_PASSWORD:?}
+      TS_AUDIT_PASSWORD: ${TS_AUDIT_PASSWORD:?}
+      TS_SCHEDULER_PASSWORD: ${TS_SCHEDULER_PASSWORD:?}
+      TS_MIGRATOR_PASSWORD: ${TS_MIGRATOR_PASSWORD:?}
+      TS_DATABASE_NAME: ${TS_DATABASE_NAME:-teraschool}
+    volumes:
+      - ./init-db.sql:/deploy/init-db.sql:ro
+      - ./init-db.sh:/deploy/init-db.sh:ro
+    entrypoint: ["sh", "/deploy/init-db.sh"]
+    restart: "no"
+
+  # 只在实际执行迁移时启动（--profile migrate）。迁移用独立角色，
+  # 业务角色不具备建表权限。镜像版本应与宿主机/CI 的 Maven Flyway 大版本保持一致
+  # （backend/pom.xml 的 flyway.version），否则同一批迁移可能行为不同。
+  migrate:
+    image: ${TS_IMAGE_FLYWAY:-flyway/flyway:12}
+    profiles: ["migrate"]
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    volumes:
+      - ../backend/applications/server/src/main/resources/db/migration:/flyway/sql:ro
+    command: >
+      -url=jdbc:postgresql://db:5432/${TS_DATABASE_NAME:-teraschool}
+      -user=ts_migrator
+      -password=${TS_MIGRATOR_PASSWORD:?}
+      -connectRetries=60
+      -locations=filesystem:/flyway/sql
+      migrate
+    restart: "no"
+
+  backend:
+    build:
+      context: ..
+      dockerfile: deploy/backend.Dockerfile
+      args:
+        JAVA_RUNTIME_IMAGE: ${TS_IMAGE_JAVA_RUNTIME:-eclipse-temurin:25-jre}
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    environment:
+      TERASCHOOL_DATABASE_URL: jdbc:postgresql://db:5432/${TS_DATABASE_NAME:-teraschool}
+      TERASCHOOL_DATABASE_APP_USERNAME: ts_app
+      TERASCHOOL_DATABASE_APP_PASSWORD: ${TS_APP_PASSWORD:?}
+      TERASCHOOL_DATABASE_IDENTITY_USERNAME: ts_identity
+      TERASCHOOL_DATABASE_IDENTITY_PASSWORD: ${TS_IDENTITY_PASSWORD:?}
+      TERASCHOOL_DATABASE_SESSION_USERNAME: ts_session
+      TERASCHOOL_DATABASE_SESSION_PASSWORD: ${TS_SESSION_PASSWORD:?}
+      TERASCHOOL_DATABASE_AUDIT_USERNAME: ts_audit
+      TERASCHOOL_DATABASE_AUDIT_PASSWORD: ${TS_AUDIT_PASSWORD:?}
+      TERASCHOOL_DATABASE_SCHEDULER_USERNAME: ts_scheduler
+      TERASCHOOL_DATABASE_SCHEDULER_PASSWORD: ${TS_SCHEDULER_PASSWORD:?}
+      # 容器内必须监听全部网卡；默认配置只监听回环。
+      SERVER_ADDRESS: 0.0.0.0
+      # 本地/内网没有 TLS 时无法要求 secure Cookie；接入 HTTPS 后必须改回 true。
+      SERVER_SERVLET_SESSION_COOKIE_SECURE: ${TS_COOKIE_SECURE:-false}
+    healthcheck:
+      # 镜像里 /bin/sh 是 dash，没有 /dev/tcp；显式用 bash 做端口探测，
+      # 避免为了一次探测在生产镜像里装 curl。
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8081"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/web.Dockerfile
+      args:
+        NGINX_IMAGE: ${TS_IMAGE_NGINX:-nginx:1.29-alpine}
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${TS_HTTP_PORT:-8088}:80"
+    restart: unless-stopped
+
+volumes:
+  db-data:

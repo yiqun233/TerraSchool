@@ -1,0 +1,21 @@
+# 构建上下文是仓库根目录（两个镜像都要同时访问 backend 产物与 frontend/dist）。
+# 这里只保留镜像真正需要的内容，避免把本地缓存、隔离副本和依赖树送进 daemon。
+.git
+.gitlab-ci.yml
+.github
+.idea
+.local
+.pnpm-store
+参考资料
+doc
+tools
+.env
+deploy/.env
+**/node_modules
+backend/**/target/classes
+backend/**/target/test-classes
+backend/**/target/generated-sources
+backend/**/target/generated-test-sources
+backend/**/target/surefire-reports
+backend/**/target/maven-status
+backend/**/target/*.jar.original

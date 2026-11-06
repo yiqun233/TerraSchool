@@ -1,0 +1,12 @@
+# 只对“行尾会改变行为”的文件声明行尾，避免给整个仓库引入一次无意义的换行改动。
+#
+# - 会被 Linux 容器直接执行的脚本必须是 LF，否则挂载进容器后 sh 会因 CRLF 报错。
+# - 迁移 SQL 与 Compose/YAML 同理（Flyway 对 CRLF 敏感，报错信息会指向缺字符）。
+# - Windows 上的 .cmd/.ps1 保留 CRLF。
+*.sh text eol=lf
+*.sql text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+Dockerfile* text eol=lf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
