@@ -318,6 +318,14 @@ class StudentExportTest {
   }
 
   @Test
+  void pdfHtmlEscapesCellContentAndRepeatsTableHeaders() {
+    String html = ExportPdf.html("标题,备注\n课程,<script>alert('x')</script>\n");
+    assertThat(html).contains("<thead>").contains("<th>标题</th>");
+    assertThat(html).contains("&lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt;");
+    assertThat(html).doesNotContain("<script>");
+  }
+
+  @Test
   void exportRequestIdentityIncludesDateFiltersAndRejectsInvalidRanges() {
     var requestId = UUID.randomUUID();
     asActor(

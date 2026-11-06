@@ -117,3 +117,38 @@ it("creates an XLSX task with an XLSX-specific request fingerprint", async () =>
   )?.[1] as RequestInit;
   expect(JSON.parse(String(options.body))).toMatchObject({ format: "XLSX" });
 });
+
+it("creates a PDF task with a PDF-specific request fingerprint", async () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation(async (input, init) => {
+      if (String(input).startsWith("/api/exports?")) return Response.json([]);
+      const body = JSON.parse(String(init?.body)) as { format: string };
+      return Response.json(
+        {
+          id: "export-pdf",
+          schoolId: "school-1",
+          exportType: "LESSONS",
+          format: body.format,
+          status: "PENDING",
+          attemptCount: 0,
+        },
+        { status: 202 },
+      );
+    });
+  vi.stubGlobal("fetch", fetchMock);
+  const user = userEvent.setup();
+
+  render(
+    <PersistentCsvExportButton exportType="LESSONS" schoolId="school-1" />,
+  );
+  await user.click(
+    screen.getByRole("button", { name: "创建课次 PDF 导出任务" }),
+  );
+
+  expect(await screen.findByText("课次 PDF 导出：PENDING")).toBeTruthy();
+  const options = fetchMock.mock.calls.find(
+    (call) => call[0] === "/api/exports",
+  )?.[1] as RequestInit;
+  expect(JSON.parse(String(options.body))).toMatchObject({ format: "PDF" });
+});

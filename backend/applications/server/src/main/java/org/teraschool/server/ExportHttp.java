@@ -47,13 +47,19 @@ class ExportHttp {
   ResponseEntity<byte[]> download(@PathVariable UUID id) {
     var task = tasks.get(id);
     boolean xlsx = "XLSX".equals(task.format());
+    boolean pdf = "PDF".equals(task.format());
     var filename =
-        task.exportType().toLowerCase(Locale.ROOT) + "-" + id + (xlsx ? ".xlsx" : ".csv");
+        task.exportType().toLowerCase(Locale.ROOT)
+            + "-"
+            + id
+            + (xlsx ? ".xlsx" : pdf ? ".pdf" : ".csv");
     var contentType =
-        xlsx
-            ? MediaType.parseMediaType(
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-            : MediaType.parseMediaType("text/csv; charset=UTF-8");
+        pdf
+            ? MediaType.APPLICATION_PDF
+            : xlsx
+                ? MediaType.parseMediaType(
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                : MediaType.parseMediaType("text/csv; charset=UTF-8");
     return ResponseEntity.ok()
         .contentType(contentType)
         .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")

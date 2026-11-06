@@ -14,7 +14,7 @@ final class ExportWorkbook {
     try (var workbook = new XSSFWorkbook();
         var output = new ByteArrayOutputStream()) {
       var sheet = workbook.createSheet("导出数据");
-      var rows = parse(csv);
+      var rows = parseRows(csv);
       for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
         var row = sheet.createRow(rowIndex);
         var values = rows.get(rowIndex);
@@ -31,7 +31,7 @@ final class ExportWorkbook {
   }
 
   static int dataRowCount(String csv) {
-    return Math.max(0, parse(csv).size() - 1);
+    return Math.max(0, parseRows(csv).size() - 1);
   }
 
   private static String xmlSafe(String value) {
@@ -49,7 +49,7 @@ final class ExportWorkbook {
         .toString();
   }
 
-  private static List<List<String>> parse(String csv) {
+  static List<List<String>> parseRows(String csv) {
     var rows = new ArrayList<List<String>>();
     var row = new ArrayList<String>();
     var cell = new StringBuilder();

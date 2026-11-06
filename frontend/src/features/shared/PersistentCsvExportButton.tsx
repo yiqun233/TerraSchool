@@ -3,7 +3,7 @@ import { Alert, Button, Space, Typography } from "antd";
 import { csrf } from "../../shared/http";
 
 type ExportType = "ENROLLMENT" | "RECEIPTS" | "LESSONS";
-type ExportFormat = "CSV" | "XLSX";
+type ExportFormat = "CSV" | "XLSX" | "PDF";
 type ExportTask = {
   id: string;
   schoolId: string;
@@ -27,7 +27,7 @@ const LABEL: Record<ExportType, string> = {
   LESSONS: "课次",
 };
 
-/** 可轮询、取消和重试的服务器端 CSV/XLSX 导出任务。 */
+/** 可轮询、取消和重试的服务器端 CSV/XLSX/PDF 导出任务。 */
 export function PersistentCsvExportButton({
   exportType,
   schoolId,
@@ -174,6 +174,9 @@ export function PersistentCsvExportButton({
       </Button>
       <Button onClick={() => void start("XLSX")} disabled={!schoolId}>
         创建{LABEL[exportType]} XLSX 导出任务
+      </Button>
+      <Button onClick={() => void start("PDF")} disabled={!schoolId}>
+        创建{LABEL[exportType]} PDF 导出任务
       </Button>
       {task ? (
         <>

@@ -362,9 +362,11 @@ class StudentExportTaskService {
       }
       rowCount = ExportWorkbook.dataRowCount(csv);
       byte[] content =
-          "XLSX".equals(task.format())
-              ? ExportWorkbook.fromCsv(csv)
-              : csv.getBytes(StandardCharsets.UTF_8);
+          switch (task.format()) {
+            case "XLSX" -> ExportWorkbook.fromCsv(csv);
+            case "PDF" -> ExportPdf.fromCsv(csv);
+            default -> csv.getBytes(StandardCharsets.UTF_8);
+          };
       tx.execute(
           task.tenantId(),
           () -> {
@@ -458,7 +460,8 @@ class StudentExportTaskService {
   private static String normalizeFormat(String format) {
     if (format == null || format.isBlank()) return "CSV";
     String value = format.trim().toUpperCase(Locale.ROOT);
-    if (!Set.of("CSV", "XLSX").contains(value)) throw new IllegalArgumentException("不支持的导出格式");
+    if (!Set.of("CSV", "XLSX", "PDF").contains(value))
+      throw new IllegalArgumentException("不支持的导出格式");
     return value;
   }
 
