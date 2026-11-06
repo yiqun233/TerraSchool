@@ -40,6 +40,7 @@ type TeacherWorkbenchLesson = NonNullable<
 type DailyResourceSchedule = components["schemas"]["DailyResourceSchedule"];
 type StudentConsumptionPage = components["schemas"]["StudentConsumptionPage"];
 type AttendanceReport = components["schemas"]["AttendanceReport"];
+type TeachingOverviewReport = components["schemas"]["TeachingOverviewReport"];
 
 function localDate(offsetDays: number) {
   const date = new Date();
@@ -98,6 +99,7 @@ export function TeachingWorkspace({
   const [resourceDay, setResourceDay] = useState(() => localDate(0));
   const [attendanceFrom, setAttendanceFrom] = useState(() => localDate(-30));
   const [attendanceTo, setAttendanceTo] = useState(() => localDate(0));
+  const [overviewOpen, setOverviewOpen] = useState(false);
   const [resourcePage, setResourcePage] = useState(1);
   const [consumptionPage, setConsumptionPage] = useState(1);
   const cancelRequests = useRef(
@@ -338,6 +340,36 @@ export function TeachingWorkspace({
         throw new Error("登录已失效，请重新登录");
       }
       if (!response.ok || !data) throw new Error("无法读取考勤统计");
+      return data;
+    },
+  });
+  const teachingOverview = useQuery({
+    queryKey: [
+      "teaching-overview-report",
+      current,
+      attendanceFrom,
+      attendanceTo,
+    ],
+    enabled: overviewOpen && !!current && !!capabilities.data?.canRead,
+    queryFn: async ({ signal }): Promise<TeachingOverviewReport> => {
+      const { data, response } = await api.GET(
+        "/api/teaching/reports/overview",
+        {
+          params: {
+            query: {
+              schoolId: current!,
+              from: attendanceFrom,
+              to: attendanceTo,
+            },
+          },
+          signal,
+        },
+      );
+      if (response.status === 401) {
+        onUnauthorized();
+        throw new Error("登录已失效，请重新登录");
+      }
+      if (!response.ok || !data) throw new Error("无法读取教务综合情况");
       return data;
     },
   });
@@ -623,6 +655,12 @@ export function TeachingWorkspace({
           </>
         ) : null}
         <Button onClick={() => setSettingsOpen(true)}>排课设置</Button>
+        <Button
+          onClick={() => setOverviewOpen(true)}
+          loading={teachingOverview.isFetching}
+        >
+          {overviewOpen ? "刷新教务汇总" : "加载教务汇总"}
+        </Button>
         <Button
           onClick={() => void classes.refetch()}
           loading={classes.isFetching}
@@ -916,6 +954,92 @@ export function TeachingWorkspace({
           locale={{ emptyText: "该日没有已排课次" }}
         />
       </Card>
+      {overviewOpen ? (
+        <Card
+          title="教务综合情况（候选口径）"
+          size="small"
+          style={{ marginBottom: 12 }}
+        >
+          <Space wrap style={{ marginBottom: 12 }}>
+            <Typography.Text type="secondary">
+              班级数为当前状态快照；课次与考勤按课次日期统计。候选数据待 Q62
+              确认。
+            </Typography.Text>
+          </Space>
+          {teachingOverview.error ? (
+            <Alert
+              type="error"
+              title={teachingOverview.error.message}
+              showIcon
+            />
+          ) : null}
+          {teachingOverview.data ? (
+            <>
+              <Descriptions
+                title="当前班级状态快照"
+                column={3}
+                size="small"
+                bordered
+              >
+                <Descriptions.Item label="活动班级">
+                  {teachingOverview.data.activeClasses}
+                </Descriptions.Item>
+                <Descriptions.Item label="已结班">
+                  {teachingOverview.data.closedClasses}
+                </Descriptions.Item>
+                <Descriptions.Item label="已取消">
+                  {teachingOverview.data.cancelledClasses}
+                </Descriptions.Item>
+              </Descriptions>
+              <Descriptions
+                title={`课次状态（${teachingOverview.data.from} 至 ${teachingOverview.data.to}）`}
+                column={5}
+                size="small"
+                bordered
+                style={{ marginTop: 12 }}
+              >
+                <Descriptions.Item label="课次总数">
+                  {teachingOverview.data.lessons}
+                </Descriptions.Item>
+                <Descriptions.Item label="草稿">
+                  {teachingOverview.data.draftLessons}
+                </Descriptions.Item>
+                <Descriptions.Item label="已发布">
+                  {teachingOverview.data.publishedLessons}
+                </Descriptions.Item>
+                <Descriptions.Item label="已确认">
+                  {teachingOverview.data.confirmedLessons}
+                </Descriptions.Item>
+                <Descriptions.Item label="已关闭">
+                  {teachingOverview.data.closedLessons}
+                </Descriptions.Item>
+              </Descriptions>
+              <Descriptions
+                title="已登记考勤状态"
+                column={5}
+                size="small"
+                bordered
+              >
+                <Descriptions.Item label="出勤">
+                  {teachingOverview.data.present}
+                </Descriptions.Item>
+                <Descriptions.Item label="部分缺勤">
+                  {teachingOverview.data.partial}
+                </Descriptions.Item>
+                <Descriptions.Item label="缺勤">
+                  {teachingOverview.data.absent}
+                </Descriptions.Item>
+                <Descriptions.Item label="请假">
+                  {teachingOverview.data.leave}
+                </Descriptions.Item>
+                <Descriptions.Item label="已登记">
+                  {teachingOverview.data.recorded}
+                </Descriptions.Item>
+              </Descriptions>
+            </>
+          ) : null}
+        </Card>
+      ) : null}
       <Card title="课次考勤统计" size="small" style={{ marginBottom: 12 }}>
         <Space wrap style={{ marginBottom: 12 }}>
           <Input

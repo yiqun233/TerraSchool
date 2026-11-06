@@ -761,6 +761,80 @@ it("按课次展示考勤状态统计", async () => {
   expect(screen.getByText("10")).toBeTruthy();
 });
 
+it("按学校展示教务综合候选汇总并明确期间口径", async () => {
+  get.mockImplementation(async (path: string) => {
+    if (path === "/api/teaching/capabilities")
+      return { response: { ok: true, status: 200 }, data: capabilities };
+    if (path === "/api/teaching/reports/overview")
+      return {
+        response: { ok: true, status: 200 },
+        data: {
+          from: "2026-10-01",
+          to: "2026-10-31",
+          activeClasses: 3,
+          closedClasses: 1,
+          cancelledClasses: 0,
+          lessons: 7,
+          draftLessons: 1,
+          publishedLessons: 2,
+          confirmedLessons: 1,
+          closedLessons: 3,
+          present: 8,
+          partial: 1,
+          absent: 2,
+          leave: 0,
+          recorded: 11,
+        },
+      };
+    if (path === "/api/teaching/classes")
+      return { response: { ok: true, status: 200 }, data: [] };
+    if (path === "/api/teaching/me/workbench")
+      return {
+        response: { ok: true, status: 200 },
+        data: { classes: [], lessons: [] },
+      };
+    if (path === "/api/teaching/reports/resource-daily-schedule")
+      return {
+        response: { ok: true, status: 200 },
+        data: {
+          day: "2026-10-31",
+          missingTeacher: 0,
+          missingRoom: 0,
+          lessons: [],
+        },
+      };
+    if (path === "/api/teaching/reports/student-consumption")
+      return { response: { ok: false, status: 403 } };
+    if (path === "/api/teaching/reports/attendance")
+      return {
+        response: { ok: true, status: 200 },
+        data: { from: "2026-10-01", to: "2026-10-31", lessons: [] },
+      };
+    throw new Error("unexpected path " + path);
+  });
+  renderWithClient(<TeachingWorkspace onUnauthorized={vi.fn()} />);
+
+  await userEvent
+    .setup({ pointerEventsCheck: 0 })
+    .click(await screen.findByRole("button", { name: "加载教务汇总" }));
+
+  expect(await screen.findByText("教务综合情况（候选口径）")).toBeTruthy();
+  expect(
+    await screen.findByText("课次状态（2026-10-01 至 2026-10-31）"),
+  ).toBeTruthy();
+  expect(
+    await screen.findByText("候选数据待 Q62 确认。", { exact: false }),
+  ).toBeTruthy();
+  expect(get).toHaveBeenCalledWith(
+    "/api/teaching/reports/overview",
+    expect.objectContaining({
+      params: expect.objectContaining({
+        query: expect.objectContaining({ schoolId: "school-1" }),
+      }),
+    }),
+  );
+});
+
 it("同课程转班提交已批准单据和稳定请求身份", async () => {
   vi.clearAllMocks();
   vi.spyOn(window, "prompt").mockReturnValue("同课程调整");

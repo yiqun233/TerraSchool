@@ -647,6 +647,30 @@ class TeachingAndConsumptionTest {
   }
 
   @Test
+  void teachingOverviewCountsCurrentClassesAndLessonDateFactsWithinSchoolScope() {
+    String from = "2026-11-01";
+    String to = "2026-11-30";
+    var before = asActor(READER, () -> queries.teachingOverviewReport(SCHOOL, from, to));
+    var createdClass = newClass("综合汇总班" + UUID.randomUUID().toString().substring(0, 6));
+    newLesson(createdClass.id(), "2026-11-20");
+
+    var report = asActor(READER, () -> queries.teachingOverviewReport(SCHOOL, from, to));
+    assertThat(report.from()).isEqualTo(from);
+    assertThat(report.to()).isEqualTo(to);
+    assertThat(report.activeClasses()).isEqualTo(before.activeClasses() + 1);
+    assertThat(report.lessons()).isEqualTo(before.lessons() + 1);
+    assertThat(report.draftLessons()).isEqualTo(before.draftLessons() + 1);
+    assertThat(report.recorded()).isEqualTo(0);
+    assertThatThrownBy(
+            () -> asActor(READER, () -> queries.teachingOverviewReport(OTHER_SCHOOL, from, to)))
+        .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
+    assertThatThrownBy(
+            () -> asActor(READER, () -> queries.teachingOverviewReport(SCHOOL, from, "2026-12-02")))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("31 天");
+  }
+
+  @Test
   void memberIsIdempotentPerClassAndAllowedAcrossClasses() throws Exception {
     var classView = newClass("成员班");
     var other = newClass("另一个班");

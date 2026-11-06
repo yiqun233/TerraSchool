@@ -110,6 +110,23 @@ public interface TeachingQueries {
     }
   }
 
+  record TeachingOverviewReport(
+      String from,
+      String to,
+      long activeClasses,
+      long closedClasses,
+      long cancelledClasses,
+      long lessons,
+      long draftLessons,
+      long publishedLessons,
+      long confirmedLessons,
+      long closedLessons,
+      long present,
+      long partial,
+      long absent,
+      long leave,
+      long recorded) {}
+
   TeachingCapabilities capabilities();
 
   /** 当前账号绑定的教师在明确日期区间内的课表及所授班级。 */
@@ -128,6 +145,9 @@ public interface TeachingQueries {
 
   /** 学校范围按课次和日期汇总已登记考勤；未登记课次的各状态计数为 0。 */
   AttendanceReport attendanceReport(UUID schoolId, String from, String to);
+
+  /** 当前班级状态快照及指定课次日期范围的课次/考勤状态候选汇总。 */
+  TeachingOverviewReport teachingOverviewReport(UUID schoolId, String from, String to);
 
   List<ClassView> classes(UUID schoolId);
 

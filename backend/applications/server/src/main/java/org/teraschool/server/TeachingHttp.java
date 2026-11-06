@@ -60,6 +60,12 @@ class TeachingHttp {
     return queries.attendanceReport(schoolId, from, to);
   }
 
+  @GetMapping("/api/teaching/reports/overview")
+  TeachingQueries.TeachingOverviewReport teachingOverviewReport(
+      @RequestParam UUID schoolId, @RequestParam String from, @RequestParam String to) {
+    return queries.teachingOverviewReport(schoolId, from, to);
+  }
+
   @GetMapping("/api/teaching/reports/class-consumption")
   TeachingQueries.ClassConsumptionReport classConsumptionReport(
       @RequestParam UUID schoolId, @RequestParam String from, @RequestParam String to) {

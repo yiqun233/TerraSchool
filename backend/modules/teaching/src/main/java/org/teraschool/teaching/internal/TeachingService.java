@@ -507,6 +507,72 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
   }
 
   @Override
+  public TeachingOverviewReport teachingOverviewReport(
+      UUID schoolId, String fromText, String toText) {
+    if (schoolId == null) throw new IllegalArgumentException("需要学校");
+    var from = workbenchDate(fromText);
+    var to = workbenchDate(toText);
+    if (to.isBefore(from) || to.isAfter(from.plusDays(30)))
+      throw new IllegalArgumentException("教务综合情况日期范围须为 1 至 31 天");
+    var scope = actors.requireResourceScope("TEACHING");
+    requireReadable(scope, schoolId);
+    return tx.execute(
+        scope.tenantId(),
+        () -> {
+          var verified = actors.requireResourceScopeInTransaction("TEACHING");
+          requireReadable(verified, schoolId);
+          var classes =
+              sql.fetchOne(
+                  "select count(*) filter (where status='ACTIVE') as active,"
+                      + "count(*) filter (where status='CLOSED') as closed,"
+                      + "count(*) filter (where status='CANCELLED') as cancelled "
+                      + "from teaching.class where school_id=?",
+                  schoolId);
+          var lessons =
+              sql.fetchOne(
+                  "select count(l.id) as total,"
+                      + "count(l.id) filter (where l.status='DRAFT') as draft,"
+                      + "count(l.id) filter (where l.status='PUBLISHED') as published,"
+                      + "count(l.id) filter (where l.status='CONFIRMED') as confirmed,"
+                      + "count(l.id) filter (where l.status='CLOSED') as closed "
+                      + "from teaching.lesson l join teaching.class c on c.id=l.class_id "
+                      + "where c.school_id=? and l.lesson_date between ? and ?",
+                  schoolId,
+                  from,
+                  to);
+          var attendance =
+              sql.fetchOne(
+                  "select count(a.enrollment_id) filter (where a.status='PRESENT') as present,"
+                      + "count(a.enrollment_id) filter (where a.status='PARTIAL') as partial,"
+                      + "count(a.enrollment_id) filter (where a.status='ABSENT') as absent,"
+                      + "count(a.enrollment_id) filter (where a.status='LEAVE') as leave,"
+                      + "count(a.enrollment_id) as recorded "
+                      + "from teaching.attendance a join teaching.lesson l on l.id=a.lesson_id "
+                      + "join teaching.class c on c.id=l.class_id "
+                      + "where c.school_id=? and l.lesson_date between ? and ?",
+                  schoolId,
+                  from,
+                  to);
+          return new TeachingOverviewReport(
+              from.toString(),
+              to.toString(),
+              classes.get("active", Long.class),
+              classes.get("closed", Long.class),
+              classes.get("cancelled", Long.class),
+              lessons.get("total", Long.class),
+              lessons.get("draft", Long.class),
+              lessons.get("published", Long.class),
+              lessons.get("confirmed", Long.class),
+              lessons.get("closed", Long.class),
+              attendance.get("present", Long.class),
+              attendance.get("partial", Long.class),
+              attendance.get("absent", Long.class),
+              attendance.get("leave", Long.class),
+              attendance.get("recorded", Long.class));
+        });
+  }
+
+  @Override
   public List<ClassView> classes(UUID schoolId) {
     var scope = actors.requireResourceScope("TEACHING");
     requireReadable(scope, schoolId);
