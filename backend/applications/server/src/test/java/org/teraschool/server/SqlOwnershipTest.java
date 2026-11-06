@@ -62,14 +62,70 @@ class SqlOwnershipTest {
               "teaching/SchedulingService.java",
               Set.of("organization.room", "organization.teacher")),
           Map.entry(
+              "teaching/TeachingLookups.java",
+              Set.of(
+                  // 班级行读取时联表取课程名；与拆分前 TeachingService 读的是同一张表。
+                  "product.curriculum")),
+          Map.entry(
+              "teaching/TeachingReporting.java",
+              Set.of(
+                  // 教师课表/资源日报沿用与写路径相同的资源与课程只读投影。
+                  "organization.employee",
+                  "organization.room",
+                  "organization.teacher",
+                  "product.curriculum")),
+          Map.entry(
               "teaching/TeachingService.java",
+              // organization.employee 的读取随教师课表搬到 TeachingReporting；
+              // 跨域读取的总集不变，只是分散到两个文件。
+              Set.of(
+                  "enrollment.hours_cancellation",
+                  "organization.room",
+                  "organization.teacher",
+                  "product.curriculum")));
+  static final Pattern LITERAL = Pattern.compile("\"\"\"[\\s\\S]*?\"\"\"|\"(?:\\\\.|[^\"\\\\])*\"");
+
+  /**
+   * 按模块聚合的跨域只读集合。
+   *
+   * <p>拆分文件会让“逐文件快照”（{@link #READ_EXCEPTIONS}）变化——同一个表换个文件读，两张快照都要改，
+   * 只看逐文件清单等于允许“新增文件 + 复制白名单”这种无感扩张。这里把模块能读到的外部表显式登记一次，
+   * 拆分可以动文件归属，但模块的可读范围不能增加。
+   */
+  static final Map<String, Set<String>> MODULE_READ_UNION =
+      Map.ofEntries(
+          Map.entry("enrollment", Set.of("archive.student", "product.curriculum")),
+          Map.entry("funds", Set.of("archive.student", "enrollment.hours_cancellation")),
+          Map.entry(
+              "finance",
+              Set.of(
+                  "archive.student",
+                  "funds.account_entry",
+                  "funds.allocation",
+                  "funds.receipt",
+                  "enrollment.enrollment",
+                  "teaching.class",
+                  "teaching.lesson",
+                  "teaching.attendance")),
+          Map.entry("identity", Set.of("organization.unit")),
+          Map.entry(
+              "migration",
+              Set.of(
+                  "archive.student",
+                  "enrollment.enrollment",
+                  "funds.account_entry",
+                  "funds.creation_request",
+                  "funds.receipt",
+                  "teaching.consumption")),
+          Map.entry("organization", Set.of("identity.account")),
+          Map.entry(
+              "teaching",
               Set.of(
                   "enrollment.hours_cancellation",
                   "organization.employee",
                   "organization.room",
                   "organization.teacher",
                   "product.curriculum")));
-  static final Pattern LITERAL = Pattern.compile("\"\"\"[\\s\\S]*?\"\"\"|\"(?:\\\\.|[^\"\\\\])*\"");
 
   @Test
   void literalSqlUsesOwnedTablesAndRegisteredReadExceptions() throws Exception {
@@ -110,6 +166,14 @@ class SqlOwnershipTest {
       }
     }
     assertThat(observed).as("跨域 SQL 清单变化必须同步公开契约或只读例外评审及架构文档").isEqualTo(READ_EXCEPTIONS);
+
+    var moduleUnion = new TreeMap<String, Set<String>>();
+    observed.forEach(
+        (key, tables) ->
+            moduleUnion
+                .computeIfAbsent(key.substring(0, key.indexOf('/')), ignored -> new TreeSet<>())
+                .addAll(tables));
+    assertThat(moduleUnion).as("模块可读的跨域表不得因拆分或新增文件而扩张").isEqualTo(MODULE_READ_UNION);
   }
 
   static String owner(String table) {
