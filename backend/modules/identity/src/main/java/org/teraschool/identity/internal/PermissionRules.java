@@ -63,7 +63,7 @@ final class PermissionRules {
     """;
   static final String CURRENT =
       """
-    SELECT a.id,a.tenant_id,p.action,p.school_id,p.effect,a.credential_version
+    SELECT a.id,a.tenant_id,p.action,p.school_id,p.effect,a.credential_version,a.tenant_admin
     FROM identity.account a JOIN identity.tenant t ON t.id=a.tenant_id
     LEFT JOIN LATERAL (
     """
@@ -101,7 +101,7 @@ final class PermissionRules {
   }
 
   static CurrentPermissions calculate(
-      UUID account, UUID tenant, boolean active, List<Entry> rules) {
+      UUID account, UUID tenant, boolean active, List<Entry> rules, boolean tenantAdmin) {
     var read = new Decision();
     var maintain = new Decision();
     var manage = new Decision();
@@ -114,15 +114,18 @@ final class PermissionRules {
     var readable = read.schools();
     var editable = maintain.schools();
     editable.retainAll(readable);
+    // 租户管理员在租户内拥有全部功能权限；学校范围仍由显式的学校授权决定，
+    // “覆盖全部学校”由 SchoolProvisioner 结合 tenantAdmin 单独判断。
     return new CurrentPermissions(
         account,
         tenant,
-        read.enabled(),
-        read.enabled() && maintain.enabled(),
+        read.enabled() || tenantAdmin,
+        (read.enabled() && maintain.enabled()) || tenantAdmin,
         readable,
         editable,
-        manage.enabled(),
-        manage.schools());
+        manage.enabled() || tenantAdmin,
+        manage.schools(),
+        tenantAdmin);
   }
 
   /**

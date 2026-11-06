@@ -19,6 +19,9 @@ public class SchoolProvisioner implements SchoolProvisioning {
   }
 
   private boolean full(CurrentPermissions actor) {
+    // 租户管理员覆盖本租户全部学校：没有学校时也算“全覆盖”，
+    // 否则新开通的租户永远建不出第一所学校。
+    if (actor.tenantAdmin()) return true;
     var ids = actor.manageableSchoolIds();
     if (ids.isEmpty()) return false;
     String markers = String.join(",", Collections.nCopies(ids.size(), "?"));

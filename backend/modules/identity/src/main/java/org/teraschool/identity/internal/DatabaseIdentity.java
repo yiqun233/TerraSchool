@@ -37,7 +37,11 @@ public class DatabaseIdentity implements UserDetailsService, CurrentActor {
     return users.getFirst();
   }
 
-  private record Snapshot(UUID account, UUID tenant, java.util.List<PermissionRules.Entry> rules) {}
+  private record Snapshot(
+      UUID account,
+      UUID tenant,
+      java.util.List<PermissionRules.Entry> rules,
+      boolean tenantAdmin) {}
 
   private Snapshot snapshot() {
     var principal = SessionPrincipal.current();
@@ -51,7 +55,8 @@ public class DatabaseIdentity implements UserDetailsService, CurrentActor {
                   r.getObject(2, UUID.class),
                   r.getLong(6),
                   new PermissionRules.Entry(
-                      r.getString(3), r.getObject(4, UUID.class), r.getString(5))
+                      r.getString(3), r.getObject(4, UUID.class), r.getString(5)),
+                  r.getBoolean(7)
                 },
             account);
     if (rows.isEmpty()) throw new AccessDeniedException("账号或机构不可用");
@@ -60,13 +65,15 @@ public class DatabaseIdentity implements UserDetailsService, CurrentActor {
     return new Snapshot(
         account,
         (UUID) rows.getFirst()[0],
-        rows.stream().map(r -> (PermissionRules.Entry) r[2]).toList());
+        rows.stream().map(r -> (PermissionRules.Entry) r[2]).toList(),
+        (Boolean) rows.getFirst()[3]);
   }
 
   @Override
   public CurrentPermissions permissions() {
     var value = snapshot();
-    return PermissionRules.calculate(value.account(), value.tenant(), true, value.rules());
+    return PermissionRules.calculate(
+        value.account(), value.tenant(), true, value.rules(), value.tenantAdmin());
   }
 
   @Override
@@ -124,7 +131,8 @@ public class DatabaseIdentity implements UserDetailsService, CurrentActor {
                 new PermissionRules.Entry(
                     r.get("action", String.class),
                     r.get("school_id", UUID.class),
-                    r.get("effect", String.class))));
+                    r.get("effect", String.class))),
+        rows.getFirst().get("tenant_admin", Boolean.class));
   }
 
   @Override
@@ -136,7 +144,9 @@ public class DatabaseIdentity implements UserDetailsService, CurrentActor {
   @Override
   public Actor requireOrganizationMaintainerInTransaction() {
     var value = transactionSnapshot();
-    var p = PermissionRules.calculate(value.account(), value.tenant(), true, value.rules());
+    var p =
+        PermissionRules.calculate(
+            value.account(), value.tenant(), true, value.rules(), value.tenantAdmin());
     if (!p.canReadOrganizations()) throw new AccessDeniedException("无组织查询权限");
     return new Actor(p.accountId(), p.tenantId(), p.maintainableSchoolIds());
   }

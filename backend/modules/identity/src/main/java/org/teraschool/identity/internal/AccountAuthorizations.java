@@ -40,7 +40,8 @@ public class AccountAuthorizations {
                 new PermissionRules.Entry(
                     r.get("action", String.class),
                     r.get("school_id", UUID.class),
-                    r.get("effect", String.class))));
+                    r.get("effect", String.class))),
+        rows.getFirst().get("tenant_admin", Boolean.class));
   }
 
   <T> T managed(Function<CurrentPermissions, T> work) {
@@ -56,7 +57,9 @@ public class AccountAuthorizations {
               "select pg_advisory_xact_lock(hashtextextended(?,0))",
               "authorization:" + identity.tenantId());
           var actor = current(identity.accountId());
-          if (!actor.canManageAuthorizations() || actor.manageableSchoolIds().isEmpty())
+          // 租户管理员在还没有学校时也要能建第一所学校：学校范围为空不构成拒绝理由。
+          if (!actor.canManageAuthorizations()
+              || (actor.manageableSchoolIds().isEmpty() && !actor.tenantAdmin()))
             throw new AccessDeniedException("无授权管理范围");
           return work.apply(actor);
         });
@@ -127,7 +130,7 @@ public class AccountAuthorizations {
     if (id == null) throw new IllegalArgumentException("缺少账号");
     var row =
         sql.fetchOne(
-            "select id,tenant_id,login,active,authorization_version from identity.account where id=?",
+            "select id,tenant_id,login,active,authorization_version,tenant_admin from identity.account where id=?",
             id);
     if (row == null) throw new AccessDeniedException("账号不可管理");
     var rules =
@@ -196,7 +199,11 @@ public class AccountAuthorizations {
         rules,
         assignments,
         PermissionRules.calculate(
-            id, row.get("tenant_id", UUID.class), row.get("active", Boolean.class), expanded),
+            id,
+            row.get("tenant_id", UUID.class),
+            row.get("active", Boolean.class),
+            expanded,
+            row.get("tenant_admin", Boolean.class)),
         schoolLabels,
         roleLabels);
   }

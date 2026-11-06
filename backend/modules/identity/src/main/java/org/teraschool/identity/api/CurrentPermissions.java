@@ -12,7 +12,9 @@ public record CurrentPermissions(
     Set<UUID> readableSchoolIds,
     Set<UUID> maintainableSchoolIds,
     boolean canManageAuthorizations,
-    Set<UUID> manageableSchoolIds) {
+    Set<UUID> manageableSchoolIds,
+    /** 租户管理员：覆盖本租户全部学校（含将来新建的），不跨租户。 */
+    boolean tenantAdmin) {
   public CurrentPermissions {
     readableSchoolIds = Set.copyOf(readableSchoolIds);
     maintainableSchoolIds = Set.copyOf(maintainableSchoolIds);

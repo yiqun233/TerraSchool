@@ -44,6 +44,7 @@ class Errors {
 
   @ExceptionHandler(RuntimeException.class)
   ResponseEntity<ProblemDetail> unexpected(RuntimeException error) {
+
     if (error instanceof org.springframework.web.ErrorResponse response)
       return problem(response.getStatusCode().value(), "REQUEST_REJECTED");
     return problem(500, "OPERATION_FAILED");
@@ -135,6 +136,7 @@ class Errors {
   })
   ResponseEntity<ProblemDetail> invalid(
       Exception error, jakarta.servlet.http.HttpServletRequest request) {
+
     if (!(error instanceof IllegalArgumentException)) {
       try {
         audit.record(request, "INVALID_INPUT");
