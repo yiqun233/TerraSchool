@@ -3,7 +3,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
   Button,
-  Card,
   Input,
   Modal,
   Select,
@@ -14,6 +13,7 @@ import {
 import { api, csrf } from "../../shared/http";
 import type { components } from "../../shared/generated/api";
 import { CustomerRecyclePolicyEditor } from "./CustomerRecyclePolicyEditor";
+import { CustomerPoolCard, CustomerRemindersCard } from "./CustomerPanels";
 import { CustomerFollowups } from "./CustomerFollowups";
 
 type Customer = components["schemas"]["Customer"];
@@ -824,55 +824,13 @@ export function CustomerWorkspace({
         />
       ) : null}
       {currentSchool?.phoneReadable ? (
-        <Card
-          title="待回访提醒（本人客户）"
-          size="small"
-          style={{ marginTop: 12 }}
-          extra={
-            <Button
-              size="small"
-              onClick={() => void reminders.refetch()}
-              loading={reminders.isFetching}
-            >
-              刷新
-            </Button>
-          }
-        >
-          {reminders.error ? (
-            <Alert type="error" title={reminders.error.message} showIcon />
-          ) : null}
-          <Table
-            rowKey={(row) => row.id!}
-            size="small"
-            loading={reminders.isFetching}
-            dataSource={reminders.data?.items ?? []}
-            pagination={false}
-            locale={{ emptyText: "当前没有到期提醒" }}
-            columns={[
-              { title: "客户", dataIndex: "customerName" },
-              { title: "下次联系", dataIndex: "nextContactOn" },
-              { title: "最近跟进", dataIndex: "occurredOn" },
-              {
-                title: "跟进摘要",
-                dataIndex: "content",
-                ellipsis: true,
-              },
-              {
-                title: "操作",
-                render: (_, row) =>
-                  row.customerId ? (
-                    <Button
-                      size="small"
-                      disabled={!currentSchool.phoneReadable}
-                      onClick={() => setFollowupTarget(row.customerId!)}
-                    >
-                      查看跟进
-                    </Button>
-                  ) : null,
-              },
-            ]}
-          />
-        </Card>
+        <CustomerRemindersCard
+          items={reminders.data?.items ?? []}
+          error={reminders.error}
+          fetching={reminders.isFetching}
+          onRefresh={() => void reminders.refetch()}
+          onOpenFollowup={setFollowupTarget}
+        />
       ) : null}
       <Space wrap>
         <Select
@@ -1081,51 +1039,18 @@ export function CustomerWorkspace({
         ]}
       />
       {currentSchool?.poolReadable ? (
-        <Card title="学校公海" size="small" style={{ marginTop: 20 }}>
-          {poolRows.error ? (
-            <Alert type="error" title={poolRows.error.message} showIcon />
-          ) : null}
-          <Table<Customer>
-            rowKey={(row) => row.id!}
-            loading={poolRows.isFetching}
-            dataSource={poolRows.data?.items ?? []}
-            pagination={false}
-            locale={{ emptyText: "当前学校公海暂无客户" }}
-            columns={[
-              { title: "客户姓名", dataIndex: "name" },
-              { title: "联系电话", dataIndex: "maskedPhone" },
-              {
-                title: "操作",
-                render: (_, row) =>
-                  row.id ? (
-                    <Button
-                      disabled={busy || !currentSchool.maintainable}
-                      onClick={() =>
-                        void poolAction(row.id!, row.version ?? 0, "claim")
-                      }
-                    >
-                      认领
-                    </Button>
-                  ) : null,
-              },
-            ]}
-          />
-          <Space style={{ marginTop: 8 }}>
-            <Button
-              disabled={poolPage === 0 || busy}
-              onClick={() => setPoolPage(poolPage - 1)}
-            >
-              上一页
-            </Button>
-            <span>第 {poolPage + 1} 页</span>
-            <Button
-              disabled={!!poolRows.error || !poolRows.data?.hasMore || busy}
-              onClick={() => setPoolPage(poolPage + 1)}
-            >
-              下一页
-            </Button>
-          </Space>
-        </Card>
+        <CustomerPoolCard
+          items={poolRows.data?.items ?? []}
+          error={poolRows.error}
+          fetching={poolRows.isFetching}
+          busy={busy}
+          maintainable={!!currentSchool.maintainable}
+          hasMore={!!poolRows.data?.hasMore}
+          page={poolPage}
+          onPrev={() => setPoolPage(poolPage - 1)}
+          onNext={() => setPoolPage(poolPage + 1)}
+          onClaim={(row) => void poolAction(row.id!, row.version ?? 0, "claim")}
+        />
       ) : null}
       <Space style={{ marginTop: 12 }}>
         <Button

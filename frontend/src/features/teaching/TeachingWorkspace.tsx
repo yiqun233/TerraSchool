@@ -31,6 +31,7 @@ import {
   RescheduleLessonModal,
   SwapLessonModal,
 } from "./TeachingDialogs";
+import { LESSON_STATUS, TeacherWorkbenchPanel } from "./TeachingPanels";
 import type { components } from "../../shared/generated/api";
 import type {
   LessonView,
@@ -38,7 +39,6 @@ import type {
   EnrollmentView,
   TeacherWorkbench,
   TeacherClassWorkbench,
-  TeacherWorkbenchClass,
   TeacherWorkbenchLesson,
   DailyResourceSchedule,
   StudentConsumptionPage,
@@ -65,13 +65,6 @@ function localDate(offsetDays: number) {
   date.setDate(date.getDate() + offsetDays);
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
-
-const LESSON_STATUS: Record<string, string> = {
-  DRAFT: "草稿",
-  PUBLISHED: "已发布",
-  CONFIRMED: "已确认",
-  CLOSED: "已关闭",
-};
 
 /**
  * 教务工作台：班级 → 课次 → 发布 → 考勤确认 → 关闭课次（唯一消费固化点）。
@@ -685,101 +678,17 @@ export function TeachingWorkspace({
         </Typography.Text>
       </Space>
       {error ? <Alert title={error} type="error" showIcon /> : null}
-      <Card
-        title="教师本人课表与班级工作台"
-        size="small"
-        style={{ marginBottom: 12 }}
-      >
-        <Space wrap style={{ marginBottom: 12 }}>
-          <Input
-            aria-label="教师课表开始日期"
-            type="date"
-            value={workbenchFrom}
-            onChange={(event) => setWorkbenchFrom(event.target.value)}
-            style={{ width: 170 }}
-          />
-          <Input
-            aria-label="教师课表结束日期"
-            type="date"
-            value={workbenchTo}
-            onChange={(event) => setWorkbenchTo(event.target.value)}
-            style={{ width: 170 }}
-          />
-          <Button
-            onClick={() => void teacherWorkbench.refetch()}
-            loading={teacherWorkbench.isFetching}
-          >
-            刷新本人课表
-          </Button>
-        </Space>
-        {teacherWorkbench.error ? (
-          <Alert type="error" title={teacherWorkbench.error.message} showIcon />
-        ) : null}
-        <Table
-          rowKey="id"
-          size="small"
-          loading={teacherWorkbench.isFetching}
-          dataSource={teacherWorkbench.data?.lessons ?? []}
-          pagination={false}
-          columns={[
-            { title: "日期", dataIndex: "lessonDate" },
-            {
-              title: "时间",
-              render: (
-                _: unknown,
-                row: NonNullable<TeacherWorkbench["lessons"]>[number],
-              ) => `${row.startsAt}–${row.endsAt}`,
-            },
-            { title: "班级", dataIndex: "className" },
-            { title: "课程", dataIndex: "curriculumName" },
-            { title: "课题", dataIndex: "topic" },
-            { title: "教室", dataIndex: "roomName" },
-            {
-              title: "状态",
-              dataIndex: "status",
-              render: (status: string) => (
-                <Tag>{LESSON_STATUS[status] ?? status}</Tag>
-              ),
-            },
-          ]}
-          locale={{
-            emptyText: "该时间范围内暂无本人授课课次，或账号尚未绑定教师资料",
-          }}
-        />
-        <Typography.Text type="secondary">
-          授课班级：
-          {(teacherWorkbench.data?.classes ?? [])
-            .map((item) => `${item.name}（${item.lessonCount} 次）`)
-            .join("、") || "暂无"}
-        </Typography.Text>
-        <Table
-          rowKey="id"
-          size="small"
-          style={{ marginTop: 8 }}
-          dataSource={teacherWorkbench.data?.classes ?? []}
-          pagination={false}
-          columns={[
-            { title: "本人任教班级", dataIndex: "name" },
-            { title: "课程", dataIndex: "curriculumName" },
-            { title: "班级状态", dataIndex: "status" },
-            {
-              title: "工作台",
-              render: (_: unknown, row: TeacherWorkbenchClass) => (
-                <Button
-                  size="small"
-                  disabled={!row.id}
-                  onClick={() => {
-                    if (row.id) setTeacherClassId(row.id);
-                  }}
-                >
-                  查看班级工作台
-                </Button>
-              ),
-            },
-          ]}
-          locale={{ emptyText: "暂无本人任教班级" }}
-        />
-      </Card>
+      <TeacherWorkbenchPanel
+        from={workbenchFrom}
+        to={workbenchTo}
+        onFromChange={setWorkbenchFrom}
+        onToChange={setWorkbenchTo}
+        data={teacherWorkbench.data}
+        error={teacherWorkbench.error}
+        fetching={teacherWorkbench.isFetching}
+        onRefresh={() => void teacherWorkbench.refetch()}
+        onOpenClass={setTeacherClassId}
+      />
       <Drawer
         title={teacherClassWorkbench.data?.classInfo?.name ?? "本人班级工作台"}
         open={!!teacherClassId}
