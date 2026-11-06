@@ -675,4 +675,142 @@ class StudentProfileTest {
         .isInstanceOf(StudentConflict.class)
         .hasMessageContaining("MERGE_HAS_LINKED_FACTS");
   }
+
+  @Test
+  void mergeMovesContactLinksToPrimaryAndRestoresExactLinksOnReverse() throws Exception {
+    var source =
+        asActor(
+            MAINTAINER,
+            () ->
+                commands
+                    .create(command("联系人来源档", null, null, guardian("源监护人", "13900006001", true)))
+                    .profile());
+    var primary =
+        asActor(
+            MAINTAINER,
+            () ->
+                commands
+                    .create(command("联系人主档", null, null, guardian("主监护人", "13900006002", true)))
+                    .profile());
+    var sourceContact = source.contacts().getFirst();
+    var primaryContact = primary.contacts().getFirst();
+    var merged =
+        asActor(
+            MAINTAINER,
+            () ->
+                commands.merge(
+                    source.id(),
+                    new MergeStudent(
+                        UUID.randomUUID(),
+                        primary.id(),
+                        source.version(),
+                        primary.version(),
+                        "相同学员档案并入主档")));
+    var primaryAfter = asActor(MAINTAINER, () -> queries.detail(primary.id()));
+    assertThat(primaryAfter.version()).isEqualTo(primary.version() + 1);
+    assertThat(primaryAfter.contacts())
+        .extracting(org.teraschool.archive.api.StudentContact::id)
+        .containsExactlyInAnyOrder(primaryContact.id(), sourceContact.id());
+    assertThat(
+            primaryAfter.contacts().stream()
+                .filter(org.teraschool.archive.api.StudentContact::primary))
+        .extracting(org.teraschool.archive.api.StudentContact::id)
+        .containsExactly(primaryContact.id());
+    assertThat(asActor(MAINTAINER, () -> queries.list(0, 100, "联系人来源档")).total()).isZero();
+
+    asActor(
+        MAINTAINER,
+        () ->
+            commands.reverseMerge(
+                source.id(),
+                new ReverseStudentMerge(UUID.randomUUID(), merged.sourceVersion(), "恢复原联系人关系")));
+    assertThat(asActor(MAINTAINER, () -> queries.detail(source.id())).contacts())
+        .singleElement()
+        .satisfies(
+            contact -> {
+              assertThat(contact.id()).isEqualTo(sourceContact.id());
+              assertThat(contact.primary()).isTrue();
+            });
+    assertThat(asActor(MAINTAINER, () -> queries.detail(primary.id())).contacts())
+        .singleElement()
+        .satisfies(contact -> assertThat(contact.id()).isEqualTo(primaryContact.id()));
+
+    var conflictSource =
+        asActor(
+            MAINTAINER,
+            () ->
+                commands
+                    .create(command("关系冲突源档", null, null, guardian("重叠联系人", "13900006003", false)))
+                    .profile());
+    var conflictPrimary =
+        asActor(
+            MAINTAINER,
+            () ->
+                commands
+                    .create(
+                        command(
+                            "关系冲突主档",
+                            null,
+                            null,
+                            new StudentContactInput(
+                                "重叠联系人", "FATHER", "13900006003", null, null, null, true)))
+                    .profile());
+    assertThat(conflictSource.contacts().getFirst().id())
+        .isEqualTo(conflictPrimary.contacts().getFirst().id());
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    MAINTAINER,
+                    () ->
+                        commands.merge(
+                            conflictSource.id(),
+                            new MergeStudent(
+                                UUID.randomUUID(),
+                                conflictPrimary.id(),
+                                conflictSource.version(),
+                                conflictPrimary.version(),
+                                "联系人关系需要先核对"))))
+        .isInstanceOf(StudentConflict.class)
+        .hasMessage("MERGE_CONTACT_RELATION_CONFLICT");
+    assertThat(asActor(MAINTAINER, () -> queries.list(0, 100, "关系冲突源档")).total()).isEqualTo(1);
+
+    var changedSource =
+        asActor(
+            MAINTAINER,
+            () ->
+                commands
+                    .create(command("撤销前修改档", null, null, guardian("待修改联系人", "13900006004", false)))
+                    .profile());
+    var changedPrimary =
+        asActor(MAINTAINER, () -> commands.create(command("撤销前修改主档", null, null)).profile());
+    var changedContact = changedSource.contacts().getFirst();
+    var changedMerge =
+        asActor(
+            MAINTAINER,
+            () ->
+                commands.merge(
+                    changedSource.id(),
+                    new MergeStudent(
+                        UUID.randomUUID(),
+                        changedPrimary.id(),
+                        changedSource.version(),
+                        changedPrimary.version(),
+                        "验证联系人变更保护")));
+    update(
+        "update archive.student_contact set position=position+1 where student_id=? and contact_id=?",
+        changedPrimary.id(),
+        changedContact.id());
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    MAINTAINER,
+                    () ->
+                        commands.reverseMerge(
+                            changedSource.id(),
+                            new ReverseStudentMerge(
+                                UUID.randomUUID(), changedMerge.sourceVersion(), "拒绝覆盖后续联系人变更"))))
+        .isInstanceOf(StudentConflict.class)
+        .hasMessage("MERGE_CONTACT_CHANGED");
+    assertThat(asActor(MAINTAINER, () -> queries.list(0, 100, "撤销前修改档")).total()).isZero();
+  }
 }

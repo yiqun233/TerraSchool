@@ -558,6 +558,13 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
                 command.primaryStudentId(),
                 verified.accountId(),
                 reason);
+            mergeStudentContacts(
+                verified.tenantId(), mergeId, sourceId, command.primaryStudentId());
+            sql.execute(
+                "update archive.student set version=version+1,updated_at=CURRENT_TIMESTAMP"
+                    + " where id=? and tenant_id=?",
+                command.primaryStudentId(),
+                verified.tenantId());
             sql.execute(
                 "insert into archive.student_merge_request(tenant_id,actor_id,request_id,"
                     + "source_student_id,action,merge_id,fingerprint) values (?,?,?,?,'MERGE',?,?)",
@@ -632,6 +639,16 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
                 .filter(Objects::nonNull)
                 .toList()
                 .isEmpty()) throw new StudentConflict("MERGE_HAS_LINKED_FACTS");
+            restoreStudentContacts(
+                verified.tenantId(),
+                merge.get("id", UUID.class),
+                sourceId,
+                merge.get("primary_student_id", UUID.class));
+            sql.execute(
+                "update archive.student set version=version+1,updated_at=CURRENT_TIMESTAMP"
+                    + " where id=? and tenant_id=?",
+                merge.get("primary_student_id", UUID.class),
+                verified.tenantId());
             var updated =
                 sql.execute(
                     "update archive.student set merged_into_id=null,merged_at=null,version=version+1,"
@@ -710,6 +727,120 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
         row.get("source_version", Long.class),
         row.get("primary_version", Long.class),
         row.get("created_at", java.time.OffsetDateTime.class).toString());
+  }
+
+  private void mergeStudentContacts(
+      UUID tenantId, UUID mergeId, UUID sourceStudentId, UUID primaryStudentId) {
+    var sourceContacts =
+        sql.fetch(
+            "select contact_id,relation,is_primary,position from archive.student_contact"
+                + " where tenant_id=? and student_id=? order by contact_id for update",
+            tenantId,
+            sourceStudentId);
+    boolean primaryAlreadyHasPrimary =
+        sql.fetchExists(
+            sql.selectOne()
+                .from("archive.student_contact")
+                .where("tenant_id=? and student_id=? and is_primary", tenantId, primaryStudentId));
+    for (var sourceContact : sourceContacts) {
+      var contactId = sourceContact.get("contact_id", UUID.class);
+      var target =
+          sql.fetchOne(
+              "select relation,is_primary,position from archive.student_contact"
+                  + " where tenant_id=? and student_id=? and contact_id=? for update",
+              tenantId,
+              primaryStudentId,
+              contactId);
+      boolean targetAdded = target == null;
+      Boolean targetPrimary = null;
+      Integer targetPosition = null;
+      if (targetAdded) {
+        targetPrimary = sourceContact.get("is_primary", Boolean.class) && !primaryAlreadyHasPrimary;
+        targetPosition = sourceContact.get("position", Integer.class);
+      } else if (!Objects.equals(
+          target.get("relation", String.class), sourceContact.get("relation", String.class))) {
+        throw new StudentConflict("MERGE_CONTACT_RELATION_CONFLICT");
+      }
+      sql.execute(
+          "insert into archive.student_merge_contact(tenant_id,merge_id,contact_id,source_relation,"
+              + "source_is_primary,source_position,target_added,target_is_primary,target_position)"
+              + " values (?,?,?,?,?,?,?,?,?)",
+          tenantId,
+          mergeId,
+          contactId,
+          sourceContact.get("relation", String.class),
+          sourceContact.get("is_primary", Boolean.class),
+          sourceContact.get("position", Integer.class),
+          targetAdded,
+          targetPrimary,
+          targetPosition);
+      if (targetAdded) {
+        sql.execute(
+            "insert into archive.student_contact(tenant_id,student_id,contact_id,relation,is_primary,position)"
+                + " values (?,?,?,?,?,?)",
+            tenantId,
+            primaryStudentId,
+            contactId,
+            sourceContact.get("relation", String.class),
+            targetPrimary,
+            targetPosition);
+        primaryAlreadyHasPrimary |= targetPrimary;
+      }
+      sql.execute(
+          "delete from archive.student_contact where tenant_id=? and student_id=? and contact_id=?",
+          tenantId,
+          sourceStudentId,
+          contactId);
+    }
+  }
+
+  private void restoreStudentContacts(
+      UUID tenantId, UUID mergeId, UUID sourceStudentId, UUID primaryStudentId) {
+    var contacts =
+        sql.fetch(
+            "select contact_id,source_relation,source_is_primary,source_position,target_added,"
+                + "target_is_primary,target_position from archive.student_merge_contact"
+                + " where tenant_id=? and merge_id=? order by contact_id",
+            tenantId,
+            mergeId);
+    for (var contact : contacts) {
+      var contactId = contact.get("contact_id", UUID.class);
+      if (contact.get("target_added", Boolean.class)) {
+        var target =
+            sql.fetchOne(
+                "select relation,is_primary,position from archive.student_contact"
+                    + " where tenant_id=? and student_id=? and contact_id=? for update",
+                tenantId,
+                primaryStudentId,
+                contactId);
+        if (target != null
+            && (!Objects.equals(
+                    target.get("relation", String.class),
+                    contact.get("source_relation", String.class))
+                || !Objects.equals(
+                    target.get("is_primary", Boolean.class),
+                    contact.get("target_is_primary", Boolean.class))
+                || !Objects.equals(
+                    target.get("position", Integer.class),
+                    contact.get("target_position", Integer.class))))
+          throw new StudentConflict("MERGE_CONTACT_CHANGED");
+        if (target != null)
+          sql.execute(
+              "delete from archive.student_contact where tenant_id=? and student_id=? and contact_id=?",
+              tenantId,
+              primaryStudentId,
+              contactId);
+      }
+      sql.execute(
+          "insert into archive.student_contact(tenant_id,student_id,contact_id,relation,is_primary,position)"
+              + " values (?,?,?,?,?,?)",
+          tenantId,
+          sourceStudentId,
+          contactId,
+          contact.get("source_relation", String.class),
+          contact.get("source_is_primary", Boolean.class),
+          contact.get("source_position", Integer.class));
+    }
   }
 
   /**
