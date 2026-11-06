@@ -45,7 +45,7 @@ class EngineeringTest {
   @DynamicPropertySource
   static void config(DynamicPropertyRegistry r) {
     r.add("teraschool.database.url", () -> System.getenv("TS_JDBC_URL"));
-    for (String kind : List.of("app", "identity", "session", "audit", "scheduler")) {
+    for (String kind : List.of("app", "identity", "session", "audit", "scheduler", "platform")) {
       r.add("teraschool.database." + kind + ".username", () -> "ts_" + kind);
       r.add(
           "teraschool.database." + kind + ".password",

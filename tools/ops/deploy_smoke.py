@@ -53,6 +53,7 @@ env.update(
         "TS_SESSION_PASSWORD": secrets.token_urlsafe(24),
         "TS_AUDIT_PASSWORD": secrets.token_urlsafe(24),
         "TS_SCHEDULER_PASSWORD": secrets.token_urlsafe(24),
+        "TS_PLATFORM_PASSWORD": secrets.token_urlsafe(24),
         "TS_COOKIE_SECURE": "false",
         "COMPOSE_PROJECT_NAME": project,
     }

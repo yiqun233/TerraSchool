@@ -286,11 +286,12 @@ def mail_credential_key(config):
 def write_runtime_config(config):
     """每次启动都从受限文件复核并生成配置，避免旧配置掩盖主密钥丢失。"""
     config['passwords'].setdefault('scheduler', secrets.token_urlsafe(30))
+    config['passwords'].setdefault('platform', secrets.token_urlsafe(30))
     lines = ['# 自动生成，仅供本机开发，勿提交Git。', 'server:', '  address: 127.0.0.1',
              '  port: ' + str(SETTINGS['backend_port']), '  servlet:', '    session:', '      cookie:',
              '        secure: false', 'teraschool:', '  database:',
              '    url: jdbc:postgresql://127.0.0.1:' + str(SETTINGS['database_port']) + '/teraschool_dev']
-    for kind in ['app', 'identity', 'session', 'audit', 'scheduler']:
+    for kind in ['app', 'identity', 'session', 'audit', 'scheduler', 'platform']:
         lines += ['    ' + kind + ':', '      username: ts_' + kind,
                   '      password: ' + json.dumps(config['passwords'][kind])]
     lines += ['  mail-credentials:', '    master-key: ' + json.dumps(mail_credential_key(config))]

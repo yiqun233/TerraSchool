@@ -59,4 +59,6 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON platform.operator_session TO ts_platform
 GRANT SELECT, INSERT ON platform.audit_event TO ts_platform;
 
 -- 开通与列表要判断租户是否存在、是否启用；只读这一张，且不含任何业务数据。
+-- 表级 SELECT 之外还必须给 schema USAGE，否则连解析表名都会被拒绝。
+GRANT USAGE ON SCHEMA identity TO ts_platform;
 GRANT SELECT ON identity.tenant TO ts_platform;

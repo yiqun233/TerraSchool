@@ -56,6 +56,16 @@ class DataSources {
     return source;
   }
 
+  /** 平台运营连接：只按 ts_platform 授权，读不到任何业务表。 */
+  @Bean
+  HikariDataSource platformDataSource() {
+    var source = pool("platform");
+    source.setMaximumPoolSize(
+        Math.min(2, env.getProperty("teraschool.database.pool-size", Integer.class, 4)));
+    source.setConnectionTimeout(2000);
+    return source;
+  }
+
   @Bean
   @SpringSessionDataSource
   HikariDataSource sessionDataSource() {
