@@ -27,7 +27,7 @@ type EmployeeAssignmentOption =
 type StudentExportTask = {
   id: string;
   schoolId: string;
-  format: "CSV" | "XLSX";
+  format: "CSV" | "XLSX" | "PDF";
   status:
     | "PENDING"
     | "RUNNING"
@@ -169,7 +169,7 @@ export function StudentDirectory({
     return <Alert title="账号当前无学员档案读取权限" type="error" />;
 
   /** 导出以持久任务执行；下载时服务端复核学校与敏感字段权限。 */
-  async function exportStudents(format: "CSV" | "XLSX") {
+  async function exportStudents(format: "CSV" | "XLSX" | "PDF") {
     if (!exportSchool) return;
     exportRequestStarted.current = true;
     setExporting(true);
@@ -296,6 +296,13 @@ export function StudentDirectory({
           disabled={!capabilities.data.canExport || !exportSchool || exporting}
         >
           导出 XLSX
+        </Button>
+        <Button
+          onClick={() => void exportStudents("PDF")}
+          loading={exporting}
+          disabled={!capabilities.data.canExport || !exportSchool || exporting}
+        >
+          导出 PDF
         </Button>
         {exportTask ? (
           <Space>

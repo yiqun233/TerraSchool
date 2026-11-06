@@ -152,7 +152,11 @@ it("通过持久导出任务展示进度并在完成后下载", { timeout: 10000
     throw new Error("unexpected path " + path);
   });
   csrf.mockResolvedValue({ headerName: "X-CSRF", token: "csrf-token" });
-  vi.stubGlobal("crypto", { randomUUID: () => "request-export-1" });
+  const requestIds = vi
+    .fn()
+    .mockReturnValueOnce("request-export-1")
+    .mockReturnValueOnce("request-export-2");
+  vi.stubGlobal("crypto", { randomUUID: requestIds });
   const task = {
     id: "export-task-1",
     schoolId: "school-1",
@@ -171,8 +175,10 @@ it("通过持久导出任务展示进度并在完成后下载", { timeout: 10000
       const url = String(input);
       if (url.startsWith("/api/exports?"))
         return Response.json([], { status: 200 });
-      if (url === "/api/exports" && init?.method === "POST")
-        return Response.json(task, { status: 202 });
+      if (url === "/api/exports" && init?.method === "POST") {
+        const body = JSON.parse(String(init.body)) as { format: string };
+        return Response.json({ ...task, format: body.format }, { status: 202 });
+      }
       if (url === "/api/exports/export-task-1/download")
         return new Response(new Blob(["test"]), { status: 200 });
       if (url.startsWith("/api/exports/"))
@@ -206,6 +212,12 @@ it("通过持久导出任务展示进度并在完成后下载", { timeout: 10000
     "/api/exports",
     expect.objectContaining({ method: "POST" }),
   );
+  await user.click(screen.getByRole("button", { name: "导出 PDF" }));
+  expect(await screen.findByText("PDF 导出任务：完成，共 4 条")).toBeTruthy();
+  const createBodies = fetchMock.mock.calls
+    .filter(([, init]) => init?.method === "POST")
+    .map(([, init]) => JSON.parse(String(init?.body)) as { format: string });
+  expect(createBodies.map(({ format }) => format)).toEqual(["CSV", "PDF"]);
 });
 
 it("重新打开学员目录时恢复最近的持久导出任务", async () => {
