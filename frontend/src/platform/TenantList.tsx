@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import { App, Button, Modal, Table } from "antd";
+import { App, Button, Descriptions, Modal, Table } from "antd";
 import ProvisionWizard from "./ProvisionWizard";
 import type { TableColumnsType } from "antd";
 import {
   AccessDenied,
   fetchAdministrators,
+  fetchTenantDetail,
+  type TenantDetail,
   fetchTenants,
   resetAdminPassword,
   SessionExpired,
@@ -51,6 +53,8 @@ export default function TenantList({
     password: string;
   } | null>(null);
   const [resetBusy, setResetBusy] = useState(false);
+  const [detail, setDetail] = useState<TenantDetail | null>(null);
+  const [detailBusy, setDetailBusy] = useState(false);
 
   const load = useCallback(
     async (targetPage: number) => {
@@ -104,6 +108,23 @@ export default function TenantList({
     }
   }
 
+  async function openDetail(row: TenantRow) {
+    setDetailBusy(true);
+    try {
+      setDetail(await fetchTenantDetail(row.id));
+    } catch (failure) {
+      if (failure instanceof SessionExpired) {
+        onSessionLost();
+        return;
+      }
+      message.error(
+        failure instanceof Error ? failure.message : "加载详情失败",
+      );
+    } finally {
+      setDetailBusy(false);
+    }
+  }
+
   async function openReset(row: TenantRow) {
     setResetBusy(true);
     try {
@@ -143,7 +164,13 @@ export default function TenantList({
       dataIndex: "name",
       render: (name: string, row: TenantRow) => (
         <div className={styles.org}>
-          <span className={styles.orgName}>{name}</span>
+          <button
+            type="button"
+            className={styles.orgName}
+            onClick={() => void openDetail(row)}
+          >
+            {name}
+          </button>
           <span className={styles.orgId}>{row.id.slice(0, 8)}</span>
         </div>
       ),
@@ -311,6 +338,36 @@ export default function TenantList({
               : `恢复后「${target.name}」的成员可以重新登录。`}
         </p>
       </Modal>
+      <Modal
+        open={detail !== null || detailBusy}
+        title={detail?.name ?? "租户详情"}
+        footer={null}
+        onCancel={() => setDetail(null)}
+      >
+        {detail ? (
+          <Descriptions column={2} size="small">
+            <Descriptions.Item label="状态">
+              {detail.active ? "正常" : "停用"}
+            </Descriptions.Item>
+            <Descriptions.Item label="开通时间">
+              {formatTime(detail.created_at)}
+            </Descriptions.Item>
+            <Descriptions.Item label="学校">{detail.schools}</Descriptions.Item>
+            <Descriptions.Item label="账号">
+              {detail.accounts}
+            </Descriptions.Item>
+            <Descriptions.Item label="租户管理员">
+              {detail.administrators}
+            </Descriptions.Item>
+            <Descriptions.Item label="租户 ID">
+              <span className={styles.orgId}>{detail.id}</span>
+            </Descriptions.Item>
+          </Descriptions>
+        ) : (
+          <p className={styles.stateHint}>正在加载…</p>
+        )}
+      </Modal>
+
       <ProvisionWizard
         open={wizardOpen}
         canCreate={canCreate}

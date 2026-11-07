@@ -107,6 +107,41 @@ class TenantProvisioning {
   /** 目标租户不存在：由接口层转成 404。 */
   static class TenantMissing extends RuntimeException {}
 
+  /** 单个租户的基本信息；不存在返回空。 */
+  Optional<Map<String, Object>> tenant(UUID tenantId) {
+    var rows =
+        db.queryForList(
+            "select id, name, active, created_at from identity.tenant where id=?", tenantId);
+    return rows.isEmpty() ? Optional.empty() : Optional.of(rows.getFirst());
+  }
+
+  /** 租户详情：学校数、账号数、管理员数；只有数字，没有业务明细。 */
+  Map<String, Object> summary(UUID tenantId) {
+    return db.queryForMap("select * from platform.tenant_summary(?)", tenantId);
+  }
+
+  /**
+   * 记录一次开通失败。
+   *
+   * <p>函数体内失败会整体回滚，失败原因只能由调用方在事务外补记；同一 requestId 重试时 函数会清掉这条失败记录再继续，所以这里用 upsert 而不是普通插入。
+   */
+  void recordFailure(PlatformIdentity.Operator operator, Request request, String code) {
+    db.update(
+        "insert into platform.provisioning_request"
+            + "(operator_id,request_id,fingerprint,status,error_code,finished_at)"
+            + " values (?,?,?,'FAILED',?,now())"
+            + " on conflict (operator_id,request_id) do update"
+            + " set status='FAILED', error_code=excluded.error_code, finished_at=now(),"
+            + " tenant_id=null, account_id=null",
+        operator.id(),
+        request.requestId(),
+        fingerprint(
+            operator.id(),
+            request.name() == null ? "" : request.name().strip(),
+            request.adminLogin() == null ? "" : request.adminLogin().strip()),
+        code);
+  }
+
   /** 列出某租户的租户管理员：登录名与状态。 */
   List<Map<String, Object>> administrators(UUID tenantId) {
     return db.queryForList("select login, active from platform.tenant_administrators(?)", tenantId);

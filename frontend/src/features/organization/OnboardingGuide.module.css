@@ -70,3 +70,13 @@
   font-size: 12px;
   color: var(--ts-ink-3, #6b7280);
 }
+
+@media (max-width: 720px) {
+  .guide {
+    padding: 16px;
+  }
+
+  .step {
+    padding: 12px;
+  }
+}

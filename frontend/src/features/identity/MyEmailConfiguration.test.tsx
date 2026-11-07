@@ -56,4 +56,4 @@ it("密码不回显，提交失败后清除输入并保留读取版本", async (
     (screen.getByRole("button", { name: /保\s*存/ }) as HTMLButtonElement)
       .disabled,
   ).toBe(true);
-}, 10000);
+});

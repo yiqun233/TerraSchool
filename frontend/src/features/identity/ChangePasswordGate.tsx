@@ -11,10 +11,13 @@ import { changePassword, SessionExpired } from "../../shared/http";
  */
 export function ChangePasswordGate({
   className,
+  variant = "page",
   onChanged,
   onSessionLost,
 }: {
   className?: string;
+  /** page：占满内容区（首次强制改密）；modal：放进对话框（主动改密）。 */
+  variant?: "page" | "modal";
   onChanged: () => void;
   onSessionLost: () => void;
 }) {
@@ -46,12 +49,13 @@ export function ChangePasswordGate({
     }
   }
 
-  return (
-    <section className={className} aria-label="首次登录修改密码">
-      <Typography.Title level={3}>请先设置新密码</Typography.Title>
+  const body = (
+    <>
       <p>
-        这是账号首次登录或被管理员重置后的第一次登录，必须先修改密码。
-        新密码至少 12 位，不能与登录名或当前密码相同，也不能是纯数字或纯字母。
+        {variant === "page"
+          ? "这是账号首次登录或被管理员重置后的第一次登录，必须先修改密码。"
+          : "修改后其它设备上的登录会立即失效，需要重新登录。"}
+        新密码至少 12 位，不能与登录名或当前密码相同，也不能纯为数字或字母。
       </p>
       {error ? <Alert type="error" showIcon title={error} /> : null}
       <Form form={form} layout="vertical" onFinish={submit} disabled={busy}>
@@ -98,6 +102,14 @@ export function ChangePasswordGate({
           </Typography.Text>
         </Space>
       </Form>
+    </>
+  );
+
+  if (variant === "modal") return body;
+  return (
+    <section className={className} aria-label="首次登录修改密码">
+      <Typography.Title level={3}>请先设置新密码</Typography.Title>
+      {body}
     </section>
   );
 }

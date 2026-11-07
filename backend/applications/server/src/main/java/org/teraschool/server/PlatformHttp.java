@@ -82,8 +82,10 @@ class PlatformHttp {
                   "tenantId", provisioned.tenantId(),
                   "accountId", provisioned.accountId()));
     } catch (TenantProvisioning.ProvisioningConflict conflict) {
+      provisioning.recordFailure(operator, request, conflict.code());
       return problem(response, 409, conflict.code());
     } catch (IllegalArgumentException invalid) {
+      provisioning.recordFailure(operator, request, "INVALID_REQUEST");
       return problem(response, 400, "INVALID_REQUEST", invalid.getMessage());
     }
   }
@@ -132,6 +134,19 @@ class PlatformHttp {
     } catch (TenantProvisioning.TenantMissing missing) {
       return problem(response, 404, "TENANT_NOT_FOUND");
     }
+  }
+
+  /** 租户详情：状态、开通时间与三个计数；不含任何业务明细。 */
+  @GetMapping("/api/platform/tenants/{id}")
+  ResponseEntity<?> tenant(
+      @PathVariable UUID id, org.springframework.security.core.Authentication authentication) {
+    var operator = operator(authentication);
+    if (!operator.actions().contains("TENANT_READ")) return ResponseEntity.status(403).build();
+    var found = provisioning.tenant(id);
+    if (found.isEmpty()) return ResponseEntity.status(404).build();
+    var detail = new java.util.LinkedHashMap<String, Object>(found.get());
+    detail.putAll(provisioning.summary(id));
+    return ResponseEntity.ok(detail);
   }
 
   /** 某租户的租户管理员列表：只有登录名、状态与创建时间。 */

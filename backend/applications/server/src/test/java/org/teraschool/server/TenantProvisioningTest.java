@@ -103,16 +103,18 @@ class TenantProvisioningTest {
   }
 
   @Test
-  void duplicateNameOrLoginIsRejectedWithStableCodes() throws Exception {
+  void sameNameIsAllowedButRepeatedLoginIsRejected() throws Exception {
     var client = platformClient();
     var name = "重名机构-" + UUID.randomUUID().toString().substring(0, 6);
     var admin = "dup-" + UUID.randomUUID().toString().substring(0, 8);
     assertThat(provision(client, UUID.randomUUID(), name, admin).statusCode()).isEqualTo(201);
 
+    // 不同客户可以同名：名字不是标识，租户 id 才是。
     var sameName = provision(client, UUID.randomUUID(), name, admin + "x");
-    assertThat(sameName.statusCode()).isEqualTo(409);
-    assertThat(sameName.body()).contains("TENANT_NAME_TAKEN");
+    assertThat(sameName.statusCode()).as(sameName.body()).isEqualTo(201);
+    assertThat(count("select count(*) from identity.tenant where name=?", name)).isEqualTo(2);
 
+    // 登录名是全平台唯一标识，重复必须拒绝。
     var sameLogin = provision(client, UUID.randomUUID(), name + "-另一家", admin);
     assertThat(sameLogin.statusCode()).isEqualTo(409);
     assertThat(sameLogin.body()).contains("ADMIN_LOGIN_TAKEN");
@@ -240,6 +242,70 @@ class TenantProvisioningTest {
     var fresh = client();
     login(fresh, admin, resetPassword);
     assertThat(get(fresh, "/api/organization/units").statusCode()).isEqualTo(403);
+  }
+
+  @Test
+  void detailShowsCountsButNoBusinessData() throws Exception {
+    var platform = platformClient();
+    var name = "详情机构-" + UUID.randomUUID().toString().substring(0, 6);
+    var admin = "detail-" + UUID.randomUUID().toString().substring(0, 8);
+    var created = provision(platform, UUID.randomUUID(), name, admin);
+    assertThat(created.statusCode()).isEqualTo(201);
+    var tenantId = UUID.fromString(json.readTree(created.body()).get("tenantId").asText());
+
+    var list = get(platform, "/api/platform/tenants?page=0&size=50");
+    assertThat(list.statusCode()).isEqualTo(200);
+    assertThat(list.body()).contains(name);
+
+    var detail = get(platform, "/api/platform/tenants/" + tenantId);
+    assertThat(detail.statusCode()).isEqualTo(200);
+    var body = json.readTree(detail.body());
+    assertThat(body.get("name").asText()).isEqualTo(name);
+    assertThat(body.get("schools").asInt()).isZero();
+    assertThat(body.get("accounts").asInt()).isEqualTo(1);
+    assertThat(body.get("administrators").asInt()).isEqualTo(1);
+    // 平台详情不出现业务字段。
+    for (var key : new String[] {"students", "enrollments", "receipts", "amount"})
+      assertThat(body.has(key)).as(key).isFalse();
+  }
+
+  @Test
+  void failedProvisioningIsRecordedAndCanBeRetried() throws Exception {
+    var platform = platformClient();
+    var requestId = UUID.randomUUID();
+    var name = "失败机构-" + UUID.randomUUID().toString().substring(0, 6);
+    var login = "blocked-" + UUID.randomUUID().toString().substring(0, 8);
+
+    // 先占住登录名，让第一次开通在创建账号时失败。
+    var blockerTenant = UUID.randomUUID();
+    EngineeringTest.update(
+        "insert into identity.tenant(id,name) values (?,?)", blockerTenant, "占位机构-" + login);
+    EngineeringTest.update(
+        "insert into identity.account(tenant_id,login,password_hash) values (?,?,?)",
+        blockerTenant,
+        login,
+        "{noop}x");
+
+    var failed = provision(platform, requestId, name, login);
+    assertThat(failed.statusCode()).isEqualTo(409);
+    assertThat(
+            count(
+                "select count(*) from platform.provisioning_request"
+                    + " where request_id=? and status='FAILED'",
+                requestId))
+        .isEqualTo(1);
+
+    // 冲突消除后，同一 requestId 重试应当成功，并覆盖那条失败记录。
+    EngineeringTest.update("delete from identity.account where login=?", login);
+    EngineeringTest.update("delete from identity.tenant where id=?", blockerTenant);
+    var retried = provision(platform, requestId, name, login);
+    assertThat(retried.statusCode()).as(retried.body()).isEqualTo(201);
+    assertThat(
+            count(
+                "select count(*) from platform.provisioning_request"
+                    + " where request_id=? and status='ACTIVE'",
+                requestId))
+        .isEqualTo(1);
   }
 
   // ---------------------------------------------------------------- helpers

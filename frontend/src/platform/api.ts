@@ -171,8 +171,6 @@ export async function provisionTenant(input: {
     const problem = (await response.json().catch(() => null)) as {
       code?: string;
     } | null;
-    if (problem?.code === "TENANT_NAME_TAKEN")
-      throw new RequestFailed(409, "已有同名机构，请换一个名称");
     if (problem?.code === "ADMIN_LOGIN_TAKEN")
       throw new RequestFailed(409, "管理员登录名已被占用，请换一个");
     if (problem?.code === "IDEMPOTENCY_MISMATCH")
@@ -230,4 +228,29 @@ export async function fetchAdministrators(
     items?: Array<{ login: string; active: boolean }>;
   };
   return data.items ?? [];
+}
+
+export interface TenantDetail {
+  id: string;
+  name: string;
+  active: boolean;
+  created_at: string;
+  schools: number;
+  accounts: number;
+  administrators: number;
+}
+
+/** 租户详情：只有名称、状态、开通时间与三个计数，没有任何业务明细。 */
+export async function fetchTenantDetail(id: string): Promise<TenantDetail> {
+  const response = await fetch(`/api/platform/tenants/${id}`, {
+    credentials: "same-origin",
+  });
+  if (response.status === 401)
+    throw new SessionExpired("登录已失效，请重新登录");
+  if (response.status === 403) throw new AccessDenied("缺少 TENANT_READ 权限");
+  if (response.status === 404)
+    throw new RequestFailed(404, "租户不存在，刷新后再试");
+  if (!response.ok)
+    throw new RequestFailed(response.status, "加载租户详情失败");
+  return (await response.json()) as TenantDetail;
 }

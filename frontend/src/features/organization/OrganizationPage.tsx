@@ -12,6 +12,7 @@ import { MyPermissions } from "./MyPermissions";
 import { ResourceWorkspace } from "./ResourceWorkspace";
 import { SchoolEditor } from "./SchoolEditor";
 import { StudentDirectory } from "../archive/StudentDirectory";
+import { Modal } from "antd";
 import { ChangePasswordGate } from "../identity/ChangePasswordGate";
 import { OnboardingGuide } from "./OnboardingGuide";
 import { ProductCatalogWorkspace } from "../product/ProductCatalog";
@@ -79,6 +80,7 @@ function Workspace({ reset }: { reset: () => void }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [passwordNotice, setPasswordNotice] = useState("");
+  const [passwordOpen, setPasswordOpen] = useState(false);
   const [form] = Form.useForm();
   const me = useQuery({
     queryKey: ["session"],
@@ -234,6 +236,25 @@ function Workspace({ reset }: { reset: () => void }) {
           </Space>
         </nav>
       </aside>
+      <Modal
+        open={passwordOpen}
+        title="修改密码"
+        footer={null}
+        onCancel={() => setPasswordOpen(false)}
+      >
+        <ChangePasswordGate
+          variant="modal"
+          onChanged={() => {
+            setPasswordOpen(false);
+            setPasswordNotice("密码已更新，请用新密码重新登录。");
+            void reset();
+          }}
+          onSessionLost={() => {
+            setPasswordOpen(false);
+            void reset();
+          }}
+        />
+      </Modal>
       <main className={styles.main}>
         <header className={styles.header}>
           <div>
@@ -262,6 +283,7 @@ function Workspace({ reset }: { reset: () => void }) {
           {me.data ? (
             <Space>
               <MyPermissions />
+              <Button onClick={() => setPasswordOpen(true)}>修改密码</Button>
               <Button onClick={() => void signOut()} loading={busy}>
                 退出登录
               </Button>

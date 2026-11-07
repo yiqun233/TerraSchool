@@ -469,3 +469,71 @@
   font-size: 13px;
   color: var(--ts-ink);
 }
+
+button.orgName {
+  all: unset;
+  cursor: pointer;
+  color: var(--ts-brand, #254c78);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+button.orgName:hover,
+button.orgName:focus-visible {
+  text-decoration: underline;
+}
+
+button.orgName:focus-visible {
+  outline: 2px solid var(--ts-brand, #254c78);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ---------- 窄屏 ---------- */
+/* 平台运营在 1024 以下把侧栏收成顶部条；表格允许横向滚动而不是压缩列宽。 */
+@media (max-width: 1024px) {
+  .shell {
+    flex-direction: column;
+  }
+
+  .side {
+    width: auto;
+    flex: none;
+    border-right: none;
+    border-bottom: 1px solid var(--ts-line);
+    padding: 12px 16px;
+    flex-direction: row;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .sideFoot {
+    margin-top: 0;
+    margin-left: auto;
+  }
+
+  .main {
+    padding: 16px;
+  }
+
+  .content {
+    overflow-x: auto;
+  }
+}
+
+@media (max-width: 720px) {
+  .side {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+
+  .pageHead {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .credential {
+    grid-template-columns: 72px 1fr;
+  }
+}
