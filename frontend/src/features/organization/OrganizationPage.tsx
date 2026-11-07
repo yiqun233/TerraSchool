@@ -13,6 +13,7 @@ import { ResourceWorkspace } from "./ResourceWorkspace";
 import { SchoolEditor } from "./SchoolEditor";
 import { StudentDirectory } from "../archive/StudentDirectory";
 import { ChangePasswordGate } from "../identity/ChangePasswordGate";
+import { OnboardingGuide } from "./OnboardingGuide";
 import { ProductCatalogWorkspace } from "../product/ProductCatalog";
 import { EnrollmentWorkspace } from "../enrollment/EnrollmentWorkspace";
 import { TeachingWorkspace } from "../teaching/TeachingWorkspace";
@@ -90,6 +91,10 @@ function Workspace({ reset }: { reset: () => void }) {
       return data;
     },
   });
+  // 是否展示首次引导由事实决定：有组织读取权限，但可读学校为空。
+  const needsOnboarding =
+    !!me.data?.canReadOrganizations &&
+    (me.data.readableSchoolIds?.length ?? 0) === 0;
   const units = useQuery({
     queryKey: ["organization", me.data?.accountId, me.data?.tenantId, page],
     enabled: !!me.data?.canReadOrganizations && section === "ORGANIZATION",
@@ -345,6 +350,8 @@ function Workspace({ reset }: { reset: () => void }) {
           <ResourceWorkspace key={section} kind={section} />
         ) : !me.data.canReadOrganizations ? (
           <Alert title="账号当前无组织查询权限" type="error" />
+        ) : needsOnboarding ? (
+          <OnboardingGuide onSchoolCreated={() => void reset()} />
         ) : (
           <>
             <Space className={styles.toolbar}>
