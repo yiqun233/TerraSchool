@@ -83,6 +83,58 @@ class TenantProvisioning {
     }
   }
 
+  /**
+   * 停用或恢复租户。返回是否真的改变了状态；状态未变时按幂等处理，不写第二条审计。
+   *
+   * <p>写权限不在平台角色上，只在 {@code platform.set_tenant_active} 函数里。
+   */
+  boolean setActive(PlatformIdentity.Operator operator, UUID tenantId, boolean active) {
+    try {
+      return Boolean.TRUE.equals(
+          db.queryForObject(
+              "select platform.set_tenant_active(?,?,?)",
+              Boolean.class,
+              operator.id(),
+              tenantId,
+              active));
+    } catch (org.springframework.dao.DataAccessException error) {
+      var message = error.getMostSpecificCause().getMessage();
+      if (message != null && message.contains("TENANT_NOT_FOUND")) throw new TenantMissing();
+      throw error;
+    }
+  }
+
+  /** 目标租户不存在：由接口层转成 404。 */
+  static class TenantMissing extends RuntimeException {}
+
+  /** 列出某租户的租户管理员：登录名与状态。 */
+  List<Map<String, Object>> administrators(UUID tenantId) {
+    return db.queryForList("select login, active from platform.tenant_administrators(?)", tenantId);
+  }
+
+  /**
+   * 重置租户管理员密码：置回强制改密并递增凭据版本，既有会话立即失效。
+   *
+   * <p>返回 false 表示该租户不存在这个管理员；调用方据此给 404，而不是假装成功。
+   */
+  boolean resetAdministratorPassword(
+      PlatformIdentity.Operator operator, UUID tenantId, String login, String password) {
+    if (login == null || login.isBlank()) throw new IllegalArgumentException("需要管理员登录名");
+    if (password.length() < MIN_PASSWORD) throw new IllegalArgumentException("初始密码至少 12 位");
+    var digits = password.chars().allMatch(Character::isDigit);
+    var letters = password.chars().allMatch(Character::isLetter);
+    if (digits || letters) throw new IllegalArgumentException("初始密码不能是纯数字或纯字母");
+    var updated =
+        db.queryForObject(
+            "select platform.reset_tenant_admin_password(?,?,?,?)",
+            Boolean.class,
+            operator.id(),
+            tenantId,
+            login.strip(),
+            encoder.encode(password));
+    return Boolean.TRUE.equals(updated);
+  }
+
   /** 平台只读租户基本信息：名称、状态与开通时间，不含任何业务数据。 */
   List<Map<String, Object>> tenants(int page, int size) {
     return db.queryForList(

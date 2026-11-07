@@ -63,7 +63,7 @@ final class PermissionRules {
     """;
   static final String CURRENT =
       """
-    SELECT a.id,a.tenant_id,p.action,p.school_id,p.effect,a.credential_version,a.tenant_admin
+    SELECT a.id,a.tenant_id,p.action,p.school_id,p.effect,a.credential_version,a.tenant_admin,a.password_change_required
     FROM identity.account a JOIN identity.tenant t ON t.id=a.tenant_id
     LEFT JOIN LATERAL (
     """
@@ -101,7 +101,12 @@ final class PermissionRules {
   }
 
   static CurrentPermissions calculate(
-      UUID account, UUID tenant, boolean active, List<Entry> rules, boolean tenantAdmin) {
+      UUID account,
+      UUID tenant,
+      boolean active,
+      List<Entry> rules,
+      boolean tenantAdmin,
+      boolean passwordChangeRequired) {
     var read = new Decision();
     var maintain = new Decision();
     var manage = new Decision();
@@ -125,7 +130,8 @@ final class PermissionRules {
         editable,
         manage.enabled() || tenantAdmin,
         manage.schools(),
-        tenantAdmin);
+        tenantAdmin,
+        passwordChangeRequired);
   }
 
   /**

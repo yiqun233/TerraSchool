@@ -2,6 +2,7 @@ package org.teraschool.server;
 
 import jakarta.servlet.http.*;
 import java.util.Map;
+import java.util.UUID;
 import org.springframework.http.*;
 import org.springframework.security.web.csrf.CsrfToken;
 import org.springframework.web.bind.annotation.*;
@@ -97,6 +98,83 @@ class PlatformHttp {
     if (page < 0 || size < 1 || size > 100) return ResponseEntity.badRequest().build();
     if (!operator.actions().contains("TENANT_READ")) return ResponseEntity.status(403).build();
     return ResponseEntity.ok(Map.of("items", provisioning.tenants(page, size), "page", page));
+  }
+
+  /** 停用租户：只影响登录与访问，数据保留；可恢复。 */
+  @PostMapping("/api/platform/tenants/{id}/suspend")
+  ResponseEntity<?> suspend(
+      @PathVariable UUID id,
+      org.springframework.security.core.Authentication authentication,
+      HttpServletResponse response) {
+    return setActive(authentication, id, false, "TENANT_SUSPEND", response);
+  }
+
+  /** 恢复租户。 */
+  @PostMapping("/api/platform/tenants/{id}/resume")
+  ResponseEntity<?> resume(
+      @PathVariable UUID id,
+      org.springframework.security.core.Authentication authentication,
+      HttpServletResponse response) {
+    return setActive(authentication, id, true, "TENANT_RESUME", response);
+  }
+
+  private ResponseEntity<?> setActive(
+      org.springframework.security.core.Authentication authentication,
+      UUID id,
+      boolean active,
+      String action,
+      HttpServletResponse response) {
+    var operator = operator(authentication);
+    if (!operator.actions().contains(action)) return ResponseEntity.status(403).build();
+    try {
+      provisioning.setActive(operator, id, active);
+      return ResponseEntity.noContent().build();
+    } catch (TenantProvisioning.TenantMissing missing) {
+      return problem(response, 404, "TENANT_NOT_FOUND");
+    }
+  }
+
+  /** 某租户的租户管理员列表：只有登录名、状态与创建时间。 */
+  @GetMapping("/api/platform/tenants/{id}/administrators")
+  ResponseEntity<?> administrators(
+      @PathVariable UUID id, org.springframework.security.core.Authentication authentication) {
+    var operator = operator(authentication);
+    if (!operator.actions().contains("TENANT_READ")) return ResponseEntity.status(403).build();
+    return ResponseEntity.ok(Map.of("items", provisioning.administrators(id)));
+  }
+
+  /** 重置租户管理员密码：不传 password 时由服务端生成 16 位强口令。 明文只在这一次响应里返回——离开即无法再次查看。 */
+  @PostMapping("/api/platform/tenants/{id}/administrators/{login}/reset-password")
+  ResponseEntity<?> resetPassword(
+      @PathVariable UUID id,
+      @PathVariable String login,
+      @RequestBody(required = false) ResetPassword body,
+      org.springframework.security.core.Authentication authentication,
+      HttpServletResponse response) {
+    var operator = operator(authentication);
+    if (!operator.actions().contains("TENANT_CREATE")) return ResponseEntity.status(403).build();
+    var password =
+        body != null && body.password() != null && !body.password().isBlank()
+            ? body.password()
+            : randomPassword();
+    try {
+      if (!provisioning.resetAdministratorPassword(operator, id, login, password))
+        return problem(response, 404, "ADMINISTRATOR_NOT_FOUND");
+    } catch (IllegalArgumentException invalid) {
+      return problem(response, 400, "INVALID_REQUEST", invalid.getMessage());
+    }
+    return ResponseEntity.ok(Map.of("login", login, "password", password));
+  }
+
+  record ResetPassword(String password) {}
+
+  private static String randomPassword() {
+    var alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+    var random = new java.security.SecureRandom();
+    var text = new StringBuilder(16);
+    for (int index = 0; index < 16; index += 1)
+      text.append(alphabet.charAt(random.nextInt(alphabet.length())));
+    return text.toString();
   }
 
   private PlatformIdentity.Operator operator(

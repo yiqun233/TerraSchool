@@ -9,6 +9,15 @@ import org.springframework.security.web.SecurityFilterChain;
 /** Cookie 会话与默认 CSRF；登录失败和受限入口返回明确 HTTP 状态。 */
 @Configuration
 class WebSecurity {
+  /** 强制改密期间仍然可用的接口：读会话、拿 CSRF、改密、退出。 */
+  private static final java.util.Set<String> PASSWORD_CHANGE_ALLOWED =
+      java.util.Set.of(
+          "/api/session/password",
+          "/api/session/csrf",
+          "/api/session/me",
+          "/api/session/permissions",
+          "/api/session/logout");
+
   private final RejectedRequestAudit audit;
   private final org.teraschool.identity.api.CurrentActor actors;
 
@@ -61,7 +70,13 @@ class WebSecurity {
                         instanceof
                         org.springframework.security.authentication.AnonymousAuthenticationToken)) {
                   try {
-                    actors.permissions();
+                    var permissions = actors.permissions();
+                    // 首次登录或平台重置后必须先改密：只放行会话自身接口，其余一律拒绝。
+                    if (permissions.passwordChangeRequired()
+                        && !PASSWORD_CHANGE_ALLOWED.contains(request.getRequestURI())) {
+                      problem(request, response, 403, "PASSWORD_CHANGE_REQUIRED");
+                      return;
+                    }
                   } catch (org.springframework.security.access.AccessDeniedException invalid) {
                     problem(request, response, 401, "AUTHENTICATION_REQUIRED");
                     var session = request.getSession(false);

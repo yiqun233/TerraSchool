@@ -143,20 +143,13 @@ class TenantProvisioningTest {
     assertThat(provision(platform, UUID.randomUUID(), name, admin).statusCode()).isEqualTo(201);
 
     var tenant = client();
-    var sessionCsrf = json.readTree(get(tenant, "/api/session/csrf").body());
-    var form =
-        "username="
-            + admin
-            + "&password="
-            + URLEncoder.encode(ADMIN_PASSWORD, java.nio.charset.StandardCharsets.UTF_8)
-            + "&"
-            + sessionCsrf.get("parameterName").asText()
-            + "="
-            + URLEncoder.encode(
-                sessionCsrf.get("token").asText(), java.nio.charset.StandardCharsets.UTF_8);
-    assertThat(postForm(tenant, "/api/session/login", null, form).statusCode()).isEqualTo(204);
+    login(tenant, admin, ADMIN_PASSWORD);
+    var newPassword = ADMIN_PASSWORD + "-x1";
+    changePassword(tenant, ADMIN_PASSWORD, newPassword);
 
-    var organizationCsrf = json.readTree(get(tenant, "/api/session/csrf").body());
+    var fresh = client();
+    login(fresh, admin, newPassword);
+    var csrf = json.readTree(get(fresh, "/api/session/csrf").body());
     var payload =
         json.createObjectNode()
             .put("requestId", UUID.randomUUID().toString())
@@ -164,10 +157,10 @@ class TenantProvisioningTest {
             .toString();
     var created =
         postJson(
-            tenant,
+            fresh,
             "/api/organization/schools",
-            organizationCsrf.get("headerName").asText(),
-            organizationCsrf.get("token").asText(),
+            csrf.get("headerName").asText(),
+            csrf.get("token").asText(),
             payload);
     assertThat(created.statusCode()).as(created.body()).isEqualTo(201);
     assertThat(
@@ -178,7 +171,120 @@ class TenantProvisioningTest {
         .isEqualTo(1);
   }
 
+  @Test
+  void firstLoginMustChangePasswordBeforeAnyBusinessCall() throws Exception {
+    var platform = platformClient();
+    var name = "首登机构-" + UUID.randomUUID().toString().substring(0, 6);
+    var admin = "gate-" + UUID.randomUUID().toString().substring(0, 8);
+    assertThat(provision(platform, UUID.randomUUID(), name, admin).statusCode()).isEqualTo(201);
+
+    var tenant = client();
+    login(tenant, admin, ADMIN_PASSWORD);
+    var blocked = get(tenant, "/api/organization/units");
+    assertThat(blocked.statusCode()).isEqualTo(403);
+    assertThat(blocked.body()).contains("PASSWORD_CHANGE_REQUIRED");
+
+    var newPassword = "Changed-" + UUID.randomUUID().toString().substring(0, 10);
+    changePassword(tenant, ADMIN_PASSWORD, newPassword);
+
+    // 改密递增凭据版本：旧会话立即失效，必须用新口令重新登录。
+    assertThat(get(tenant, "/api/session/me").statusCode()).isEqualTo(401);
+
+    var again = client();
+    login(again, admin, newPassword);
+    assertThat(get(again, "/api/organization/units").statusCode()).isEqualTo(200);
+  }
+
+  @Test
+  void platformResetForcesChangeAgainAndInvalidatesOldPassword() throws Exception {
+    var platform = platformClient();
+    var name = "重置机构-" + UUID.randomUUID().toString().substring(0, 6);
+    var admin = "reset-" + UUID.randomUUID().toString().substring(0, 8);
+    assertThat(provision(platform, UUID.randomUUID(), name, admin).statusCode()).isEqualTo(201);
+
+    var tenantId = tenantIdOf(admin);
+    var admins = get(platform, "/api/platform/tenants/" + tenantId + "/administrators");
+    assertThat(admins.statusCode()).isEqualTo(200);
+    assertThat(admins.body()).contains(admin);
+
+    var resetPassword = "Reset-" + UUID.randomUUID().toString().substring(0, 10);
+    var csrf = json.readTree(get(platform, "/api/platform/session/csrf").body());
+    var reset =
+        postJson(
+            platform,
+            "/api/platform/tenants/" + tenantId + "/administrators/" + admin + "/reset-password",
+            csrf.get("headerName").asText(),
+            csrf.get("token").asText(),
+            json.createObjectNode().put("password", resetPassword).toString());
+    assertThat(reset.statusCode()).as(reset.body()).isEqualTo(200);
+    assertThat(reset.body()).contains(resetPassword);
+
+    var oldClient = client();
+    var oldCsrf = json.readTree(get(oldClient, "/api/session/csrf").body());
+    var rejected =
+        postForm(
+            oldClient,
+            "/api/session/login",
+            null,
+            "username="
+                + admin
+                + "&password="
+                + ADMIN_PASSWORD
+                + "&"
+                + oldCsrf.get("parameterName").asText()
+                + "="
+                + URLEncoder.encode(
+                    oldCsrf.get("token").asText(), java.nio.charset.StandardCharsets.UTF_8));
+    assertThat(rejected.statusCode()).isEqualTo(401);
+
+    var fresh = client();
+    login(fresh, admin, resetPassword);
+    assertThat(get(fresh, "/api/organization/units").statusCode()).isEqualTo(403);
+  }
+
   // ---------------------------------------------------------------- helpers
+
+  private UUID tenantIdOf(String adminLogin) throws Exception {
+    try (var connection = EngineeringTest.admin();
+        var statement =
+            connection.prepareStatement("select tenant_id from identity.account where login=?")) {
+      statement.setString(1, adminLogin);
+      try (var rows = statement.executeQuery()) {
+        rows.next();
+        return rows.getObject(1, UUID.class);
+      }
+    }
+  }
+
+  private void login(HttpClient client, String login, String password) throws Exception {
+    var csrf = json.readTree(get(client, "/api/session/csrf").body());
+    var body =
+        "username="
+            + login
+            + "&password="
+            + URLEncoder.encode(password, java.nio.charset.StandardCharsets.UTF_8)
+            + "&"
+            + csrf.get("parameterName").asText()
+            + "="
+            + URLEncoder.encode(
+                csrf.get("token").asText(), java.nio.charset.StandardCharsets.UTF_8);
+    assertThat(postForm(client, "/api/session/login", null, body).statusCode()).isEqualTo(204);
+  }
+
+  private void changePassword(HttpClient client, String current, String next) throws Exception {
+    var csrf = json.readTree(get(client, "/api/session/csrf").body());
+    var response =
+        postJson(
+            client,
+            "/api/session/password",
+            csrf.get("headerName").asText(),
+            csrf.get("token").asText(),
+            json.createObjectNode()
+                .put("currentPassword", current)
+                .put("newPassword", next)
+                .toString());
+    assertThat(response.statusCode()).as(response.body()).isEqualTo(204);
+  }
 
   private HttpClient client() {
     return HttpClient.newBuilder()

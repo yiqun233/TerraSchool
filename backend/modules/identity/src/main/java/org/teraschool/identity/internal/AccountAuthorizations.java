@@ -41,7 +41,8 @@ public class AccountAuthorizations {
                     r.get("action", String.class),
                     r.get("school_id", UUID.class),
                     r.get("effect", String.class))),
-        rows.getFirst().get("tenant_admin", Boolean.class));
+        rows.getFirst().get("tenant_admin", Boolean.class),
+        rows.getFirst().get("password_change_required", Boolean.class));
   }
 
   <T> T managed(Function<CurrentPermissions, T> work) {
@@ -130,7 +131,8 @@ public class AccountAuthorizations {
     if (id == null) throw new IllegalArgumentException("缺少账号");
     var row =
         sql.fetchOne(
-            "select id,tenant_id,login,active,authorization_version,tenant_admin from identity.account where id=?",
+            "select id,tenant_id,login,active,authorization_version,tenant_admin,password_change_required"
+                + " from identity.account where id=?",
             id);
     if (row == null) throw new AccessDeniedException("账号不可管理");
     var rules =
@@ -203,7 +205,8 @@ public class AccountAuthorizations {
             row.get("tenant_id", UUID.class),
             row.get("active", Boolean.class),
             expanded,
-            row.get("tenant_admin", Boolean.class)),
+            row.get("tenant_admin", Boolean.class),
+            row.get("password_change_required", Boolean.class)),
         schoolLabels,
         roleLabels);
   }
