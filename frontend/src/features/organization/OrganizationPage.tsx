@@ -12,6 +12,7 @@ import { MyPermissions } from "./MyPermissions";
 import { ResourceWorkspace } from "./ResourceWorkspace";
 import { SchoolEditor } from "./SchoolEditor";
 import { StudentDirectory } from "../archive/StudentDirectory";
+import { ChangePasswordGate } from "../identity/ChangePasswordGate";
 import { ProductCatalogWorkspace } from "../product/ProductCatalog";
 import { EnrollmentWorkspace } from "../enrollment/EnrollmentWorkspace";
 import { TeachingWorkspace } from "../teaching/TeachingWorkspace";
@@ -76,6 +77,7 @@ function Workspace({ reset }: { reset: () => void }) {
   const [page, setPage] = useState(0);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [passwordNotice, setPasswordNotice] = useState("");
   const [form] = Form.useForm();
   const me = useQuery({
     queryKey: ["session"],
@@ -111,6 +113,7 @@ function Workspace({ reset }: { reset: () => void }) {
     try {
       await login(values);
       form.resetFields();
+      setPasswordNotice("");
       reset();
     } catch (e) {
       setError((e as Error).message);
@@ -274,10 +277,22 @@ function Workspace({ reset }: { reset: () => void }) {
               </Space>
             }
           />
+        ) : me.data?.passwordChangeRequired ? (
+          <ChangePasswordGate
+            className={styles.login}
+            onChanged={() => {
+              setPasswordNotice("密码已更新，请用新密码重新登录。");
+              void reset();
+            }}
+            onSessionLost={() => void reset()}
+          />
         ) : !me.data ? (
           <section className={styles.login}>
             <Typography.Title level={3}>登录账号</Typography.Title>
             <p>登录后查看已授权学校的学校、校区与部门。</p>
+            {passwordNotice ? (
+              <Alert type="success" showIcon title={passwordNotice} />
+            ) : null}
             <Form form={form} layout="vertical" onFinish={signIn}>
               <Form.Item
                 name="username"

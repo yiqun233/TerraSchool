@@ -8,7 +8,7 @@ export async function csrf() {
   if (error || !data) throw new Error("无法获取安全令牌，请重试");
   return data;
 }
-class SessionExpired extends Error {}
+export class SessionExpired extends Error {}
 export async function login(values: { username: string; password: string }) {
   const token = await csrf();
   const response = await fetch("/api/session/login", {
@@ -71,4 +71,34 @@ export async function downloadCsv(
   link.click();
   URL.revokeObjectURL(url);
   return true;
+}
+
+/**
+ * 本人改密：首次登录强制改密与主动改密共用。
+ *
+ * 成功后会递增凭据版本，当前会话随即失效——调用方应把用户送回登录页。
+ */
+export async function changePassword(
+  currentPassword: string,
+  newPassword: string,
+): Promise<void> {
+  const token = await csrf();
+  const response = await fetch("/api/session/password", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      [token.headerName!]: token.token!,
+    },
+    body: JSON.stringify({ currentPassword, newPassword }),
+  });
+  if (response.status === 401)
+    throw new SessionExpired("登录已失效，请重新登录");
+  if (response.status === 400) {
+    const problem = (await response.json().catch(() => null)) as {
+      detail?: string;
+    } | null;
+    throw new Error(problem?.detail ?? "新密码不符合要求，请按提示修改");
+  }
+  if (!response.ok) throw new Error("修改密码失败，请重试");
 }
