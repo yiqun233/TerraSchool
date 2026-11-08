@@ -126,7 +126,12 @@ class LocalDevTests(unittest.TestCase):
                 patch.object(dev, 'inspect_owned'), patch.object(dev, 'docker', return_value='docker'), \
                 patch.object(dev, 'command') as command:
             migration.migrate()
-            prepare.assert_called_once_with(current)
+            # 续做的准备沿用同一环境，只补齐缺失的角色口令，不重造环境。
+            prepared = prepare.call_args.args[0]
+            self.assertEqual(prepared['environment_id'], current['environment_id'])
+            self.assertEqual(prepared['passwords']['audit'], 'fixture')
+            self.assertEqual(prepared['passwords']['scheduler'], 'scheduler-fixture')
+            self.assertTrue(prepared['passwords']['platform'])
             command.assert_called_once_with(['docker', 'stop', 'fixture-old'], source)
         self.assertEqual(json.loads((backups / 'wsl-migration-result.json').read_text())['status'], 'passed')
 
@@ -149,6 +154,34 @@ class LocalDevTests(unittest.TestCase):
         self.assertEqual(first['passwords']['app'], 'existing-app')
         self.assertTrue(first['passwords']['audit'])
         self.assertTrue(first['passwords']['scheduler'])
+        self.assertTrue(first['passwords']['platform'])
+
+    def test_legacy_state_gains_platform_credential_and_creates_its_role(self):
+        # 旧状态没有 platform 口令时曾直接 KeyError，本地启动停在第一步。
+        state = self.local / 'environment.json'
+        dev.write_json(state, {'workspace': dev.WORKSPACE, 'environment_id': 'ours',
+            'settings': dev.SETTINGS, 'passwords': {key: 'fixture'
+            for key, _ in dev.ROLE_CREDENTIALS if key != 'platform'}})
+        with patch.object(dev, 'STATE', state):
+            config = dev.configuration()
+            self.assertTrue(config['passwords']['platform'])
+            self.assertEqual(config, dev.configuration())
+        writes = []
+
+        def admin(_, text, database='postgres'):
+            if 'server_version' in text:
+                return '18.6'
+            if 'rolname IN' in text:
+                return '{}'
+            if "datname='teraschool_dev'" in text:
+                return '1' if 'count(*)' in text else dev.database_marker(config)
+            writes.append(text)
+            return ''
+
+        with patch.object(dev, 'wsl_admin', side_effect=admin):
+            dev.ensure_database(config)
+        created = 'CREATE ROLE ts_platform LOGIN PASSWORD ' + dev.literal(config['passwords']['platform'])
+        self.assertTrue(any(created in text for text in writes))
 
 
 if __name__ == '__main__':

@@ -28,6 +28,10 @@ WORKSPACE = hashlib.sha256(str(ROOT).lower().encode()).hexdigest()[:16]
 STATE = LOCAL / 'environment.json'
 RUNNING = LOCAL / 'running.json'
 JAR = ROOT / 'backend/applications/server/target/server-0.1.0-SNAPSHOT.jar'
+# 状态口令、数据库角色与运行时配置共用这一张表，新增角色不会漏掉任何一处。
+ROLE_CREDENTIALS = [('migrator', 'ts_migrator'), ('app', 'ts_app'), ('identity', 'ts_identity'),
+                    ('session', 'ts_session'), ('audit', 'ts_audit'), ('scheduler', 'ts_scheduler'),
+                    ('platform', 'ts_platform')]
 sys.path.insert(0, str(ROOT / 'tools/verification/core-stack'))
 from process_tree import stop_tree
 
@@ -131,16 +135,16 @@ def configuration():
         value = json.loads(STATE.read_text(encoding='utf-8'))
         if value['workspace'] != WORKSPACE or value['settings'] != SETTINGS:
             raise RuntimeError('开发配置与当前目录/settings.json不一致；旧Docker环境请先运行tools/dev/migrate_wsl.py。')
-        if 'audit' not in value['passwords']:
-            value['passwords']['audit'] = secrets.token_urlsafe(30)
-            write_json(STATE, value)
-        if 'scheduler' not in value['passwords']:
-            value['passwords']['scheduler'] = secrets.token_urlsafe(30)
+        # 角色口令必须补齐并写回状态，避免每次启动临时生成而与数据库中的口令不一致。
+        missing = [key for key, _ in ROLE_CREDENTIALS if key not in value['passwords']]
+        if missing:
+            for key in missing:
+                value['passwords'][key] = secrets.token_urlsafe(30)
             write_json(STATE, value)
         return value
     value = {'workspace': WORKSPACE, 'environment_id': secrets.token_hex(16),
              'settings': SETTINGS, 'passwords': {key: secrets.token_urlsafe(30)
-             for key in ['migrator', 'app', 'identity', 'session', 'audit', 'scheduler', 'login']}}
+             for key in [key for key, _ in ROLE_CREDENTIALS] + ['login']}}
     write_json(STATE, value)
     (LOCAL / 'accounts.txt').write_text(
         '仅供本机合成演示，不是正式管理员。\n维护账号：local-admin\n只读账号：local-reader\n两账号密码：' +
@@ -214,7 +218,7 @@ def ensure_database(config):
         raise RuntimeError('当前工程需要已验证的PostgreSQL18。')
     roles = json.loads(wsl_admin(config, "SELECT coalesce(json_object_agg(rolname, "
         "coalesce(shobj_description(oid,'pg_authid'),'')),'{}'::json) FROM pg_roles "
-        "WHERE rolname IN ('ts_migrator','ts_app','ts_identity','ts_session','ts_audit','ts_scheduler','ts_platform');"))
+        "WHERE rolname IN (" + ','.join(literal(role) for _, role in ROLE_CREDENTIALS) + ");"))
     for name, marker in roles.items():
         if marker != database_marker(config):
             raise RuntimeError('已有角色不属于当前项目，拒绝更改：' + name)
@@ -222,7 +226,7 @@ def ensure_database(config):
     if existing == '1':
         assert_wsl_database(config)
     statements = []
-    for key, role in [('migrator','ts_migrator'),('app','ts_app'),('identity','ts_identity'),('session','ts_session'),('audit','ts_audit'),('scheduler','ts_scheduler'),('platform','ts_platform')]:
+    for key, role in ROLE_CREDENTIALS:
         if role not in roles:
             statements.append('CREATE ROLE ' + role + ' LOGIN PASSWORD ' + literal(config['passwords'][key]) +
                 ' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS; COMMENT ON ROLE ' + role + ' IS ' +
@@ -285,14 +289,16 @@ def mail_credential_key(config):
 
 def write_runtime_config(config):
     """每次启动都从受限文件复核并生成配置，避免旧配置掩盖主密钥丢失。"""
-    config['passwords'].setdefault('scheduler', secrets.token_urlsafe(30))
-    config['passwords'].setdefault('platform', secrets.token_urlsafe(30))
+    for key, _ in ROLE_CREDENTIALS:
+        config['passwords'].setdefault(key, secrets.token_urlsafe(30))
     lines = ['# 自动生成，仅供本机开发，勿提交Git。', 'server:', '  address: 127.0.0.1',
              '  port: ' + str(SETTINGS['backend_port']), '  servlet:', '    session:', '      cookie:',
              '        secure: false', 'teraschool:', '  database:',
              '    url: jdbc:postgresql://127.0.0.1:' + str(SETTINGS['database_port']) + '/teraschool_dev']
-    for kind in ['app', 'identity', 'session', 'audit', 'scheduler', 'platform']:
-        lines += ['    ' + kind + ':', '      username: ts_' + kind,
+    for kind, role in ROLE_CREDENTIALS:
+        if role == 'ts_migrator':
+            continue
+        lines += ['    ' + kind + ':', '      username: ' + role,
                   '      password: ' + json.dumps(config['passwords'][kind])]
     lines += ['  mail-credentials:', '    master-key: ' + json.dumps(mail_credential_key(config))]
     storage_path = LOCAL / 'storage.json'
