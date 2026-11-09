@@ -69,7 +69,9 @@ backend:
   script:
     - python3 tools/migration/extract_legacy.py --self-check
     - cd backend
-    - ./mvnw -B -ntp -s .mvn/settings.xml -gs .mvn/settings.xml flyway:migrate
+    # flyway 必须加 -N 只作用于根工程：不加的话 Maven 会对 14 个模块逐个执行该 goal，
+    # 而 goal 不产出 jar，identity 解析 platform 依赖时就会 "Could not find artifact"。
+    - ./mvnw -B -ntp -s .mvn/settings.xml -gs .mvn/settings.xml -N flyway:migrate
     - ./mvnw -B -ntp -s .mvn/settings.xml -gs .mvn/settings.xml -N jooq-codegen:generate
     - ./mvnw -B -ntp -s .mvn/settings.xml -gs .mvn/settings.xml spotless:check
     - ./mvnw -B -ntp -s .mvn/settings.xml -gs .mvn/settings.xml verify

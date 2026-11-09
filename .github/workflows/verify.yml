@@ -64,7 +64,7 @@ jobs:
       - name: migrate, generate, verify
         working-directory: backend
         run: |
-          ./mvnw -B -ntp -s .mvn/settings.xml -gs .mvn/settings.xml flyway:migrate
+          ./mvnw -B -ntp -s .mvn/settings.xml -gs .mvn/settings.xml -N flyway:migrate
           ./mvnw -B -ntp -s .mvn/settings.xml -gs .mvn/settings.xml -N jooq-codegen:generate
           ./mvnw -B -ntp -s .mvn/settings.xml -gs .mvn/settings.xml spotless:check
           ./mvnw -B -ntp -s .mvn/settings.xml -gs .mvn/settings.xml verify
