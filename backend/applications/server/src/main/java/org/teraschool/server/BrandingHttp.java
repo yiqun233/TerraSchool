@@ -33,8 +33,9 @@ class BrandingHttp {
       HttpServletResponse response) {
     var permissions = actors.permissions();
     if (!permissions.canWriteBranding()) return ResponseEntity.status(403).build();
-    var expected = expectedVersion(body, ifMatch);
     try {
+      // 解析必须在品牌错误映射之内：非法 If-Match 是客户端输入错误，不能落成 500。
+      var expected = expectedVersion(body, ifMatch);
       return ResponseEntity.ok(
           branding.updateTenant(
               permissions.tenantId(),
@@ -54,6 +55,9 @@ class BrandingHttp {
       HttpServletResponse response) {
     var permissions = actors.permissions();
     if (!permissions.canWriteBranding()) return ResponseEntity.status(403).build();
+    // 先按声明体积拒绝，避免把容器允许的 5MB 复制进堆再判定。
+    if (file.getSize() > BrandingService.MAX_LOGO_BYTES)
+      return problem(response, 400, "INVALID_LOGO", "Logo 需为不超过 200KB 的图片");
     try {
       return ResponseEntity.ok(
           branding.uploadLogo(

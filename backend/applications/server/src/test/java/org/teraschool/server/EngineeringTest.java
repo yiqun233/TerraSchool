@@ -38,6 +38,7 @@ class EngineeringTest {
   @Autowired TenantTransactions tx;
   @Autowired DSLContext sql;
   @Autowired BrandingService branding;
+  @Autowired org.teraschool.identity.api.CurrentActor actors;
 
   @Autowired
   @Qualifier("schedulerDataSource")
@@ -272,6 +273,124 @@ class EngineeringTest {
     assertThatThrownBy(
             () -> branding.uploadLogo(A, USER, "WIDE", output.toByteArray(), "image/png"))
         .isInstanceOf(BrandingService.LogoUnavailable.class);
+  }
+
+  @Test
+  void brandingInvalidIfMatchIsClientError() throws Exception {
+    update(
+        "insert into identity.account_permission(account_id,tenant_id,action,effect)"
+            + " values (?,?,'TENANT_BRANDING_WRITE','ALLOW') on conflict do nothing",
+        USER,
+        A);
+    actor();
+    var http = new BrandingHttp(branding, actors);
+    var response = new org.springframework.mock.web.MockHttpServletResponse();
+
+    // 非法 If-Match 是客户端输入错误：必须落在品牌错误映射里，返回 400。
+    var invalid = http.put(new BrandingHttp.Update("坏头", "#3b4e9b", null), "abc", response);
+    assertThat(invalid.getStatusCode().value()).isEqualTo(400);
+    assertThat(
+            ((org.springframework.http.ProblemDetail) invalid.getBody())
+                .getProperties()
+                .get("code"))
+        .isEqualTo("INVALID_BRANDING");
+
+    // 合法但过期的版本号仍然走版本冲突，不能退化成 500。
+    var stale = http.put(new BrandingHttp.Update("过期", "#3b4e9b", null), "999", response);
+    assertThat(stale.getStatusCode().value()).isEqualTo(409);
+  }
+
+  @Test
+  void brandingRejectsHeaderDimensionsBeforeDecoding() throws Exception {
+    update(
+        "insert into identity.account_permission(account_id,tenant_id,action,effect)"
+            + " values (?,?,'TENANT_BRANDING_WRITE','ALLOW') on conflict do nothing",
+        USER,
+        A);
+    actor();
+    // 24 字节的合法 PNG 头，声明 20000×20000：体积远低于 200KB，解码后是 4 亿像素。
+    var header = new byte[24];
+    header[0] = (byte) 0x89;
+    header[1] = 'P';
+    header[2] = 'N';
+    header[3] = 'G';
+    header[4] = 0x0d;
+    header[5] = 0x0a;
+    header[6] = 0x1a;
+    header[7] = 0x0a;
+    header[11] = 13;
+    header[12] = 'I';
+    header[13] = 'H';
+    header[14] = 'D';
+    header[15] = 'R';
+    for (int offset : List.of(16, 20)) {
+      header[offset] = 0;
+      header[offset + 1] = 0;
+      header[offset + 2] = 0x4e;
+      header[offset + 3] = 0x20;
+    }
+    assertThatThrownBy(() -> branding.uploadLogo(A, USER, "WIDE", header, "image/png"))
+        .isInstanceOf(BrandingService.LogoInvalid.class)
+        .hasMessageContaining("最大边长");
+  }
+
+  @Test
+  void brandingFirstWriteIsSerialized() throws Exception {
+    var tenant = UUID.randomUUID();
+    var account = UUID.randomUUID();
+    update("insert into identity.tenant(id,name) values (?,?)", tenant, "并发机构");
+    update(
+        "insert into identity.account(id,tenant_id,login,password_hash) values (?,?,?,?)",
+        account,
+        tenant,
+        "fixture-concurrent",
+        PasswordEncoderFactories.createDelegatingPasswordEncoder().encode(PASSWORD));
+    update(
+        "insert into identity.account_permission(account_id,tenant_id,action,effect)"
+            + " values (?,?,'TENANT_BRANDING_WRITE','ALLOW')",
+        account,
+        tenant);
+
+    // 租户还没有品牌行时，FOR UPDATE 锁不到行；两个请求会各自算出版本 1。
+    // 租户级咨询锁让它们串行，第二个应当收到版本冲突而不是数据库主键异常。
+    var ready = new java.util.concurrent.CountDownLatch(2);
+    var go = new java.util.concurrent.CountDownLatch(1);
+    var outcomes = new java.util.concurrent.ConcurrentLinkedQueue<String>();
+    Runnable attempt =
+        () -> {
+          SecurityContextHolder.getContext()
+              .setAuthentication(
+                  new UsernamePasswordAuthenticationToken(principal(account), null, List.of()));
+          ready.countDown();
+          try {
+            go.await();
+            branding.updateTenant(
+                tenant, account, new BrandingService.Update("并发机构", "#3b4e9b", 0));
+            outcomes.add("ok");
+          } catch (BrandingService.VersionConflict conflict) {
+            outcomes.add("conflict");
+          } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            outcomes.add("interrupted");
+          } catch (RuntimeException other) {
+            outcomes.add(other.getClass().getSimpleName());
+          } finally {
+            SecurityContextHolder.clearContext();
+          }
+        };
+    var pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+    try {
+      var first = pool.submit(attempt);
+      var second = pool.submit(attempt);
+      assertThat(ready.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+      go.countDown();
+      first.get(30, java.util.concurrent.TimeUnit.SECONDS);
+      second.get(30, java.util.concurrent.TimeUnit.SECONDS);
+    } finally {
+      pool.shutdownNow();
+    }
+    assertThat(outcomes).containsExactlyInAnyOrder("ok", "conflict");
+    assertThat(branding.platformTenant(tenant, false).version()).isEqualTo(1);
   }
 
   @Test

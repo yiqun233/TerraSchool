@@ -13,7 +13,10 @@ function jsonResponse(status: number, body: unknown) {
   } as Response;
 }
 
-type Handler = (url: string, init?: RequestInit) => Response | undefined;
+type Handler = (
+  url: string,
+  init?: RequestInit,
+) => Response | Promise<Response> | undefined;
 
 function installFetch(handler: Handler) {
   fetchMock.mockImplementation(
@@ -344,5 +347,81 @@ describe("平台运营端", () => {
     await user.click(await screen.findByRole("button", { name: "重置" }));
     expect(await screen.findByText("Reset-Pass-123456")).toBeTruthy();
     expect(screen.getByText(/只显示这一次/)).toBeTruthy();
+  });
+
+  it("品牌弹窗丢弃过期租户的响应，不把甲的配置写进乙", async () => {
+    const admin = {
+      ...operator,
+      actions: ["TENANT_READ", "TENANT_BRANDING_WRITE"],
+    };
+    const pending = new Map<string, (response: Response) => void>();
+    const view = (displayName: string, version: number) => ({
+      displayName,
+      seed: "#3b4e9b",
+      brand: "#3b4e9b",
+      brandHover: "#2f3f7e",
+      brandActive: "#26336a",
+      brandSoft: "#eef1f9",
+      brandLine: "#cfd6ea",
+      brandLink: "#3b4e9b",
+      onBrand: "#ffffff",
+      logoWideUrl: null,
+      logoMarkUrl: null,
+      adjusted: false,
+      algoVersion: 1,
+      version,
+      canWrite: true,
+    });
+
+    installFetch((url) => {
+      if (url.endsWith("/api/platform/session/me"))
+        return jsonResponse(200, admin);
+      if (/\/branding\/history$/.test(url)) return jsonResponse(200, []);
+      const branding = url.match(
+        /\/api\/platform\/tenants\/([^/]+)\/branding$/,
+      );
+      if (branding)
+        return new Promise<Response>((resolve) =>
+          pending.set(branding[1], resolve),
+        );
+      const detail = url.match(/\/api\/platform\/tenants\/([^/]+)$/);
+      if (detail) {
+        const row = tenants.find((item) => item.id === detail[1]);
+        return jsonResponse(200, {
+          ...row,
+          schools: 2,
+          accounts: 5,
+          administrators: 1,
+        });
+      }
+      if (url.includes("/api/platform/tenants"))
+        return jsonResponse(200, { items: tenants, page: 0 });
+      return undefined;
+    });
+
+    const user = userEvent.setup();
+    render(<PlatformApp />);
+
+    // 打开甲的详情与品牌弹窗，品牌请求先挂起。
+    await user.click(await screen.findByRole("button", { name: "启明教育" }));
+    await user.click(await screen.findByRole("button", { name: "代改品牌" }));
+    // 关掉弹窗与抽屉，再打开乙的品牌弹窗。
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    await user.keyboard("{Escape}");
+    await user.click(await screen.findByRole("button", { name: "明德学堂" }));
+    await user.click(await screen.findByRole("button", { name: "代改品牌" }));
+
+    // 乙的响应先到，甲的晚到；表单必须保留乙的值。
+    pending.get(tenants[1].id)!(jsonResponse(200, view("明德品牌", 5)));
+    expect(await screen.findByText("当前版本 5")).toBeTruthy();
+    pending.get(tenants[0].id)!(jsonResponse(200, view("启明品牌", 9)));
+
+    await waitFor(() =>
+      expect(
+        (screen.getByLabelText("系统显示名") as HTMLInputElement).value,
+      ).toBe("明德品牌"),
+    );
+    expect(screen.getByText("当前版本 5")).toBeTruthy();
+    expect(screen.queryByText("当前版本 9")).toBeNull();
   });
 });

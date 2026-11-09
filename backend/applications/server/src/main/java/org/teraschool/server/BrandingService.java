@@ -1,6 +1,5 @@
 package org.teraschool.server;
 
-import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.util.List;
@@ -29,6 +28,14 @@ import tools.jackson.databind.json.JsonMapper;
 class BrandingService {
   private static final String DEFAULT_SEED = "#254c78";
   private static final int MAX_HISTORY = 10;
+
+  /** Logo 体积上限：与前端提示一致，先于解码生效。 */
+  static final int MAX_LOGO_BYTES = 204800;
+
+  /** 尺寸上限：先读图片头再解码，避免用合法体积提交超大像素。 */
+  private static final int MAX_LOGO_EDGE = 2048;
+
+  private static final long MAX_LOGO_PIXELS = 4_194_304L;
 
   private final JdbcTemplate app;
   private final JdbcTemplate platform;
@@ -227,12 +234,12 @@ class BrandingService {
   BrandingView uploadLogo(
       UUID tenantId, UUID accountId, String kind, byte[] bytes, String ignoredContentType) {
     var permissions = requireTenantBrandingWriter(tenantId, accountId);
-    if (bytes == null || bytes.length == 0 || bytes.length > 204800)
+    if (bytes == null || bytes.length == 0 || bytes.length > MAX_LOGO_BYTES)
       throw new LogoInvalid("Logo 需为不超过 200KB 的图片");
     var cleanKind = kind == null ? "" : kind.strip().toUpperCase(java.util.Locale.ROOT);
     if (!Set.of("WIDE", "MARK").contains(cleanKind)) throw new LogoInvalid("首版只支持横版与方形 Logo");
     var format = sniffFormat(bytes);
-    validateDimensions(cleanKind, bytes);
+    validateDimensions(cleanKind, bytes, format);
     if (!storage.configured()) throw new LogoUnavailable();
 
     var objectKey =
@@ -349,20 +356,82 @@ class BrandingService {
     throw new LogoInvalid("Logo 只支持 PNG 或 JPEG");
   }
 
-  private void validateDimensions(String kind, byte[] bytes) {
-    BufferedImage image;
-    try (var input = new ByteArrayInputStream(bytes)) {
-      image = ImageIO.read(input);
-    } catch (IOException invalid) {
-      throw new LogoInvalid("Logo 图片无法读取");
-    }
-    if (image == null) throw new LogoInvalid("Logo 图片无法读取");
-    if (image.getWidth() < 32 || image.getHeight() < 32) throw new LogoInvalid("Logo 最小边不得小于 32px");
-    var ratio = (double) image.getWidth() / image.getHeight();
+  /**
+   * 先读图片头拿尺寸并做上限校验，再解码确认内容。
+   *
+   * <p>解码会按声明尺寸分配像素缓冲，体积小但声明像素极大的图片足以耗尽堆；因此上限必须在解码之前生效，解码只在已通过上限的输入上进行。
+   */
+  private void validateDimensions(String kind, byte[] bytes, String format) {
+    var size = "image/png".equals(format) ? pngSize(bytes) : jpegSize(bytes);
+    int width = size[0];
+    int height = size[1];
+    int shortEdge = Math.min(width, height);
+    int longEdge = Math.max(width, height);
+    if (shortEdge < 32) throw new LogoInvalid("Logo 最小边不得小于 32px");
+    if (longEdge > MAX_LOGO_EDGE) throw new LogoInvalid("Logo 最大边长不得超过 " + MAX_LOGO_EDGE + "px");
+    if ((long) width * height > MAX_LOGO_PIXELS)
+      throw new LogoInvalid("Logo 总像素不得超过 " + MAX_LOGO_PIXELS / 10_000 + " 万");
+    var ratio = (double) width / height;
     if ("WIDE".equals(kind) && (ratio < 1.0 || ratio > 4.0))
       throw new LogoInvalid("横版 Logo 宽高比需在 1:1 至 4:1");
     if ("MARK".equals(kind) && (ratio < 0.9 || ratio > 1.1))
       throw new LogoInvalid("方形 Logo 宽高比需接近 1:1");
+    try (var input = new ByteArrayInputStream(bytes)) {
+      if (ImageIO.read(input) == null) throw new LogoInvalid("Logo 图片无法读取");
+    } catch (IOException invalid) {
+      throw new LogoInvalid("Logo 图片无法读取");
+    }
+  }
+
+  /** PNG：签名之后紧跟 IHDR，尺寸在固定偏移；不依赖解码器即可读出。 */
+  private static int[] pngSize(byte[] bytes) {
+    if (bytes.length < 24
+        || bytes[12] != 'I'
+        || bytes[13] != 'H'
+        || bytes[14] != 'D'
+        || bytes[15] != 'R') throw new LogoInvalid("Logo 图片无法读取");
+    int width = readInt(bytes, 16);
+    int height = readInt(bytes, 20);
+    if (width <= 0 || height <= 0) throw new LogoInvalid("Logo 图片无法读取");
+    return new int[] {width, height};
+  }
+
+  /** JPEG：沿段表找到 SOFn，高度在段内 +3、宽度在 +5。 */
+  private static int[] jpegSize(byte[] bytes) {
+    int index = 2;
+    while (index + 8 < bytes.length) {
+      if ((bytes[index] & 0xff) != 0xff) throw new LogoInvalid("Logo 图片无法读取");
+      int marker = bytes[index + 1] & 0xff;
+      if (marker == 0xff) {
+        index += 1;
+        continue;
+      }
+      // 无长度的独立标记：TEM、RSTn 与 SOI。
+      if (marker == 0x01 || marker == 0xd8 || (marker >= 0xd0 && marker <= 0xd7)) {
+        index += 2;
+        continue;
+      }
+      if (marker == 0xd9 || marker == 0xda) break;
+      int length = ((bytes[index + 2] & 0xff) << 8) | (bytes[index + 3] & 0xff);
+      if (length < 2) throw new LogoInvalid("Logo 图片无法读取");
+      boolean startOfFrame =
+          marker >= 0xc0 && marker <= 0xcf && marker != 0xc4 && marker != 0xc8 && marker != 0xcc;
+      if (startOfFrame) {
+        int height = ((bytes[index + 5] & 0xff) << 8) | (bytes[index + 6] & 0xff);
+        int width = ((bytes[index + 7] & 0xff) << 8) | (bytes[index + 8] & 0xff);
+        if (width <= 0 || height <= 0) throw new LogoInvalid("Logo 图片无法读取");
+        return new int[] {width, height};
+      }
+      index += 2 + length;
+    }
+    throw new LogoInvalid("Logo 图片无法读取");
+  }
+
+  private static int readInt(byte[] bytes, int offset) {
+    return ((bytes[offset] & 0xff) << 24)
+        | ((bytes[offset + 1] & 0xff) << 16)
+        | ((bytes[offset + 2] & 0xff) << 8)
+        | (bytes[offset + 3] & 0xff);
   }
 
   BrandingView updatePlatform(UUID tenantId, UUID operatorId, Update update) {
@@ -416,7 +485,8 @@ class BrandingService {
     return platform.query(
         "select version,snapshot::text,changed_at,changed_by_kind"
             + " from identity.tenant_branding_history"
-            + " where tenant_id=? order by version desc limit 20",
+            + " where tenant_id=? order by version desc limit "
+            + MAX_HISTORY,
         (rs, index) -> {
           Snapshot snapshot;
           try {
@@ -496,6 +566,13 @@ class BrandingService {
   }
 
   private Row lock(JdbcTemplate jdbc, UUID tenantId) {
+    // 首次写入时品牌行还不存在，FOR UPDATE 锁不到任何行：并发请求会各自算出同一个版本号，
+    // 再在主键上相撞并抛出数据库异常。先用租户级事务咨询锁把「无行」的窗口也串行化。
+    org.springframework.jdbc.core.ResultSetExtractor<Void> acquire = result -> null;
+    jdbc.query(
+        "select pg_advisory_xact_lock(hashtextextended(cast(? as text), 0))",
+        acquire,
+        tenantId.toString());
     return jdbc
         .query(
             "select display_name,primary_seed,brand,brand_hover,brand_active,"

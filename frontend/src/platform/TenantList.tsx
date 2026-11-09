@@ -91,6 +91,8 @@ export default function TenantList({
     id: string;
     name: string;
   } | null>(null);
+  // 品牌弹窗的请求代次：关闭或换租户后，晚到的响应不能再写进表单。
+  const brandingRequest = useRef(0);
   const [branding, setBranding] = useState<TenantBranding | null>(null);
   const [brandingName, setBrandingName] = useState("");
   const [brandingSeed, setBrandingSeed] = useState("");
@@ -208,6 +210,9 @@ export default function TenantList({
   }
 
   async function openBranding(id: string, name: string) {
+    // 每次打开都是一代：先关闭 A 再打开 B 时，A 的晚到响应必须作废，
+    // 否则表单会显示 A 的配置，而保存用的是 B 的租户与 A 的版本号。
+    const request = ++brandingRequest.current;
     setBrandingFor({ id, name });
     setBranding(null);
     setBrandingError("");
@@ -218,11 +223,13 @@ export default function TenantList({
         fetchTenantBranding(id),
         fetchBrandingHistory(id),
       ]);
+      if (request !== brandingRequest.current) return;
       setBranding(value);
       setBrandingName(value.displayName ?? "");
       setBrandingSeed(value.seed);
       setHistory(versions);
     } catch (failure) {
+      if (request !== brandingRequest.current) return;
       if (failure instanceof SessionExpired) {
         onSessionLost();
         return;
@@ -231,22 +238,37 @@ export default function TenantList({
         failure instanceof Error ? failure.message : "加载品牌失败",
       );
     } finally {
-      setHistoryLoading(false);
+      if (request === brandingRequest.current) setHistoryLoading(false);
     }
+  }
+
+  function closeBranding() {
+    brandingRequest.current += 1;
+    setBrandingFor(null);
+    setBranding(null);
+    setBrandingError("");
+    setHistory([]);
+    setHistoryLoading(false);
   }
 
   async function rollbackBranding(version: number) {
     if (!brandingFor) return;
+    const request = brandingRequest.current;
+    const tenantId = brandingFor.id;
     setRollingBack(version);
     setBrandingError("");
     try {
-      const value = await rollbackTenantBranding(brandingFor.id, version);
+      const value = await rollbackTenantBranding(tenantId, version);
+      if (request !== brandingRequest.current) return;
+      const versions = await fetchBrandingHistory(tenantId);
+      if (request !== brandingRequest.current) return;
       setBranding(value);
       setBrandingName(value.displayName ?? "");
       setBrandingSeed(value.seed);
-      setHistory(await fetchBrandingHistory(brandingFor.id));
+      setHistory(versions);
       message.success(`已回滚为版本 ${version} 的内容，并生成新版本`);
     } catch (failure) {
+      if (request !== brandingRequest.current) return;
       if (failure instanceof SessionExpired) {
         onSessionLost();
         return;
@@ -255,25 +277,29 @@ export default function TenantList({
         failure instanceof Error ? failure.message : "回滚品牌失败",
       );
     } finally {
-      setRollingBack(null);
+      if (request === brandingRequest.current) setRollingBack(null);
     }
   }
 
   async function saveBranding() {
     if (!brandingFor || !branding) return;
+    const request = brandingRequest.current;
+    const tenantId = brandingFor.id;
     setBrandingBusy(true);
     setBrandingError("");
     try {
-      const value = await updateTenantBranding(brandingFor.id, {
+      const value = await updateTenantBranding(tenantId, {
         displayName: brandingName.trim() || null,
         seed: brandingSeed,
         version: branding.version,
       });
+      if (request !== brandingRequest.current) return;
       setBranding(value);
       setBrandingName(value.displayName ?? "");
       setBrandingSeed(value.seed);
       message.success("品牌已保存并立即生效");
     } catch (failure) {
+      if (request !== brandingRequest.current) return;
       if (failure instanceof SessionExpired) {
         onSessionLost();
         return;
@@ -282,7 +308,7 @@ export default function TenantList({
         failure instanceof Error ? failure.message : "品牌保存失败",
       );
     } finally {
-      setBrandingBusy(false);
+      if (request === brandingRequest.current) setBrandingBusy(false);
     }
   }
 
@@ -720,18 +746,10 @@ export default function TenantList({
         }
         width={540}
         onCancel={() => {
-          if (!brandingBusy) {
-            setBrandingFor(null);
-            setBranding(null);
-            setBrandingError("");
-          }
+          if (!brandingBusy) closeBranding();
         }}
         footer={[
-          <Button
-            key="cancel"
-            disabled={brandingBusy}
-            onClick={() => setBrandingFor(null)}
-          >
+          <Button key="cancel" disabled={brandingBusy} onClick={closeBranding}>
             取消
           </Button>,
           <Button
@@ -801,7 +819,7 @@ export default function TenantList({
             <p className={styles.stateHint}>当前版本 {branding.version}</p>
 
             <div className={styles.history}>
-              <p className={styles.historyTitle}>历史版本（最近 20 版）</p>
+              <p className={styles.historyTitle}>历史版本（最近 10 版）</p>
               {historyLoading ? (
                 <Skeleton active paragraph={{ rows: 2 }} />
               ) : history.length === 0 ? (
