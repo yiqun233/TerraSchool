@@ -38,9 +38,16 @@ fi
 
 NET="ts-ci-$$"
 PG="ts-ci-pg-$$"
+# 容器内以 root 挂载工作区构建，产物会变成 root 属主；
+# runner 用户随后无法清理工作区，下一次 job 会在 get_sources 阶段直接失败。
+# 因此把归还属主放进 EXIT 兜底——脚本中途失败也要执行。
+restore_ownership() {
+  docker run --rm -v "$ROOT":/src "$NODE_IMAGE" chown -R "$RUN_UID:$RUN_GID" /src >/dev/null 2>&1 || true
+}
 cleanup() {
   docker rm -f "$PG" >/dev/null 2>&1 || true
   docker network rm "$NET" >/dev/null 2>&1 || true
+  restore_ownership
 }
 trap cleanup EXIT
 
@@ -115,7 +122,5 @@ if [ -n "${ACR_REGISTRY:-}" ] && [ -n "${ACR_USERNAME:-}" ] && [ -n "${ACR_PASSW
   echo "已推送: $ACR_REGISTRY/$NS/{backend,web}:$TAG"
 fi
 
-# 产物交还给 runner 用户，避免下次清理工作区失败
-docker run --rm -v "$ROOT":/src "$NODE_IMAGE" chown -R "$RUN_UID:$RUN_GID" /src >/dev/null
-
+# 产物属主由上面的 EXIT 兜底统一归还，这里不再重复
 echo "镜像就绪: $PROJECT-backend / $PROJECT-web"
