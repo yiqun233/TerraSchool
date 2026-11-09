@@ -57,6 +57,29 @@ TS_ADMIN_PASSWORD="<deploy/.env 里的 TS_MIGRATOR_PASSWORD>" \
 注意 `-Dmigration.user=ts_migrator` 与口令映射：pom 用 `TS_ADMIN_PASSWORD` 作为**迁移角色**
 口令，与 compose 里给 postgres 超级用户的 `TS_ADMIN_PASSWORD` 不是同一个值。
 
+## 本地开发（WSL）
+
+本地构建请在 WSL 原生路径下做（例如 `/home/yi/projects/teraSchool`），不要用 `/mnt/d/...`：
+Windows 侧工作区可能是 CRLF，带 CRLF 的脚本挂进容器后 `sh` 会报 `set: Illegal option -`，
+这类错误很难从现象联想到行尾。
+
+本地不需要 PDF 导出时，把 `deploy/.env` 的运行镜像换成轻量版，避免拉取 5.4GB：
+
+```bash
+TS_IMAGE_JAVA_RUNTIME=eclipse-temurin:25-jre
+```
+
+代价是容器内 `ExportPdf` 不可用；服务器部署仍用 Playwright 镜像。
+
+对象存储口令在 compose 里是必填项（缺了会直接拒绝启动，避免静默连到不存在的桶），
+本地随便填即可：
+
+```bash
+TS_STORAGE_ACCESS_KEY=dev-objectstore
+TS_STORAGE_SECRET_KEY=dev-objectstore
+TS_STORAGE_BUCKET=teraschool
+```
+
 ## 已有库升级（V77/V80 校验和变更）
 
 `V77`/`V80` 在开发期被修正过内容，**已经在旧版本上迁移过的库**再次 `migrate` 会在 validate
