@@ -3,6 +3,13 @@ package org.teraschool.identity.api;
 public interface CurrentActor {
   CurrentPermissions permissions();
 
+  /**
+   * 当前账号每个已开启动作的有效学校范围，用于“我的权限”只读呈现。
+   *
+   * <p>与 permissions() 使用同一快照口径；不返回未开启动作，也不返回其他账号数据。
+   */
+  java.util.List<ActionGrant> actionGrants();
+
   /** 会话呈现上下文：身份、租户名与强制改密状态；不含业务权限。 */
   SessionContext sessionContext();
 

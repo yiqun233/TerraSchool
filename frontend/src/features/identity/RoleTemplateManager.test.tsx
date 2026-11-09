@@ -4,6 +4,13 @@ import userEvent from "@testing-library/user-event";
 import { RoleTemplateForm } from "./RoleTemplateManager";
 const { post, csrf } = vi.hoisted(() => ({ post: vi.fn(), csrf: vi.fn() }));
 vi.mock("../../shared/http", () => ({ api: { POST: post }, csrf }));
+/** 表单只接受服务端目录生成的分组选项，不在组件里维护动作清单。 */
+const actions = [
+  {
+    label: "组织与身份",
+    options: [{ value: "ORGANIZATION_READ", label: "组织查看" }],
+  },
+];
 beforeEach(() => {
   vi.clearAllMocks();
   csrf.mockResolvedValue({ headerName: "X-CSRF-TOKEN", token: "test" });
@@ -16,7 +23,9 @@ it("创建响应不确定时锁定草稿，重试沿用原请求身份和参数"
       response: { ok: false, status: 503, headers: new Headers() },
     })
     .mockResolvedValueOnce({ response: { ok: true, status: 201 } });
-  render(<RoleTemplateForm onBusy={vi.fn()} onSaved={saved} />);
+  render(
+    <RoleTemplateForm actions={actions} onBusy={vi.fn()} onSaved={saved} />,
+  );
   await user.type(screen.getByLabelText("角色代码"), "TEST_ROLE");
   await user.type(screen.getByLabelText("角色名称"), "测试模板");
   await user.click(screen.getByRole("button", { name: "创建角色模板" }));
@@ -42,6 +51,7 @@ it("编辑固定原版本，CSRF等待时防重，影响范围冲突后不覆盖
     error: { code: "ROLE_VERSION_CONFLICT" },
   });
   const props = {
+    actions,
     selected: {
       id: "role",
       code: "legacy-code",

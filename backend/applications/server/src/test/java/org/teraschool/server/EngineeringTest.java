@@ -19,6 +19,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.factory.PasswordEncoderFactories;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.teraschool.identity.api.PermissionCatalog;
 import org.teraschool.organization.api.OrganizationQueries;
 import org.teraschool.platform.api.TenantTransactions;
 import tools.jackson.databind.json.JsonMapper;
@@ -455,15 +456,9 @@ class EngineeringTest {
         HttpResponse.BodyHandlers.ofString());
   }
 
-  @Test
-  void httpSessionCsrfContractAndSecondEntry() throws Exception {
-    var c = client();
-    assertThat(get(c, "/api/organization/units").statusCode()).isEqualTo(401);
-    assertThat(
-            post(c, "/api/session/login", "username=fixture-a&password=" + PASSWORD).statusCode())
-        .isEqualTo(403);
-    var mapper = JsonMapper.builder().build();
-    var csrf = mapper.readTree(get(c, "/api/session/csrf").body());
+  /** 用合成账号登录并保留 Cookie；需要真实 HTTP 的用例共用，避免各写一套 CSRF 流程。 */
+  void login(HttpClient client, JsonMapper mapper) throws Exception {
+    var csrf = mapper.readTree(get(client, "/api/session/csrf").body());
     String body =
         "username=fixture-a&password="
             + PASSWORD
@@ -472,7 +467,24 @@ class EngineeringTest {
             + "="
             + URLEncoder.encode(
                 csrf.get("token").asText(), java.nio.charset.StandardCharsets.UTF_8);
-    assertThat(post(c, "/api/session/login", body).statusCode()).isEqualTo(204);
+    assertThat(post(client, "/api/session/login", body).statusCode()).isEqualTo(204);
+  }
+
+  HttpClient loggedIn(JsonMapper mapper) throws Exception {
+    var client = client();
+    login(client, mapper);
+    return client;
+  }
+
+  @Test
+  void httpSessionCsrfContractAndSecondEntry() throws Exception {
+    var c = client();
+    assertThat(get(c, "/api/organization/units").statusCode()).isEqualTo(401);
+    assertThat(
+            post(c, "/api/session/login", "username=fixture-a&password=" + PASSWORD).statusCode())
+        .isEqualTo(403);
+    var mapper = JsonMapper.builder().build();
+    login(c, mapper);
     var response = get(c, "/api/organization/units");
     assertThat(response.statusCode()).isEqualTo(200);
     assertThat(mapper.readTree(response.body()).get("total").asInt())
@@ -488,7 +500,7 @@ class EngineeringTest {
     } finally {
       update("update identity.account set active=true where id=?", USER);
     }
-    csrf = mapper.readTree(get(c, "/api/session/csrf").body());
+    var csrf = mapper.readTree(get(c, "/api/session/csrf").body());
     assertThat(
             post(
                     c,
@@ -500,5 +512,63 @@ class EngineeringTest {
                 .statusCode())
         .isEqualTo(204);
     assertThat(get(c, "/api/organization/units").statusCode()).isEqualTo(401);
+  }
+
+  /**
+   * 目录与本人有效权限必须覆盖“只在业务代码里校验”的动作。
+   *
+   * <p>ENROLLMENT_DISCOUNT 与 PERIOD_UNLOCK 曾经两边不一致：业务侧要求这两个动作，授权接口却因为目录缺失
+   * 拒绝保存，结果权限永远授不出去。这里同时验证写入、目录、本人结果与会话功能资格四处一致。
+   */
+  @Test
+  void permissionCatalogAndOwnGrantsCoverEnforcedActions() throws Exception {
+    update(
+        "insert into identity.account_permission(account_id,tenant_id,school_id,action,effect) values (?,?,?,'ENROLLMENT_DISCOUNT','ALLOW')",
+        USER,
+        A,
+        S);
+    update(
+        "insert into identity.account_permission(account_id,tenant_id,action,effect) values (?,?,'PERIOD_UNLOCK','ALLOW')",
+        USER,
+        A);
+    try {
+      var mapper = JsonMapper.builder().build();
+      var c = loggedIn(mapper);
+      var catalog = get(c, "/api/permissions/catalog");
+      assertThat(catalog.statusCode()).isEqualTo(200);
+      var codes = new java.util.ArrayList<String>();
+      mapper.readTree(catalog.body()).forEach(node -> codes.add(node.get("code").asText()));
+      assertThat(codes)
+          .hasSize(PermissionCatalog.ACTIONS.size())
+          .contains("ENROLLMENT_DISCOUNT", "PERIOD_UNLOCK");
+
+      var mine = get(c, "/api/permissions/mine");
+      assertThat(mine.statusCode()).isEqualTo(200);
+      var byAction = new java.util.LinkedHashMap<String, tools.jackson.databind.JsonNode>();
+      mapper
+          .readTree(mine.body())
+          .get("actions")
+          .forEach(node -> byAction.put(node.get("action").asText(), node));
+      // 学校级允许：带学校范围，不能被当成“仅功能”。
+      assertThat(byAction).containsKey("ENROLLMENT_DISCOUNT");
+      assertThat(byAction.get("ENROLLMENT_DISCOUNT").get("functionalOnly").asBoolean()).isFalse();
+      assertThat(byAction.get("ENROLLMENT_DISCOUNT").get("schoolIds").size()).isEqualTo(1);
+      // 功能级允许：不产生学校范围，必须显式标记。
+      assertThat(byAction.get("PERIOD_UNLOCK").get("functionalOnly").asBoolean()).isTrue();
+      assertThat(byAction.get("PERIOD_UNLOCK").get("schoolIds").size()).isZero();
+
+      var permissions = get(c, "/api/session/permissions");
+      assertThat(permissions.statusCode()).isEqualTo(200);
+      var granted = new java.util.ArrayList<String>();
+      mapper
+          .readTree(permissions.body())
+          .get("grantedActions")
+          .forEach(node -> granted.add(node.asText()));
+      assertThat(granted).contains("ENROLLMENT_DISCOUNT", "PERIOD_UNLOCK", "ORGANIZATION_READ");
+    } finally {
+      update(
+          "delete from identity.account_permission where account_id=? and action in ('ENROLLMENT_DISCOUNT','PERIOD_UNLOCK')",
+          USER);
+    }
   }
 }

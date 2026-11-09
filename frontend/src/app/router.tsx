@@ -139,6 +139,12 @@ const BrandingPage = lazy(async () => {
   return { default: BrandingSettings };
 });
 
+const PermissionsPage = lazy(async () => {
+  const { PermissionConsole } =
+    await import("../features/identity/PermissionConsole");
+  return { default: PermissionConsole };
+});
+
 /**
  * 默认落点：有可读学校去学员档案；零学校先去组织目录完成建校引导。
  * 不用登录后的空学员列表掩盖“还没有学校”这一事实。
@@ -223,6 +229,7 @@ export const router = createBrowserRouter([
       { path: "finance", element: <FinancePage /> },
       { path: "migration", element: <MigrationPage /> },
       { path: "dictionaries", element: <DictionariesPage /> },
+      { path: "permissions", element: <PermissionsPage /> },
       { path: "settings/branding", element: <BrandingPage /> },
       { path: "login", element: <Navigate to="/" replace /> },
       { path: "change-password", element: <Navigate to="/" replace /> },

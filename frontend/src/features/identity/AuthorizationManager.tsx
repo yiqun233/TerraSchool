@@ -11,32 +11,16 @@ import {
   Typography,
 } from "antd";
 import { api, csrf } from "../../shared/http";
+import {
+  actionOptionGroups,
+  permissionCatalogQuery,
+} from "../../shared/permissions";
 import type { components } from "../../shared/generated/api";
 
 type Account = components["schemas"]["AccountAuthorization"];
 type Replacement = components["schemas"]["Replacement"];
 type Option = components["schemas"]["Option"];
 type RoleOption = components["schemas"]["RoleOption"];
-const actions = [
-  { value: "ORGANIZATION_READ", label: "组织查看" },
-  { value: "ORGANIZATION_MAINTAIN", label: "组织维护" },
-  { value: "AUTHORIZATION_MANAGE", label: "授权管理" },
-  { value: "EMPLOYEE_READ", label: "员工查看" },
-  { value: "EMPLOYEE_MAINTAIN", label: "员工维护" },
-  { value: "TEACHER_READ", label: "教师查看" },
-  { value: "TEACHER_MAINTAIN", label: "教师维护" },
-  { value: "ROOM_READ", label: "教室查看" },
-  { value: "ROOM_MAINTAIN", label: "教室维护" },
-  { value: "PERSONNEL_READ", label: "人事档案查看" },
-  { value: "PERSONNEL_MAINTAIN", label: "人事档案维护" },
-  { value: "STUDENT_ASSIGN", label: "学员负责人分派" },
-  { value: "STUDENT_EXPORT", label: "学员导出" },
-  { value: "CHANNEL_READ", label: "招生渠道查看" },
-  { value: "CHANNEL_MAINTAIN", label: "招生渠道维护" },
-  { value: "CUSTOMER_READ", label: "本人客户查看" },
-  { value: "CUSTOMER_MAINTAIN", label: "本人客户录入" },
-  { value: "CUSTOMER_PHONE_READ", label: "本人客户完整电话查看" },
-];
 const effects = [
   { value: "ALLOW", label: "允许" },
   { value: "DENY", label: "拒绝" },
@@ -111,6 +95,8 @@ export function AuthorizationManager({ onChanged }: { onChanged: () => void }) {
       return data;
     },
   });
+  // 动作选项由服务端目录提供，避免前端清单与后端校验脱节。
+  const catalog = useQuery({ ...permissionCatalogQuery(), enabled: open });
   const account = useQuery({
     queryKey: ["account-authorization", accountId],
     enabled: open && !!accountId,
@@ -127,7 +113,11 @@ export function AuthorizationManager({ onChanged }: { onChanged: () => void }) {
     },
   });
   const queryError =
-    accounts.error || schools.error || roles.error || account.error;
+    accounts.error ||
+    schools.error ||
+    roles.error ||
+    account.error ||
+    catalog.error;
   const close = () => {
     if (!busy) {
       setOpen(false);
@@ -187,6 +177,7 @@ export function AuthorizationManager({ onChanged }: { onChanged: () => void }) {
           <AuthorizationForm
             key={`${accountId}:${account.data.version}`}
             account={account.data}
+            actions={actionOptionGroups(catalog.data ?? [])}
             schools={options(account.data.schoolLabels, schools.data)}
             roles={roleOptions(account.data.roleLabels, roles.data)}
             onSchoolSearch={setSchoolSearch}
@@ -205,6 +196,7 @@ export function AuthorizationManager({ onChanged }: { onChanged: () => void }) {
 
 export function AuthorizationForm({
   account,
+  actions,
   schools,
   roles,
   onSchoolSearch,
@@ -213,6 +205,8 @@ export function AuthorizationForm({
   onSaved,
 }: {
   account: Account;
+  /** 由服务端动作目录生成的分组选项；不在这里再维护一份动作清单。 */
+  actions: ReturnType<typeof actionOptionGroups>;
   schools: { value: string; label: string }[];
   roles: { value: string; label: string; version: number }[];
   onSchoolSearch: (value: string) => void;

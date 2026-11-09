@@ -5,6 +5,13 @@ import { AuthorizationForm } from "./AuthorizationManager";
 import type { components } from "../../shared/generated/api";
 const { post, csrf } = vi.hoisted(() => ({ post: vi.fn(), csrf: vi.fn() }));
 vi.mock("../../shared/http", () => ({ api: { POST: post }, csrf }));
+/** 动作选项来自服务端目录；表单本身不再内置清单。 */
+const actions = [
+  {
+    label: "组织与身份",
+    options: [{ value: "ORGANIZATION_READ", label: "组织查看" }],
+  },
+];
 const account: components["schemas"]["AccountAuthorization"] = {
   accountId: "account-a",
   login: "管理测试账号",
@@ -20,6 +27,7 @@ beforeEach(() => {
 function editor(saved = vi.fn()) {
   const props = {
     account,
+    actions,
     schools: [],
     roles: [],
     onSchoolSearch: vi.fn(),
@@ -111,6 +119,7 @@ it("角色选项刷新不会静默替换分配草稿中的模板版本", async (
         { roleId: "role-a", schoolId: "school-a", expectedRoleVersion: 7 },
       ],
     },
+    actions,
     schools: [{ value: "school-a", label: "学校甲" }],
     roles: [{ value: "role-a", label: "只读角色", version: 7 }],
     onSchoolSearch: vi.fn(),

@@ -85,6 +85,12 @@ public class DatabaseIdentity implements UserDetailsService, CurrentActor {
   }
 
   @Override
+  public java.util.List<ActionGrant> actionGrants() {
+    var value = snapshot();
+    return PermissionRules.grants(value.rules(), value.tenantAdmin());
+  }
+
+  @Override
   public SessionContext sessionContext() {
     var value = permissions();
     var rows =

@@ -1,59 +1,23 @@
 package org.teraschool.identity.internal;
 
 import java.util.*;
+import org.teraschool.identity.api.ActionGrant;
 import org.teraschool.identity.api.CurrentPermissions;
+import org.teraschool.identity.api.PermissionCatalog;
 
 /** 网页、直接调用和授权修改前后检查共用同一计算，不维护第二套ALLOW/DENY算法。 */
 final class PermissionRules {
-  static final Set<String> ACTIONS =
+  /** 目录只在这里登记一次；界面与授权校验都从 {@link PermissionCatalog} 派生。 */
+  static final Set<String> ACTIONS = PermissionCatalog.CODES;
+
+  /** 租户管理员默认开通的动作；与 calculate 的四个布尔保持一致。 */
+  static final Set<String> TENANT_ADMIN_ACTIONS =
       Set.of(
           "ORGANIZATION_READ",
           "ORGANIZATION_MAINTAIN",
           "AUTHORIZATION_MANAGE",
-          "EMPLOYEE_READ",
-          "EMPLOYEE_MAINTAIN",
-          "TEACHER_READ",
-          "TEACHER_MAINTAIN",
-          "ROOM_READ",
-          "ROOM_MAINTAIN",
-          "PERSONNEL_READ",
-          "PERSONNEL_MAINTAIN",
-          "STUDENT_READ",
-          "STUDENT_MAINTAIN",
-          "STUDENT_ASSIGN",
-          "STUDENT_EXPORT",
-          "STUDENT_SENSITIVE_READ",
-          "PRODUCT_READ",
-          "PRODUCT_MAINTAIN",
-          "PRICE_PUBLISH",
-          "ENROLLMENT_READ",
-          "ENROLLMENT_MAINTAIN",
-          "ENROLLMENT_APPROVE",
-          "FUNDS_READ",
-          "FUNDS_RECEIPT",
-          "FUNDS_ALLOCATE",
-          "REFUND_READ",
-          "REFUND_APPLY",
-          "REFUND_PAY",
-          "TEACHING_READ",
-          "TEACHING_MAINTAIN",
-          "ATTENDANCE_RECORD",
-          "LESSON_CLOSE",
-          "APPROVAL_READ",
-          "APPROVAL_MANAGE",
-          "APPROVAL_DECIDE",
-          "PERIOD_READ",
-          "PERIOD_LOCK",
-          "MIGRATION_MANAGE",
-          "CHANNEL_READ",
-          "CHANNEL_MAINTAIN",
-          "CUSTOMER_READ",
-          "CUSTOMER_MAINTAIN",
-          "CUSTOMER_PHONE_READ",
-          "CUSTOMER_POOL_READ",
-          "CUSTOMER_POOL_MANAGE",
-          "CUSTOMER_ASSIGN",
           "TENANT_BRANDING_WRITE");
+
   static final String EXPANDED =
       """
     SELECT p.account_id,p.tenant_id,p.action,p.school_id,p.effect FROM identity.account_permission p
@@ -101,6 +65,17 @@ final class PermissionRules {
     }
   }
 
+  /** 按目录为每个动作各建一份决策；目录外的历史取值不参与计算，也不影响其他动作。 */
+  private static Map<String, Decision> decisions(List<Entry> rules) {
+    var result = new LinkedHashMap<String, Decision>();
+    for (var action : PermissionCatalog.ACTIONS) result.put(action.code(), new Decision());
+    for (var rule : rules) {
+      var decision = result.get(rule.action());
+      if (decision != null) decision.accept(rule);
+    }
+    return result;
+  }
+
   static CurrentPermissions calculate(
       UUID account,
       UUID tenant,
@@ -108,22 +83,22 @@ final class PermissionRules {
       List<Entry> rules,
       boolean tenantAdmin,
       boolean passwordChangeRequired) {
-    var read = new Decision();
-    var maintain = new Decision();
-    var manage = new Decision();
-    var branding = new Decision();
-    if (active)
-      for (var rule : rules) {
-        if ("ORGANIZATION_READ".equals(rule.action())) read.accept(rule);
-        else if ("ORGANIZATION_MAINTAIN".equals(rule.action())) maintain.accept(rule);
-        else if ("AUTHORIZATION_MANAGE".equals(rule.action())) manage.accept(rule);
-        else if ("TENANT_BRANDING_WRITE".equals(rule.action())) branding.accept(rule);
-      }
+    var decisions = active ? decisions(rules) : decisions(List.of());
+    var read = decisions.get("ORGANIZATION_READ");
+    var maintain = decisions.get("ORGANIZATION_MAINTAIN");
+    var manage = decisions.get("AUTHORIZATION_MANAGE");
+    var branding = decisions.get("TENANT_BRANDING_WRITE");
     var readable = read.schools();
     var editable = maintain.schools();
     editable.retainAll(readable);
-    // 租户管理员在租户内拥有全部功能权限；学校范围仍由显式的学校授权决定，
+    // 功能资格只表示“这个动作开了”，学校范围仍由显式学校授权决定；
     // “覆盖全部学校”由 SchoolProvisioner 结合 tenantAdmin 单独判断。
+    var granted = new LinkedHashSet<String>();
+    decisions.forEach(
+        (action, decision) -> {
+          if (decision.enabled()) granted.add(action);
+        });
+    if (tenantAdmin) granted.addAll(TENANT_ADMIN_ACTIONS);
     return new CurrentPermissions(
         account,
         tenant,
@@ -135,7 +110,27 @@ final class PermissionRules {
         manage.schools(),
         tenantAdmin,
         passwordChangeRequired,
-        branding.enabled() || tenantAdmin);
+        branding.enabled() || tenantAdmin,
+        granted);
+  }
+
+  /**
+   * 逐动作的有效结果，用于“我的权限”只读呈现。
+   *
+   * <p>与 {@link #calculate} 共用同一决策过程，不另写一套合并规则；只返回功能已开启的动作。
+   */
+  static List<ActionGrant> grants(List<Entry> rules, boolean tenantAdmin) {
+    var decisions = decisions(rules);
+    var result = new ArrayList<ActionGrant>();
+    for (var action : PermissionCatalog.ACTIONS) {
+      var decision = decisions.get(action.code());
+      boolean enabled =
+          decision.enabled() || (tenantAdmin && TENANT_ADMIN_ACTIONS.contains(action.code()));
+      if (!enabled) continue;
+      var schools = decision.schools();
+      result.add(new ActionGrant(action.code(), schools.isEmpty(), schools));
+    }
+    return List.copyOf(result);
   }
 
   /**

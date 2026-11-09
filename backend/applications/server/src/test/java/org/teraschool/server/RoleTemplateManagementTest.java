@@ -67,6 +67,20 @@ class RoleTemplateManagementTest {
                 .toList()));
   }
 
+  /** 目录里的每个动作都必须能通过公开授权接口保存，否则该权限永远授不出去。 */
+  @Test
+  void everyCatalogActionCanBeSavedInARole() {
+    var role =
+        create(
+            "ALL_CATALOG",
+            PermissionCatalog.ACTIONS.stream()
+                .map(action -> allow(action.code()))
+                .toArray(RoleAction[]::new));
+    assertThat(role.actions())
+        .extracting(RoleAction::action)
+        .containsExactlyInAnyOrderElementsOf(PermissionCatalog.CODES);
+  }
+
   @Test
   void createIsIdempotentAndCodeIsTenantUnique() {
     UUID request = UUID.randomUUID();

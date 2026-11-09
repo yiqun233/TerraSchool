@@ -12,6 +12,10 @@ import {
   Typography,
 } from "antd";
 import { api, csrf } from "../../shared/http";
+import {
+  actionOptionGroups,
+  permissionCatalogQuery,
+} from "../../shared/permissions";
 import type { components } from "../../shared/generated/api";
 type Template = components["schemas"]["RoleTemplate"];
 type Create = components["schemas"]["CreateRole"];
@@ -22,27 +26,6 @@ type Draft = {
   active: boolean;
   actions: NonNullable<Change["actions"]>;
 };
-const actions = [
-  { value: "ORGANIZATION_READ", label: "组织查看" },
-  { value: "ORGANIZATION_MAINTAIN", label: "组织维护" },
-  { value: "AUTHORIZATION_MANAGE", label: "授权管理" },
-  { value: "EMPLOYEE_READ", label: "员工查看" },
-  { value: "EMPLOYEE_MAINTAIN", label: "员工维护" },
-  { value: "TEACHER_READ", label: "教师查看" },
-  { value: "TEACHER_MAINTAIN", label: "教师维护" },
-  { value: "ROOM_READ", label: "教室查看" },
-  { value: "ROOM_MAINTAIN", label: "教室维护" },
-  { value: "PERSONNEL_READ", label: "人事档案查看" },
-  { value: "PERSONNEL_MAINTAIN", label: "人事档案维护" },
-  { value: "STUDENT_ASSIGN", label: "学员负责人分派" },
-  { value: "STUDENT_EXPORT", label: "学员导出" },
-  { value: "CHANNEL_READ", label: "招生渠道查看" },
-  { value: "CHANNEL_MAINTAIN", label: "招生渠道维护" },
-  { value: "CUSTOMER_READ", label: "本人客户查看" },
-  { value: "CUSTOMER_MAINTAIN", label: "本人客户录入" },
-  { value: "CUSTOMER_PHONE_READ", label: "本人客户完整电话查看" },
-  { value: "TENANT_BRANDING_WRITE", label: "品牌设置" },
-];
 const effects = [
   { value: "ALLOW", label: "允许" },
   { value: "DENY", label: "拒绝" },
@@ -84,6 +67,8 @@ export function RoleTemplateManager({ onClosed }: { onClosed: () => void }) {
       return data;
     },
   });
+  // 角色可选动作与账号授权共用同一份服务端目录。
+  const catalog = useQuery({ ...permissionCatalogQuery(), enabled: open });
   function close() {
     if (!busy) {
       setOpen(false);
@@ -92,7 +77,7 @@ export function RoleTemplateManager({ onClosed }: { onClosed: () => void }) {
       onClosed();
     }
   }
-  const error = list.error || selected.error;
+  const error = list.error || selected.error || catalog.error;
   function saved() {
     setNotice("角色模板已保存，请重新选择核对当前结果。");
     setCreating(false);
@@ -173,7 +158,12 @@ export function RoleTemplateManager({ onClosed }: { onClosed: () => void }) {
           <p role="status">正在读取角色模板…</p>
         ) : null}
         {creating ? (
-          <RoleTemplateForm key="create" onBusy={setBusy} onSaved={saved} />
+          <RoleTemplateForm
+            key="create"
+            actions={actionOptionGroups(catalog.data ?? [])}
+            onBusy={setBusy}
+            onSaved={saved}
+          />
         ) : selectedId &&
           selected.data &&
           !selected.isFetching &&
@@ -181,6 +171,7 @@ export function RoleTemplateManager({ onClosed }: { onClosed: () => void }) {
           <RoleTemplateForm
             key={`${selectedId}:${selected.data.version}`}
             selected={selected.data}
+            actions={actionOptionGroups(catalog.data ?? [])}
             onBusy={setBusy}
             onSaved={saved}
           />
@@ -193,10 +184,13 @@ export function RoleTemplateManager({ onClosed }: { onClosed: () => void }) {
 /** 创建保留请求身份和参数；修改固定打开时版本，结果不确定时不自动重试。 */
 export function RoleTemplateForm({
   selected,
+  actions,
   onBusy,
   onSaved,
 }: {
   selected?: Template;
+  /** 由服务端动作目录生成的分组选项。 */
+  actions: ReturnType<typeof actionOptionGroups>;
   onBusy: (busy: boolean) => void;
   onSaved: () => void;
 }) {

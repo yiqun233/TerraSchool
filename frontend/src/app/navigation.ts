@@ -21,6 +21,13 @@ const admin = (permissions: CurrentPermissions | null) =>
   !!permissions?.canMaintainOrganizations;
 
 /**
+ * 菜单显隐只按“功能是否开启”判断，不猜学校范围：
+ * 范围为空时页面自己给四态说明，菜单不因此消失。
+ */
+const granted = (permissions: CurrentPermissions | null, action: string) =>
+  !!permissions?.grantedActions?.includes(action);
+
+/**
  * 租户端导航的唯一配置。
  *
  * 新增页面只改这里与路由表；未实现项 enabled=false，壳层渲染为禁用并标“即将开放”。
@@ -40,6 +47,7 @@ export const TENANT_NAV: NavItem[] = [
     group: "招生",
     enabled: true,
     title: "招生渠道",
+    visible: (permissions) => granted(permissions, "CHANNEL_READ"),
   },
   {
     path: "/customers",
@@ -47,6 +55,7 @@ export const TENANT_NAV: NavItem[] = [
     group: "招生",
     enabled: true,
     title: "本人客户",
+    visible: (permissions) => granted(permissions, "CUSTOMER_READ"),
   },
   {
     path: "/students",
@@ -132,6 +141,13 @@ export const TENANT_NAV: NavItem[] = [
     group: "财务",
     enabled: false,
     title: "报表",
+  },
+  {
+    path: "/permissions",
+    label: "权限管理",
+    group: "设置",
+    enabled: true,
+    title: "权限管理",
   },
   {
     path: "/settings/branding",

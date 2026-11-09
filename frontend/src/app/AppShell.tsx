@@ -1,9 +1,8 @@
 import { Suspense, useEffect, useState } from "react";
 import { App as AntApp, Avatar, Button, Dropdown, Modal, Tooltip } from "antd";
-import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { ChangePasswordGate } from "../features/identity/ChangePasswordGate";
-import { MyPermissions } from "../features/organization/MyPermissions";
 import { useTenantBranding } from "../shared/theme/TenantBrandingProvider";
 import { LoadingBlock } from "../shared/ui/Page";
 import { findNav, TENANT_GROUPS, visibleNavigation } from "./navigation";
@@ -32,6 +31,7 @@ export function AppShell() {
   const { message } = AntApp.useApp();
   const client = useQueryClient();
   const location = useLocation();
+  const navigate = useNavigate();
   const [navOpen, setNavOpen] = useState(false);
   const [passwordOpen, setPasswordOpen] = useState(false);
   const [leaving, setLeaving] = useState(false);
@@ -213,7 +213,13 @@ export function AppShell() {
                 AI 助手
               </Button>
             </Tooltip>
-            <MyPermissions />
+            <Button
+              type="text"
+              size="small"
+              onClick={() => navigate("/permissions")}
+            >
+              我的权限
+            </Button>
             <Dropdown
               trigger={["click"]}
               menu={{
