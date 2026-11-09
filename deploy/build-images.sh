@@ -98,8 +98,11 @@ docker run --rm -v "$ROOT":/src -w /src/frontend \
     pnpm run build'
 
 echo "== 5/5 构建镜像 =="
-docker build -f deploy/backend.Dockerfile -t "$PROJECT-backend" .
-docker build --build-arg "NGINX_IMAGE=$NGINX_IMAGE" -f deploy/web.Dockerfile -t "$PROJECT-web" .
+# --provenance=false：BuildKit 默认会附加 OCI attestation 清单
+# （application/vnd.oci.empty.v1+json），ACR 个人版不接受，
+# 表现为层全部上传成功、最后报 "unknown manifest class"。
+docker build --provenance=false -f deploy/backend.Dockerfile -t "$PROJECT-backend" .
+docker build --provenance=false --build-arg "NGINX_IMAGE=$NGINX_IMAGE" -f deploy/web.Dockerfile -t "$PROJECT-web" .
 
 # 可选：推送镜像仓库。设置了 ACR_REGISTRY / ACR_USERNAME / ACR_PASSWORD 才推，
 # 否则只用本地镜像部署（开发期默认）。
