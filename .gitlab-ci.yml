@@ -1,7 +1,7 @@
 # 远程 CI：与 tools/engineering/verify.py 使用同一套门禁步骤。
-# Runner 必须提供 docker 执行器：两个 job 都用 tags 固定，避免被 shell 执行器领取
-# （shell 执行器不提供 services，非 root 也装不了 psql，曾导致 exit 127）。
-# 密码一律在作业内临时生成或来自 CI 变量，不落仓库。
+# 验证类 job 用 tags: [docker-ci] 固定到 docker 执行器：shell 执行器同样带 docker 标签，
+# 但既没有 services 也没有 JDK，被它领取就会以 exit 127/4 失败（曾在 CI 上反复出现）。
+# 打包与部署 job 用 tags: [shell] 固定到 shell 执行器，因为它们要直接操作宿主机 docker。
 stages:
   - verify
   - frontend
@@ -18,7 +18,7 @@ variables:
 
 backend:
   stage: verify
-  tags: [docker]
+  tags: [docker-ci]
   image: maven:3.9-eclipse-temurin-25
   services:
     - name: $TS_POSTGRES_IMAGE
@@ -80,7 +80,7 @@ backend:
 
 documentation:
   stage: verify
-  tags: [docker]
+  tags: [docker-ci]
   image: python:3.13
   script:
     - python -m pip install -r tools/progress/requirements.txt
@@ -88,7 +88,7 @@ documentation:
 
 frontend:
   stage: frontend
-  tags: [docker]
+  tags: [docker-ci]
   image: node:24
   needs:
     - job: backend
