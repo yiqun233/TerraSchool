@@ -131,8 +131,9 @@ deploy:test:
   stage: deploy
   tags: [shell]
   when: manual
-  needs:
-    - job: package:images
+  # 同样不依赖前置阶段：部署的是「当前已有的镜像」。
+  # 先点打包再点部署是使用约定，不靠流水线强绑，避免任一阶段失败后按钮不可用。
+  needs: []
   timeout: 30m
   script:
     - bash deploy/test-deploy.sh
