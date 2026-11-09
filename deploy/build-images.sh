@@ -84,15 +84,10 @@ docker run --rm --network "$NET" -v "$ROOT":/src -v "$M2":/m2 -w /src/backend "$
   -DfailIfNoTests=false -Dsurefire.failIfNoSpecifiedTests=false test
 
 echo "== 4/5 前端 =="
-docker run --rm -v "$ROOT":/src -w /src/frontend \
-  -e COREPACK_HOME=/tmp/corepack \
-  -e COREPACK_NPM_REGISTRY=https://registry.npmmirror.com \
-  -e npm_config_registry=https://registry.npmmirror.com \
-  -e npm_config_cache=/tmp/npm \
-  "$NODE_IMAGE" sh -c 'set -e
-    (corepack enable >/dev/null 2>&1 || true)
-    command -v pnpm >/dev/null 2>&1 || npm i -g pnpm@11.23.0
-    pnpm config set registry https://registry.npmmirror.com
+# 与 CI 的 frontend job 保持完全一致：corepack 用默认源（npmmirror 对 corepack
+# 请求 /pnpm/<version> 会返回 500，npm 全局安装又会超时）。
+docker run --rm -v "$ROOT":/src -w /src/frontend "$NODE_IMAGE" sh -c 'set -e
+    corepack enable
     pnpm install --frozen-lockfile --ignore-scripts
     pnpm run generate
     pnpm run build'
