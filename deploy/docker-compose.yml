@@ -69,7 +69,9 @@ services:
       db-init:
         condition: service_completed_successfully
     volumes:
-      - ../backend/applications/server/src/main/resources/db/migration:/flyway/sql:ro
+      # 默认指向仓库内路径（本地开发用）；release.sh 会把迁移脚本复制到部署目录
+      # 并通过 TS_MIGRATION_DIR 指过去，因为从部署目录执行时 .. 已经不在仓库里。
+      - ${TS_MIGRATION_DIR:-../backend/applications/server/src/main/resources/db/migration}:/flyway/sql:ro
     command: >
       -url=jdbc:postgresql://db:5432/${TS_DATABASE_NAME:-teraschool}
       -user=ts_migrator

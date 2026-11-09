@@ -33,6 +33,13 @@ install -m 644 "$ROOT/deploy/docker-compose.registry.yml" "$TARGET/docker-compos
 install -m 644 "$ROOT/deploy/init-db.sql"                 "$TARGET/init-db.sql"
 install -m 755 "$ROOT/deploy/init-db.sh"                  "$TARGET/init-db.sh"
 
+# 迁移脚本随部署目录一起落地：从部署目录执行时 compose 的 .. 已经不在仓库内，
+# 继续用相对路径会导致 Flyway 找不到迁移（报 schema 有版本但无法解析）。
+rm -rf "$TARGET/db/migration"
+mkdir -p "$TARGET/db"
+cp -a "$ROOT/backend/applications/server/src/main/resources/db/migration" "$TARGET/db/migration"
+export TS_MIGRATION_DIR="$TARGET/db/migration"
+
 cd "$TARGET"
 
 if [ -n "${TS_IMAGE_TAG:-}" ] && [ -n "${ACR_REGISTRY:-}" ]; then
