@@ -120,6 +120,8 @@ package:images:
   stage: package
   tags: [shell]
   when: manual
+  # 不等待任何前置阶段：验证失败不应阻塞「打包」，否则按钮会变成 skipped 点不了。
+  needs: []
   timeout: 1h
   script:
     - export TS_PROJECT_NAME="$(grep -m1 '^TS_PROJECT_NAME=' /www/teraschool/test/.env | cut -d= -f2)"
