@@ -135,6 +135,8 @@ package:images:
   timeout: 1h
   script:
     - export TS_PROJECT_NAME="$(grep -m1 '^TS_PROJECT_NAME=' /www/teraschool/test/.env | cut -d= -f2)"
+    # 定义了 ACR_* 变量时 build-images.sh 会额外推送到镜像仓库；否则只用本地镜像。
+    - export TS_IMAGE_TAG="${CI_COMMIT_SHORT_SHA}"
     - bash deploy/build-images.sh
 
 deploy:test:
@@ -146,4 +148,6 @@ deploy:test:
   needs: []
   timeout: 30m
   script:
+    # 与打包 job 用同一个 tag；ACR_* 变量存在时走仓库拉取，否则用本地镜像。
+    - export TS_IMAGE_TAG="${CI_COMMIT_SHORT_SHA}"
     - bash deploy/test-deploy.sh

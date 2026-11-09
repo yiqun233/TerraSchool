@@ -101,6 +101,22 @@ echo "== 5/5 构建镜像 =="
 docker build -f deploy/backend.Dockerfile -t "$PROJECT-backend" .
 docker build --build-arg "NGINX_IMAGE=$NGINX_IMAGE" -f deploy/web.Dockerfile -t "$PROJECT-web" .
 
+# 可选：推送镜像仓库。设置了 ACR_REGISTRY / ACR_USERNAME / ACR_PASSWORD 才推，
+# 否则只用本地镜像部署（开发期默认）。
+if [ -n "${ACR_REGISTRY:-}" ] && [ -n "${ACR_USERNAME:-}" ] && [ -n "${ACR_PASSWORD:-}" ]; then
+  NS=${ACR_NAMESPACE:-teraschool}
+  TAG=${TS_IMAGE_TAG:-$(git rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)}
+  echo "== 推送镜像到 $ACR_REGISTRY/$NS (tag=$TAG) =="
+  printf '%s' "$ACR_PASSWORD" | docker login "$ACR_REGISTRY" -u "$ACR_USERNAME" --password-stdin >/dev/null
+  for svc in backend web; do
+    docker tag "$PROJECT-$svc" "$ACR_REGISTRY/$NS/$svc:$TAG"
+    docker tag "$PROJECT-$svc" "$ACR_REGISTRY/$NS/$svc:latest"
+    docker push "$ACR_REGISTRY/$NS/$svc:$TAG"
+    docker push "$ACR_REGISTRY/$NS/$svc:latest"
+  done
+  echo "已推送: $ACR_REGISTRY/$NS/{backend,web}:$TAG"
+fi
+
 # 产物交还给 runner 用户，避免下次清理工作区失败
 docker run --rm -v "$ROOT":/src "$NODE_IMAGE" chown -R "$RUN_UID:$RUN_GID" /src >/dev/null
 
