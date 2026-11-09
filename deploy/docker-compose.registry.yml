@@ -1,0 +1,10 @@
+# 从镜像仓库部署时叠加此文件：
+#   docker compose -f docker-compose.yml -f docker-compose.registry.yml --env-file .env up -d
+#
+# 本地构建部署不需要它——那样镜像由 docker-compose.yml 的 build 段产出。
+# 需要 ACR_REGISTRY / ACR_NAMESPACE / TS_IMAGE_TAG 三个变量。
+services:
+  backend:
+    image: ${ACR_REGISTRY:?缺少 ACR_REGISTRY}/${ACR_NAMESPACE:-teraschool}/backend:${TS_IMAGE_TAG:?缺少 TS_IMAGE_TAG}
+  web:
+    image: ${ACR_REGISTRY:?缺少 ACR_REGISTRY}/${ACR_NAMESPACE:-teraschool}/web:${TS_IMAGE_TAG:?缺少 TS_IMAGE_TAG}
