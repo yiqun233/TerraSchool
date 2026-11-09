@@ -151,20 +151,23 @@ class DataExportTest {
             funds.createReceipt(
                 new CreateReceipt(
                     UUID.randomUUID(), SCHOOL, student, "800", "CASH", "2026-02-10")));
+    var before = exportAudit("RECEIPTS_EXPORTED");
     var csv =
         asActor(OPS, () -> fundsQueries.exportReceiptsCsv(SCHOOL, "2026-02-01", "2026-02-28"));
     assertThat(csv).startsWith("学员号,学员姓名,金额,方式,收款日期,状态");
     assertThat(csv).contains("X0001").contains("800.00");
-    assertThat(exportAudit("RECEIPTS_EXPORTED")).isEqualTo(1);
+    // 断言增量而不是绝对计数：其他测试类也会触发导出，绝对计数会随执行顺序变化。
+    assertThat(exportAudit("RECEIPTS_EXPORTED")).isEqualTo(before + 1);
   }
 
   @Test
   void enrollmentsExportContainsRowsAndIsAudited() throws Exception {
     var enrollment = enrollment(student("X0002"));
+    var before = exportAudit("ENROLLMENTS_EXPORTED");
     var csv = asActor(OPS, () -> enrollmentQueries.exportCsv(SCHOOL));
     assertThat(csv).startsWith("学员号,学员姓名,产品,课程,价格,课时,净应收,状态,报名时间");
     assertThat(csv).contains("X0002").contains("1000.00");
-    assertThat(exportAudit("ENROLLMENTS_EXPORTED")).isEqualTo(1);
+    assertThat(exportAudit("ENROLLMENTS_EXPORTED")).isEqualTo(before + 1);
     assertThat(enrollment.id()).isNotNull();
   }
 
@@ -191,11 +194,12 @@ class DataExportTest {
                     null,
                     "导出课",
                     "1.00")));
+    var before = exportAudit("LESSONS_EXPORTED");
     var csv =
         asActor(OPS, () -> teachingQueries.exportLessonsCsv(SCHOOL, "2026-03-01", "2026-03-31"));
     assertThat(csv).startsWith("班级,日期,开始,结束,教师,教室,课时,状态");
     assertThat(csv).contains("2026-03-02").contains("09:00");
-    assertThat(exportAudit("LESSONS_EXPORTED")).isEqualTo(1);
+    assertThat(exportAudit("LESSONS_EXPORTED")).isEqualTo(before + 1);
   }
 
   @Test

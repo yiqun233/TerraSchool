@@ -23,6 +23,9 @@ backend:
   services:
     - name: $TS_POSTGRES_IMAGE
       alias: postgres
+      # 默认 max_connections=100 会被测试套件打满（每个受限角色各建一个连接池），
+      # 报 "remaining connection slots are reserved for roles with the SUPERUSER attribute"。
+      command: ["-c", "max_connections=500", "-c", "superuser_reserved_connections=10"]
   variables:
     POSTGRES_DB: teraschool_test
     POSTGRES_PASSWORD: ci-postgres-admin
@@ -74,7 +77,10 @@ backend:
     - ./mvnw -B -ntp -s .mvn/settings.xml -gs .mvn/settings.xml -N flyway:migrate
     - ./mvnw -B -ntp -s .mvn/settings.xml -gs .mvn/settings.xml -N jooq-codegen:generate
     - ./mvnw -B -ntp -s .mvn/settings.xml -gs .mvn/settings.xml spotless:check
-    - ./mvnw -B -ntp -s .mvn/settings.xml -gs .mvn/settings.xml verify
+    # ContainerRuntimeTest / PermissionMigrationTest 依赖 Testcontainers，验证的是
+    # 「开发机 Docker 引擎与端口映射链路」；容器化 job 内映射端口不可达，必然失败。
+    # 这两项由 tools/engineering/verify.py 在具备 Docker 的开发机上覆盖，CI 显式排除。
+    - ./mvnw -B -ntp -s .mvn/settings.xml -gs .mvn/settings.xml verify -Dtest='!ContainerRuntimeTest,!PermissionMigrationTest' -Dsurefire.failIfNoSpecifiedTests=false
   artifacts:
     when: always
     expire_in: 1 week
