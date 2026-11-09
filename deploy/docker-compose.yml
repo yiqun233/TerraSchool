@@ -1,8 +1,11 @@
-# 最小可运行交付链路：PostgreSQL → 角色初始化 → 迁移 → 后端 → Nginx 静态站点。
+# 最小可运行交付链路：PostgreSQL → 角色初始化 → 迁移 → 后端 → MinIO → Nginx。
 #
 # 这不是生产发布方案：HTTPS/证书、密钥文件与轮换、备份恢复、升级回退
 # 仍未验证（见 REV-016 / F35 / REV-017）。本文件用于本地与内网试用，
 # 也是这些能力后续落地的起点。
+#
+# 同一台机器跑多个环境时用 TS_PROJECT_NAME 区分（项目名决定容器名与卷名前缀）：
+#   TS_PROJECT_NAME=teraschool-test docker compose -f deploy/docker-compose.yml up -d
 #
 # 前置构建物（镜像只装运行时，见 deploy/README.md）：
 #   backend/applications/server/target/server-0.1.0-SNAPSHOT.jar
@@ -11,7 +14,7 @@
 # 顺序：迁移是显式步骤，不隐含在启动里，避免“起来了但库没迁移”：
 #   docker compose -f deploy/docker-compose.yml --profile migrate run --rm migrate
 #   docker compose -f deploy/docker-compose.yml up -d --build
-name: teraschool
+name: ${TS_PROJECT_NAME:-teraschool}
 
 services:
   db:
@@ -76,14 +79,62 @@ services:
       migrate
     restart: "no"
 
+  # 私有对象存储（S3 兼容）。附件与品牌图依赖它；不配置时对象存储相关功能不可用。
+  # 不发布 8333：只有 backend 通过 Compose 网络访问，宿主机与公网都连不到。
+  #
+  # 为什么是 SeaweedFS 而不是 MinIO：MinIO 已停止维护，且当前网络环境拿不到镜像
+  # （Docker Hub 镜像源拒绝、quay.io 401、dl.min.io 410）。SeaweedFS 是 S3 兼容的
+  # 轻量实现，也正是本仓库 README 里原先列出的备选方案。
+  objectstore:
+    image: ${TS_IMAGE_SEAWEEDFS:-chrislusf/seaweedfs:latest}
+    # 凭据不落盘为文件，启动时由环境变量生成 s3 配置，避免密钥进入仓库或镜像。
+    entrypoint: ["/bin/sh", "-c"]
+    environment:
+      TS_STORAGE_ACCESS_KEY: ${TS_STORAGE_ACCESS_KEY:?请在 deploy/.env 设置 TS_STORAGE_ACCESS_KEY}
+      TS_STORAGE_SECRET_KEY: ${TS_STORAGE_SECRET_KEY:?请在 deploy/.env 设置 TS_STORAGE_SECRET_KEY}
+    command:
+      - |
+        printf '{"identities":[{"name":"teraschool","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Admin","Read","Write","List","Tagging"]}]}' \
+          "$$TS_STORAGE_ACCESS_KEY" "$$TS_STORAGE_SECRET_KEY" > /tmp/s3.json &&
+        exec weed server -dir=/data \
+          -s3 -s3.port=8333 -s3.config=/tmp/s3.json
+    volumes:
+      - object-data:/data
+    healthcheck:
+      # S3 根路径正常返回 403（未签名请求），不能用 wget/curl -f 判断；
+      # 只要拿到三位数 HTTP 状态码就说明网关已在服务。
+      test: ["CMD-SHELL", "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8333/ | grep -qE '^[0-9]{3}$'"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  # 一次性建桶：S3 的 PutObject 不会自动建桶，缺桶时附件上传必然失败。
+  objectstore-init:
+    image: ${TS_IMAGE_SEAWEEDFS:-chrislusf/seaweedfs:latest}
+    depends_on:
+      objectstore:
+        condition: service_healthy
+    environment:
+      TS_STORAGE_BUCKET: ${TS_STORAGE_BUCKET:-teraschool}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        # 桶已存在时 s3.bucket.create 会返回非零，这里必须容忍，否则重启即失败。
+        echo "s3.bucket.create -name $$TS_STORAGE_BUCKET" | weed shell -master=objectstore:9333 || true
+        echo "bucket ready: $$TS_STORAGE_BUCKET"
+    restart: "no"
+
   backend:
     build:
       context: ..
       dockerfile: deploy/backend.Dockerfile
       args:
-        JAVA_RUNTIME_IMAGE: ${TS_IMAGE_JAVA_RUNTIME:-eclipse-temurin:25-jre}
+        JAVA_RUNTIME_IMAGE: ${TS_IMAGE_JAVA_RUNTIME:-mcr.microsoft.com/playwright/java:v1.64.0-noble}
     depends_on:
       db-init:
+        condition: service_completed_successfully
+      objectstore-init:
         condition: service_completed_successfully
     environment:
       TERASCHOOL_DATABASE_URL: jdbc:postgresql://db:5432/${TS_DATABASE_NAME:-teraschool}
@@ -99,6 +150,12 @@ services:
       TERASCHOOL_DATABASE_SCHEDULER_PASSWORD: ${TS_SCHEDULER_PASSWORD:?}
       TERASCHOOL_DATABASE_PLATFORM_USERNAME: ts_platform
       TERASCHOOL_DATABASE_PLATFORM_PASSWORD: ${TS_PLATFORM_PASSWORD:?}
+      # 对象存储：只走容器网络，桶为私有。
+      TERASCHOOL_STORAGE_ENDPOINT: http://objectstore:8333
+      TERASCHOOL_STORAGE_REGION: ${TS_STORAGE_REGION:-us-east-1}
+      TERASCHOOL_STORAGE_BUCKET: ${TS_STORAGE_BUCKET:-teraschool}
+      TERASCHOOL_STORAGE_ACCESS_KEY: ${TS_STORAGE_ACCESS_KEY:?}
+      TERASCHOOL_STORAGE_SECRET_KEY: ${TS_STORAGE_SECRET_KEY:?}
       # 容器内必须监听全部网卡；默认配置只监听回环。
       SERVER_ADDRESS: 0.0.0.0
       # 本地/内网没有 TLS 时无法要求 secure Cookie；接入 HTTPS 后必须改回 true。
@@ -118,6 +175,10 @@ services:
       dockerfile: deploy/web.Dockerfile
       args:
         NGINX_IMAGE: ${TS_IMAGE_NGINX:-nginx:1.29-alpine}
+    # 跳过 nginx 官方 entrypoint：它的 10-listen-on-ipv6 脚本会执行 apk manifest，
+    # 在部分 Alpine 镜像上会卡住不返回，导致 nginx 永远不启动。
+    # 我们的 nginx.conf 是静态的，不需要 entrypoint 做模板渲染或 IPv6 改写。
+    entrypoint: ["nginx", "-g", "daemon off;"]
     depends_on:
       backend:
         condition: service_healthy
@@ -127,3 +188,4 @@ services:
 
 volumes:
   db-data:
+  object-data:

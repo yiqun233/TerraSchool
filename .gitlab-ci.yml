@@ -5,6 +5,8 @@
 stages:
   - verify
   - frontend
+  - package
+  - deploy
 
 variables:
   MAVEN_OPTS: "-Dmaven.repo.local=.m2/repository"
@@ -107,3 +109,28 @@ frontend:
     - pnpm run format:check
     - pnpm run test
     - pnpm run build
+
+# ===== 测试环境：打包与部署（页面上两个手动按钮）=====
+# 都跑在 shell 执行器上：它就在这台服务器上，直接使用宿主机 docker，
+# 所以开发期不推送镜像仓库——镜像只留在本机。
+#
+# 点「打包镜像」→ 构建 jar/openapi/dist 并打出两个镜像；
+# 点「部署测试环境」→ 起服务并执行迁移。数据在命名卷里，重复部署不丢。
+package:images:
+  stage: package
+  tags: [shell]
+  when: manual
+  timeout: 1h
+  script:
+    - export TS_PROJECT_NAME="$(grep -m1 '^TS_PROJECT_NAME=' /www/teraschool/test/.env | cut -d= -f2)"
+    - bash deploy/build-images.sh
+
+deploy:test:
+  stage: deploy
+  tags: [shell]
+  when: manual
+  needs:
+    - job: package:images
+  timeout: 30m
+  script:
+    - bash deploy/test-deploy.sh

@@ -94,5 +94,5 @@ python -X utf8 tools/ops/deploy_smoke.py
 | 升级 / 回退 | 只验证了带数据升级（76/58 → 最新），未做回退演练 |
 | 备份恢复 | 未纳入本链路，见 REV-017 |
 | 多实例 | 未验证；机构级锁与调度角色需单独评估 |
-| 对象存储 | 未配置 S3/SeaweedFS，附件相关功能不可用 |
-| PDF / 打印 | 运行镜像只有 JRE，**没有 Chromium 与中文字体**，`ExportPdf` 在容器内会失败；正式打印仍属 REV-013 未完成项 |
+| 对象存储 | 已接入 SeaweedFS（S3 兼容）：bucket 由 `objectstore-init` 自动创建，仅走容器网络。MinIO 已停止维护，不再使用 |
+| PDF / 打印 | 运行镜像已改为 Playwright 官方镜像，自带 JDK 25 + Chromium + 中文字体，`ExportPdf` 可在容器内运行；代价是镜像约 5.4GB。不需要 PDF 时可用 `--build-arg JAVA_RUNTIME_IMAGE=eclipse-temurin:25-jre` 换回轻量镜像，但导出会失败 |

@@ -18,6 +18,7 @@ psql -h "$host" -U postgres -d postgres -v ON_ERROR_STOP=1 \
   -v session="${TS_SESSION_PASSWORD:?}" \
   -v audit="${TS_AUDIT_PASSWORD:?}" \
   -v scheduler="${TS_SCHEDULER_PASSWORD:?}" \
+  -v platform="${TS_PLATFORM_PASSWORD:?}" \
   -v migrator="${TS_MIGRATOR_PASSWORD:?}" \
   -f - <<'SQL'
 ALTER ROLE ts_app PASSWORD :'app';
