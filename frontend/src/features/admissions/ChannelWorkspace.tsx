@@ -9,10 +9,17 @@ import {
   Space,
   Switch,
   Table,
-  Typography,
 } from "antd";
 import { api, csrf } from "../../shared/http";
 import type { components } from "../../shared/generated/api";
+import {
+  Page,
+  PageHeader,
+  PageState,
+  Panel,
+  SimplePager,
+  StatusTag,
+} from "../../shared/ui/Page";
 import { ChannelAddress } from "./ChannelAddress";
 
 type Channel = components["schemas"]["Channel"];
@@ -209,132 +216,158 @@ export function ChannelWorkspace({
       setBusy(false);
     }
   }
+
+  if (schools.isPending)
+    return (
+      <PageState
+        title="招生渠道"
+        description="正在确认当前账号的渠道权限…"
+        loading
+      />
+    );
+  if (schools.error)
+    return (
+      <PageState
+        title="招生渠道"
+        description="正在确认当前账号的渠道权限。"
+        stateTitle="无法读取渠道权限"
+        stateHint={schools.error.message}
+        action={<Button onClick={() => void schools.refetch()}>重试</Button>}
+      />
+    );
+  if (visibleSchools.length === 0)
+    return (
+      <PageState
+        title="招生渠道"
+        stateTitle="当前范围内没有可查看的学校"
+        stateHint="请先建校并给账号分配学校范围，招生渠道才会可用。"
+      />
+    );
+
   return (
-    <section>
-      <Typography.Paragraph>
-        维护学校招生渠道名称和启用状态，历史渠道停用后仍保留。
-      </Typography.Paragraph>
-      {schools.error ? (
-        <Alert type="error" title={schools.error.message} showIcon />
-      ) : null}
+    <Page>
+      <PageHeader
+        title="招生渠道"
+        description="维护学校招生渠道名称和启用状态；历史渠道停用后仍保留，已产生的客户来源不会丢失。"
+        actions={
+          <Button onClick={() => void rows.refetch()} loading={rows.isFetching}>
+            刷新
+          </Button>
+        }
+      />
       {pending ? (
         <Alert
           type="warning"
           showIcon
           title={`渠道“${pending.name}”的创建结果待确认，请使用同一请求重试；重新登录同一账号后仍可恢复。`}
-          style={{ marginBottom: 12 }}
         />
       ) : null}
-      {notice ? (
-        <Alert
-          type="info"
-          title={notice}
-          showIcon
-          style={{ marginBottom: 12 }}
-        />
-      ) : null}
-      <Space wrap>
-        <Select
-          aria-label="学校"
-          style={{ minWidth: 180 }}
-          value={current}
-          disabled={busy || !!pending}
-          options={visibleSchools.map((school) => ({
-            value: school.id,
-            label: school.name,
-          }))}
-          onChange={(value) => {
-            setSchoolId(value);
-            setAddressId(null);
-            setPage(0);
-          }}
-        />
-        {canEdit ? (
-          <>
-            <Input
-              aria-label="渠道名称"
-              placeholder="渠道名称"
-              maxLength={50}
-              value={name}
-              disabled={busy || !!pending}
-              onChange={(event) => setName(event.target.value)}
-              style={{ width: 220 }}
-            />
-            <Button type="primary" loading={busy} onClick={() => void create()}>
-              {pending ? "重试创建" : "新建渠道"}
-            </Button>
-          </>
-        ) : null}
-      </Space>
+      {notice ? <Alert type="info" title={notice} showIcon /> : null}
       {rows.error ? (
-        <Alert
-          type="error"
-          title={rows.error.message}
-          showIcon
-          style={{ marginTop: 12 }}
-        />
+        <Alert type="error" title={rows.error.message} showIcon />
       ) : null}
-      <Table<Channel>
-        rowKey={(row) => row.id!}
-        loading={rows.isFetching}
-        dataSource={schools.error || rows.error ? [] : (rows.data?.items ?? [])}
-        pagination={false}
-        style={{ marginTop: 16 }}
-        columns={[
-          { title: "渠道名称", dataIndex: "name" },
-          { title: "状态", render: (_, row) => (row.active ? "启用" : "停用") },
-          {
-            title: "操作",
-            render: (_, row) =>
-              row.id && !rows.error && !schools.error ? (
-                <Space>
-                  <Button
-                    disabled={busy || !!pending}
-                    onClick={() => setAddressId(row.id!)}
-                  >
-                    地址
-                  </Button>
-                  {canEdit && row.version != null ? (
+      <Panel
+        ariaLabel="招生渠道列表"
+        head={
+          <Select
+            aria-label="学校"
+            style={{ minWidth: 200 }}
+            value={current}
+            disabled={busy || !!pending}
+            options={visibleSchools.map((school) => ({
+              value: school.id,
+              label: school.name,
+            }))}
+            onChange={(value) => {
+              setSchoolId(value);
+              setAddressId(null);
+              setPage(0);
+            }}
+          />
+        }
+        headEnd={
+          canEdit ? (
+            <Space>
+              <Input
+                aria-label="渠道名称"
+                placeholder="渠道名称"
+                maxLength={50}
+                value={name}
+                disabled={busy || !!pending}
+                onChange={(event) => setName(event.target.value)}
+                style={{ width: 220 }}
+              />
+              <Button
+                type="primary"
+                loading={busy}
+                onClick={() => void create()}
+              >
+                {pending ? "重试创建" : "新建渠道"}
+              </Button>
+            </Space>
+          ) : undefined
+        }
+        footer={
+          <SimplePager
+            page={page}
+            hasMore={!!rows.data?.hasMore}
+            onPrev={() => setPage(page - 1)}
+            onNext={() => setPage(page + 1)}
+            disabled={busy || !!pending || !!rows.error}
+          />
+        }
+      >
+        <Table<Channel>
+          rowKey={(row) => row.id!}
+          loading={rows.isFetching}
+          dataSource={
+            schools.error || rows.error ? [] : (rows.data?.items ?? [])
+          }
+          pagination={false}
+          columns={[
+            { title: "渠道名称", dataIndex: "name" },
+            {
+              title: "状态",
+              width: 110,
+              render: (_, row) =>
+                row.active ? (
+                  <StatusTag tone="ok">启用</StatusTag>
+                ) : (
+                  <StatusTag tone="neutral">停用</StatusTag>
+                ),
+            },
+            {
+              title: "操作",
+              render: (_, row) =>
+                row.id && !rows.error && !schools.error ? (
+                  <Space>
                     <Button
                       disabled={busy || !!pending}
-                      onClick={() =>
-                        setDraft({
-                          id: row.id!,
-                          name: row.name ?? "",
-                          active: !!row.active,
-                          version: row.version!,
-                        })
-                      }
+                      onClick={() => setAddressId(row.id!)}
                     >
-                      编辑
+                      地址
                     </Button>
-                  ) : null}
-                </Space>
-              ) : null,
-          },
-        ]}
-      />
-      <Space style={{ marginTop: 12 }}>
-        <Button
-          disabled={page === 0 || busy || !!pending}
-          onClick={() => setPage(page - 1)}
-        >
-          上一页
-        </Button>
-        <span>第 {page + 1} 页</span>
-        <Button
-          disabled={
-            !!rows.error ||
-            !!schools.error ||
-            !rows.data?.hasMore ||
-            busy ||
-            !!pending
-          }
-          onClick={() => setPage(page + 1)}
-        >
-          下一页
-        </Button>
-      </Space>
+                    {canEdit && row.version != null ? (
+                      <Button
+                        disabled={busy || !!pending}
+                        onClick={() =>
+                          setDraft({
+                            id: row.id!,
+                            name: row.name ?? "",
+                            active: !!row.active,
+                            version: row.version!,
+                          })
+                        }
+                      >
+                        编辑
+                      </Button>
+                    ) : null}
+                  </Space>
+                ) : null,
+            },
+          ]}
+        />
+      </Panel>
       {addressId && current && !schools.error && !rows.error ? (
         <ChannelAddress
           key={addressId}
@@ -374,6 +407,6 @@ export function ChannelWorkspace({
           </Space>
         ) : null}
       </Modal>
-    </section>
+    </Page>
   );
 }

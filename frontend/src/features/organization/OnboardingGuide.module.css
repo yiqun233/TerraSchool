@@ -3,9 +3,9 @@
 .guide {
   max-width: 720px;
   padding: 24px;
-  border: 1px solid var(--ts-line, #e5e7eb);
+  border: 1px solid var(--ts-line);
   border-radius: 8px;
-  background: var(--ts-surface, #ffffff);
+  background: var(--ts-surface);
 }
 
 .title {
@@ -14,7 +14,7 @@
 
 .lead {
   margin: 0 0 20px;
-  color: var(--ts-ink-2, #475467);
+  color: var(--ts-ink-2);
   line-height: 1.7;
 }
 
@@ -31,12 +31,12 @@
   display: flex;
   gap: 12px;
   padding: 12px 16px;
-  border: 1px solid var(--ts-line, #e5e7eb);
+  border: 1px solid var(--ts-line);
   border-radius: 8px;
 }
 
 .pending {
-  background: var(--ts-bg, #f7f8fa);
+  background: var(--ts-bg);
 }
 
 .index {
@@ -44,8 +44,8 @@
   width: 24px;
   height: 24px;
   border-radius: 50%;
-  background: var(--ts-brand, #254c78);
-  color: #ffffff;
+  background: var(--ts-brand);
+  color: var(--ts-on-brand);
   font-size: 12px;
   font-weight: 600;
   display: flex;
@@ -55,20 +55,20 @@
 
 .body b {
   font-size: 14px;
-  color: var(--ts-ink, #1f2937);
+  color: var(--ts-ink);
 }
 
 .body p {
   margin: 4px 0 8px;
   font-size: 13px;
-  color: var(--ts-ink-3, #6b7280);
+  color: var(--ts-ink-3);
   line-height: 1.6;
 }
 
 .note {
   margin: 16px 0 0;
   font-size: 12px;
-  color: var(--ts-ink-3, #6b7280);
+  color: var(--ts-ink-3);
 }
 
 @media (max-width: 720px) {

@@ -28,7 +28,7 @@ function installFetch(handler: Handler) {
 const operator = {
   login: "ops.zhou",
   displayName: "周明",
-  actions: ["TENANT_READ"],
+  actions: ["TENANT_READ", "TENANT_SUSPEND", "TENANT_RESUME"],
 };
 
 const tenants = [

@@ -64,6 +64,24 @@ public class OrganizationService implements OrganizationQueries {
   }
 
   @Override
+  public String employeeDisplayName(java.util.UUID accountId) {
+    if (accountId == null) return null;
+    var permissions = actors.permissions();
+    return tx.execute(
+        permissions.tenantId(),
+        () -> {
+          var row =
+              sql.fetchOne(
+                  "select name from organization.employee"
+                      + " where tenant_id=? and account_id=? and active"
+                      + " order by name,id limit 1",
+                  permissions.tenantId(),
+                  accountId);
+          return row == null ? null : row.get("name", String.class);
+        });
+  }
+
+  @Override
   public java.util.List<OrganizationUnit> schoolOptions(String search) {
     var actor = actors.requireOrganizationMaintainer();
     if (search == null || search.length() > 100) throw new IllegalArgumentException("学校检索条件过长");

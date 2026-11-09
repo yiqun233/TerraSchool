@@ -1,0 +1,111 @@
+.page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  background: var(--ts-bg);
+  padding: var(--ts-space-5);
+  box-sizing: border-box;
+}
+
+.card {
+  width: 100%;
+  max-width: 400px;
+  background: var(--ts-surface);
+  border: 1px solid var(--ts-line);
+  border-radius: var(--ts-radius-card);
+  padding: 28px 28px 24px;
+  box-sizing: border-box;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mark {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  background: var(--ts-ink);
+  color: var(--ts-surface);
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.brandText {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+}
+
+.brandText b {
+  font-size: 13.5px;
+}
+
+.brandText em {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--ts-ink-4);
+  margin-top: 2px;
+}
+
+.title {
+  font-size: var(--ts-font-page);
+  line-height: var(--ts-line-page);
+  font-weight: 600;
+  margin: 18px 0 4px;
+}
+
+.hint {
+  font-size: 12.5px;
+  color: var(--ts-ink-3);
+  margin: 0 0 20px;
+  line-height: 1.6;
+}
+
+.error {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border-radius: var(--ts-radius-control);
+  background: var(--ts-danger-bg);
+  color: var(--ts-danger);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.notice {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border-radius: var(--ts-radius-control);
+  background: var(--ts-success-bg);
+  color: var(--ts-success);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.foot {
+  margin-top: 16px;
+  font-size: 11.5px;
+  color: var(--ts-ink-4);
+  text-align: center;
+}
+
+.gateCard {
+  width: 100%;
+  max-width: 460px;
+  background: var(--ts-surface);
+  border: 1px solid var(--ts-line);
+  border-radius: var(--ts-radius-card);
+  padding: 28px;
+  box-sizing: border-box;
+}
+
+.gateTitle {
+  font-size: var(--ts-font-page);
+  line-height: var(--ts-line-page);
+  font-weight: 600;
+  margin: 0 0 8px;
+}

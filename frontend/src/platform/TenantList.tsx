@@ -1,18 +1,36 @@
-import { useCallback, useEffect, useState } from "react";
-import { App, Button, Descriptions, Modal, Table } from "antd";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  App,
+  Button,
+  Descriptions,
+  Drawer,
+  Input,
+  Modal,
+  Skeleton,
+  Table,
+  Tabs,
+} from "antd";
 import ProvisionWizard from "./ProvisionWizard";
 import type { TableColumnsType } from "antd";
 import {
   AccessDenied,
   fetchAdministrators,
+  fetchBrandingHistory,
+  fetchTenantBranding,
   fetchTenantDetail,
+  type BrandingHistoryRow,
   type TenantDetail,
   fetchTenants,
+  rollbackTenantBranding,
   resetAdminPassword,
   SessionExpired,
   setTenantActive,
+  updateTenantBranding,
   type TenantRow,
+  type TenantSummary,
 } from "./api";
+import type { TenantBranding } from "../shared/theme/brand";
+import { StatStrip } from "../shared/ui/Page";
 import styles from "./platform.module.css";
 
 const PAGE_SIZE = 20;
@@ -30,14 +48,24 @@ function formatTime(value: string) {
 
 /** 租户列表：只读信息 + 停用/恢复；不含业务数据（DEC-024）。 */
 export default function TenantList({
-  canCreate,
+  actions,
   onSessionLost,
 }: {
-  canCreate: boolean;
+  actions: string[];
   onSessionLost: () => void;
 }) {
   const { message } = App.useApp();
+  const canCreate = actions.includes("TENANT_CREATE");
+  const canSuspend = actions.includes("TENANT_SUSPEND");
+  const canResume = actions.includes("TENANT_RESUME");
+  // 重置密码目前复用 TENANT_CREATE；拆分独立动作前按同一权限显隐，避免点了才 403。
+  const canResetPassword = canCreate;
   const [rows, setRows] = useState<TenantRow[]>([]);
+  const [total, setTotal] = useState(0);
+  const [summary, setSummary] = useState<TenantSummary | null>(null);
+  const [status, setStatus] = useState("");
+  const [keyword, setKeyword] = useState("");
+  const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
   const [phase, setPhase] = useState<Phase>("loading");
   const [errorText, setErrorText] = useState("");
@@ -53,15 +81,38 @@ export default function TenantList({
     password: string;
   } | null>(null);
   const [resetBusy, setResetBusy] = useState(false);
+  const [resettingLogin, setResettingLogin] = useState<string | null>(null);
   const [detail, setDetail] = useState<TenantDetail | null>(null);
   const [detailBusy, setDetailBusy] = useState(false);
+  const [detailError, setDetailError] = useState("");
+  const detailRequest = useRef(0);
+  const [adminsLoading, setAdminsLoading] = useState(false);
+  const [brandingFor, setBrandingFor] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
+  const [branding, setBranding] = useState<TenantBranding | null>(null);
+  const [brandingName, setBrandingName] = useState("");
+  const [brandingSeed, setBrandingSeed] = useState("");
+  const [brandingBusy, setBrandingBusy] = useState(false);
+  const [brandingError, setBrandingError] = useState("");
+  const [history, setHistory] = useState<BrandingHistoryRow[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [rollingBack, setRollingBack] = useState<number | null>(null);
 
   const load = useCallback(
     async (targetPage: number) => {
       setPhase("loading");
       try {
-        const items = await fetchTenants(targetPage, PAGE_SIZE);
-        setRows(items);
+        const result = await fetchTenants(
+          targetPage,
+          PAGE_SIZE,
+          status,
+          keyword,
+        );
+        setRows(result.items);
+        setTotal(result.total);
+        setSummary(result.summary);
         setPage(targetPage);
         setPhase("ready");
       } catch (error) {
@@ -77,7 +128,7 @@ export default function TenantList({
         setPhase("failed");
       }
     },
-    [onSessionLost],
+    [onSessionLost, status, keyword],
   );
 
   useEffect(() => {
@@ -109,24 +160,37 @@ export default function TenantList({
   }
 
   async function openDetail(row: TenantRow) {
+    const request = ++detailRequest.current;
+    setDetail(null);
+    setDetailError("");
     setDetailBusy(true);
     try {
-      setDetail(await fetchTenantDetail(row.id));
+      const value = await fetchTenantDetail(row.id);
+      // 关闭抽屉会使 request 失效，晚到的响应不能把抽屉重新打开。
+      if (request === detailRequest.current) setDetail(value);
     } catch (failure) {
+      if (request !== detailRequest.current) return;
       if (failure instanceof SessionExpired) {
         onSessionLost();
         return;
       }
-      message.error(
+      setDetailError(
         failure instanceof Error ? failure.message : "加载详情失败",
       );
     } finally {
-      setDetailBusy(false);
+      if (request === detailRequest.current) setDetailBusy(false);
     }
   }
 
+  function closeDetail() {
+    detailRequest.current += 1;
+    setDetail(null);
+    setDetailBusy(false);
+    setDetailError("");
+  }
+
   async function openReset(row: TenantRow) {
-    setResetBusy(true);
+    setAdminsLoading(true);
     try {
       setAdmins(await fetchAdministrators(row.id));
     } catch (failure) {
@@ -139,12 +203,92 @@ export default function TenantList({
       );
       setResetFor(null);
     } finally {
-      setResetBusy(false);
+      setAdminsLoading(false);
+    }
+  }
+
+  async function openBranding(id: string, name: string) {
+    setBrandingFor({ id, name });
+    setBranding(null);
+    setBrandingError("");
+    setHistory([]);
+    setHistoryLoading(true);
+    try {
+      const [value, versions] = await Promise.all([
+        fetchTenantBranding(id),
+        fetchBrandingHistory(id),
+      ]);
+      setBranding(value);
+      setBrandingName(value.displayName ?? "");
+      setBrandingSeed(value.seed);
+      setHistory(versions);
+    } catch (failure) {
+      if (failure instanceof SessionExpired) {
+        onSessionLost();
+        return;
+      }
+      setBrandingError(
+        failure instanceof Error ? failure.message : "加载品牌失败",
+      );
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
+  async function rollbackBranding(version: number) {
+    if (!brandingFor) return;
+    setRollingBack(version);
+    setBrandingError("");
+    try {
+      const value = await rollbackTenantBranding(brandingFor.id, version);
+      setBranding(value);
+      setBrandingName(value.displayName ?? "");
+      setBrandingSeed(value.seed);
+      setHistory(await fetchBrandingHistory(brandingFor.id));
+      message.success(`已回滚为版本 ${version} 的内容，并生成新版本`);
+    } catch (failure) {
+      if (failure instanceof SessionExpired) {
+        onSessionLost();
+        return;
+      }
+      setBrandingError(
+        failure instanceof Error ? failure.message : "回滚品牌失败",
+      );
+    } finally {
+      setRollingBack(null);
+    }
+  }
+
+  async function saveBranding() {
+    if (!brandingFor || !branding) return;
+    setBrandingBusy(true);
+    setBrandingError("");
+    try {
+      const value = await updateTenantBranding(brandingFor.id, {
+        displayName: brandingName.trim() || null,
+        seed: brandingSeed,
+        version: branding.version,
+      });
+      setBranding(value);
+      setBrandingName(value.displayName ?? "");
+      setBrandingSeed(value.seed);
+      message.success("品牌已保存并立即生效");
+    } catch (failure) {
+      if (failure instanceof SessionExpired) {
+        onSessionLost();
+        return;
+      }
+      setBrandingError(
+        failure instanceof Error ? failure.message : "品牌保存失败",
+      );
+    } finally {
+      setBrandingBusy(false);
     }
   }
 
   async function issuePassword(row: TenantRow, login: string) {
     setResetBusy(true);
+    setResettingLogin(login);
     try {
       setIssued(await resetAdminPassword(row.id, login));
     } catch (failure) {
@@ -155,6 +299,19 @@ export default function TenantList({
       message.error(failure instanceof Error ? failure.message : "重置失败");
     } finally {
       setResetBusy(false);
+      setResettingLogin(null);
+    }
+  }
+
+  async function copyIssued() {
+    if (!issued) return;
+    try {
+      await navigator.clipboard.writeText(
+        `登录名：${issued.login}\n初始密码：${issued.password}`,
+      );
+      message.success("登录信息已复制");
+    } catch {
+      message.error("复制失败，请手动选择登录名和初始密码");
     }
   }
 
@@ -196,28 +353,36 @@ export default function TenantList({
       ),
     },
     {
-      title: "",
+      title: "操作",
       key: "actions",
       width: 180,
-      render: (_: unknown, row: TenantRow) => (
-        <div className={styles.headActions}>
-          <Button type="link" size="small" onClick={() => setTarget(row)}>
-            {row.active ? "停用" : "恢复"}
-          </Button>
-          <Button
-            type="link"
-            size="small"
-            onClick={() => {
-              setIssued(null);
-              setAdmins([]);
-              setResetFor(row);
-              void openReset(row);
-            }}
-          >
-            重置密码
-          </Button>
-        </div>
-      ),
+      render: (_: unknown, row: TenantRow) => {
+        const canToggle = row.active ? canSuspend : canResume;
+        if (!canToggle && !canResetPassword) return null;
+        return (
+          <div className={styles.headActions}>
+            {canToggle ? (
+              <Button type="link" size="small" onClick={() => setTarget(row)}>
+                {row.active ? "停用" : "恢复"}
+              </Button>
+            ) : null}
+            {canResetPassword ? (
+              <Button
+                type="link"
+                size="small"
+                onClick={() => {
+                  setIssued(null);
+                  setAdmins([]);
+                  setResetFor(row);
+                  void openReset(row);
+                }}
+              >
+                重置密码
+              </Button>
+            ) : null}
+          </div>
+        );
+      },
     },
   ];
 
@@ -241,7 +406,80 @@ export default function TenantList({
         </div>
       </div>
 
+      <StatStrip
+        items={[
+          {
+            label: "租户总数",
+            value: summary?.total ?? total,
+            detail: "全平台",
+          },
+          {
+            label: "正常",
+            value: summary?.active ?? "—",
+            detail: "可登录",
+          },
+          {
+            label: "停用",
+            value: summary?.suspended ?? "—",
+            detail: "数据保留",
+          },
+          {
+            label: "本月开通",
+            value: summary?.thisMonth ?? "—",
+            detail: "按开通时间",
+          },
+        ]}
+      />
+
       <section className={styles.panel} aria-label="租户列表">
+        {phase !== "denied" ? (
+          <div className={styles.listHead}>
+            <Tabs
+              activeKey={status || "ALL"}
+              onChange={(key) => {
+                setStatus(key === "ALL" ? "" : key);
+                setPage(0);
+              }}
+              items={[
+                {
+                  key: "ALL",
+                  label: `全部${summary ? ` ${summary.total}` : ""}`,
+                },
+                {
+                  key: "ACTIVE",
+                  label: `正常${summary ? ` ${summary.active}` : ""}`,
+                },
+                {
+                  key: "SUSPENDED",
+                  label: `停用${summary ? ` ${summary.suspended}` : ""}`,
+                },
+              ]}
+            />
+            <div className={styles.listFilters}>
+              <Input.Search
+                allowClear
+                placeholder="搜索机构名称"
+                value={search}
+                style={{ width: 220 }}
+                onChange={(event) => setSearch(event.target.value)}
+                onSearch={(value) => {
+                  setKeyword(value.trim());
+                  setPage(0);
+                }}
+              />
+              <Button
+                onClick={() => {
+                  setSearch("");
+                  setKeyword("");
+                  setStatus("");
+                  setPage(0);
+                }}
+              >
+                清空筛选
+              </Button>
+            </div>
+          </div>
+        ) : null}
         {phase === "denied" ? (
           <div className={styles.stateBlock}>
             <p className={styles.stateTitle}>没有查看租户的权限</p>
@@ -277,6 +515,10 @@ export default function TenantList({
               </Button>
             ) : null}
           </div>
+        ) : phase === "loading" && rows.length === 0 ? (
+          <div className={styles.stateBlock}>
+            <Skeleton active paragraph={{ rows: 6 }} />
+          </div>
         ) : (
           <>
             <Table<TenantRow>
@@ -286,10 +528,12 @@ export default function TenantList({
               dataSource={rows}
               pagination={false}
               loading={phase === "loading"}
+              locale={{ emptyText: "本页没有租户" }}
             />
             <div className={styles.panelFoot}>
               <span>
-                第 {page + 1} 页 · 本页 {rows.length} 条
+                共 {total} 个租户 · 第 {total === 0 ? 0 : page * PAGE_SIZE + 1}–
+                {Math.min(total, (page + 1) * PAGE_SIZE)} 条
               </span>
               <div className={styles.pager}>
                 <button
@@ -303,7 +547,9 @@ export default function TenantList({
                 <button
                   type="button"
                   className={styles.pageBtn}
-                  disabled={rows.length < PAGE_SIZE || phase === "loading"}
+                  disabled={
+                    phase === "loading" || (page + 1) * PAGE_SIZE >= total
+                  }
                   onClick={() => void load(page + 1)}
                 >
                   下一页
@@ -317,18 +563,29 @@ export default function TenantList({
       <Modal
         open={target !== null}
         title={target === null ? "" : target.active ? "停用租户" : "恢复租户"}
-        okText={target === null ? "" : target.active ? "停用" : "恢复"}
-        cancelText="取消"
-        okButtonProps={{
-          danger: target?.active === true,
-          loading: busy,
-        }}
-        onOk={() => void confirmStatusChange()}
         onCancel={() => {
           if (!busy) setTarget(null);
         }}
         closable={!busy}
         maskClosable={!busy}
+        footer={[
+          <Button
+            key="cancel"
+            autoFocus
+            disabled={busy}
+            onClick={() => setTarget(null)}
+          >
+            取消
+          </Button>,
+          <Button
+            key="ok"
+            danger={target?.active === true}
+            loading={busy}
+            onClick={() => void confirmStatusChange()}
+          >
+            {target?.active ? "停用" : "恢复"}
+          </Button>,
+        ]}
       >
         <p className={styles.modalText}>
           {target === null
@@ -338,16 +595,28 @@ export default function TenantList({
               : `恢复后「${target.name}」的成员可以重新登录。`}
         </p>
       </Modal>
-      <Modal
-        open={detail !== null || detailBusy}
+      <Drawer
+        open={detail !== null || detailBusy || !!detailError}
         title={detail?.name ?? "租户详情"}
-        footer={null}
-        onCancel={() => setDetail(null)}
+        width={480}
+        onClose={closeDetail}
+        destroyOnHidden
       >
-        {detail ? (
-          <Descriptions column={2} size="small">
+        {detailBusy && !detail ? (
+          <Skeleton active paragraph={{ rows: 5 }} />
+        ) : detailError ? (
+          <div className={styles.stateBlock}>
+            <p className={styles.stateTitle}>租户详情加载失败</p>
+            <p className={styles.stateHint}>{detailError}</p>
+          </div>
+        ) : detail ? (
+          <Descriptions column={1} size="small">
             <Descriptions.Item label="状态">
-              {detail.active ? "正常" : "停用"}
+              <span
+                className={`${styles.tag} ${detail.active ? styles.tagOk : styles.tagOff}`}
+              >
+                {detail.active ? "正常" : "停用"}
+              </span>
             </Descriptions.Item>
             <Descriptions.Item label="开通时间">
               {formatTime(detail.created_at)}
@@ -363,10 +632,16 @@ export default function TenantList({
               <span className={styles.orgId}>{detail.id}</span>
             </Descriptions.Item>
           </Descriptions>
-        ) : (
-          <p className={styles.stateHint}>正在加载…</p>
-        )}
-      </Modal>
+        ) : null}
+        {detail && !detailBusy ? (
+          <Button
+            style={{ marginTop: 16 }}
+            onClick={() => void openBranding(detail.id, detail.name)}
+          >
+            代改品牌
+          </Button>
+        ) : null}
+      </Drawer>
 
       <ProvisionWizard
         open={wizardOpen}
@@ -403,31 +678,162 @@ export default function TenantList({
                 <code>{issued.password}</code>
               </dd>
             </dl>
+            <Button onClick={() => void copyIssued()}>复制登录信息</Button>
           </div>
         ) : (
           <>
             <p className={styles.stateHint}>
               选择要重置的租户管理员。重置后其既有会话立即失效，且下次登录必须改密。
             </p>
-            {admins.length === 0 && !resetBusy ? (
+            {adminsLoading ? (
+              <Skeleton active paragraph={{ rows: 3 }} />
+            ) : admins.length === 0 ? (
               <p className={styles.stateHint}>该租户没有可重置的管理员。</p>
-            ) : null}
-            {admins.map((admin) => (
-              <div key={admin.login} className={styles.adminRow}>
-                <span className={styles.adminLogin}>
-                  {admin.login}
-                  {admin.active ? "" : "（已停用）"}
-                </span>
-                <Button
-                  size="small"
-                  loading={resetBusy}
-                  disabled={!admin.active}
-                  onClick={() => void issuePassword(resetFor, admin.login)}
+            ) : (
+              admins.map((admin) => (
+                <div key={admin.login} className={styles.adminRow}>
+                  <span className={styles.adminLogin}>
+                    {admin.login}
+                    {admin.active ? "" : "（已停用）"}
+                  </span>
+                  <Button
+                    size="small"
+                    loading={resettingLogin === admin.login}
+                    disabled={!admin.active || resettingLogin !== null}
+                    onClick={() => void issuePassword(resetFor, admin.login)}
+                  >
+                    重置
+                  </Button>
+                </div>
+              ))
+            )}
+          </>
+        )}
+      </Modal>
+
+      <Modal
+        open={brandingFor !== null}
+        title={
+          brandingFor === null
+            ? "代改品牌"
+            : `代改「${brandingFor.name}」的品牌`
+        }
+        width={540}
+        onCancel={() => {
+          if (!brandingBusy) {
+            setBrandingFor(null);
+            setBranding(null);
+            setBrandingError("");
+          }
+        }}
+        footer={[
+          <Button
+            key="cancel"
+            disabled={brandingBusy}
+            onClick={() => setBrandingFor(null)}
+          >
+            取消
+          </Button>,
+          <Button
+            key="save"
+            type="primary"
+            loading={brandingBusy}
+            disabled={!branding?.canWrite || !brandingSeed}
+            onClick={() => void saveBranding()}
+          >
+            保存
+          </Button>,
+        ]}
+      >
+        {brandingError ? (
+          <p className={styles.loginError} role="alert">
+            {brandingError}
+          </p>
+        ) : null}
+        {!branding ? (
+          <Skeleton active paragraph={{ rows: 4 }} />
+        ) : (
+          <>
+            <p className={styles.stateHint}>
+              平台代改会写入平台审计；保存后租户侧立即生效。布局、字体、圆角与状态色仍由平台锁定。
+            </p>
+            <label className={styles.adminLogin} htmlFor="platform-brand-name">
+              系统显示名
+            </label>
+            <input
+              id="platform-brand-name"
+              className={styles.brandInput}
+              value={brandingName}
+              maxLength={60}
+              placeholder="留空时使用租户名称"
+              onChange={(event) => setBrandingName(event.target.value)}
+              disabled={!branding.canWrite || brandingBusy}
+            />
+            <div
+              className={styles.brandGrid}
+              role="radiogroup"
+              aria-label="品牌色"
+            >
+              {branding.presets.map((preset) => (
+                <button
+                  key={preset.seed}
+                  type="button"
+                  role="radio"
+                  aria-checked={brandingSeed === preset.seed}
+                  className={`${styles.brandOption} ${brandingSeed === preset.seed ? styles.brandOptionActive : ""}`}
+                  onClick={() => setBrandingSeed(preset.seed)}
+                  disabled={!branding.canWrite || brandingBusy}
                 >
-                  重置
-                </Button>
-              </div>
-            ))}
+                  <span
+                    className={styles.brandSwatch}
+                    style={{ background: preset.seed }}
+                    aria-hidden="true"
+                  />
+                  {preset.name}
+                </button>
+              ))}
+            </div>
+            {!branding.canWrite ? (
+              <p className={styles.stateHint}>
+                当前账号没有代改品牌的权限（需要 TENANT_BRANDING_WRITE）。
+              </p>
+            ) : null}
+            <p className={styles.stateHint}>当前版本 {branding.version}</p>
+
+            <div className={styles.history}>
+              <p className={styles.historyTitle}>历史版本（最近 20 版）</p>
+              {historyLoading ? (
+                <Skeleton active paragraph={{ rows: 2 }} />
+              ) : history.length === 0 ? (
+                <p className={styles.stateHint}>还没有历史版本。</p>
+              ) : (
+                history.map((item) => (
+                  <div key={item.version} className={styles.historyRow}>
+                    <span
+                      className={styles.brandSwatch}
+                      style={{ background: item.brand }}
+                      aria-hidden="true"
+                    />
+                    <span className={styles.historyMeta}>
+                      v{item.version} · {item.displayName ?? "未设置显示名"} ·{" "}
+                      {formatTime(item.changedAt)}
+                    </span>
+                    <Button
+                      size="small"
+                      disabled={
+                        !branding.canWrite ||
+                        item.version === branding.version ||
+                        rollingBack !== null
+                      }
+                      loading={rollingBack === item.version}
+                      onClick={() => void rollbackBranding(item.version)}
+                    >
+                      回滚
+                    </Button>
+                  </div>
+                ))
+              )}
+            </div>
           </>
         )}
       </Modal>

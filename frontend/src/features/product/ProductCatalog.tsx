@@ -3,7 +3,6 @@ import { useQuery } from "@tanstack/react-query";
 import {
   Alert,
   Button,
-  Card,
   Drawer,
   Form,
   Input,
@@ -17,6 +16,14 @@ import {
 } from "antd";
 import { api, csrf } from "../../shared/http";
 import type { components } from "../../shared/generated/api";
+import {
+  Page,
+  PageHeader,
+  PageState,
+  Panel,
+  StatusTag,
+  Toolbar,
+} from "../../shared/ui/Page";
 
 type Capabilities = components["schemas"]["ProductCapabilities"];
 type Curriculum = components["schemas"]["Curriculum"];
@@ -99,17 +106,89 @@ export function ProductCatalogWorkspace({
   });
 
   if (capabilities.error)
-    return <Alert title={capabilities.error.message} type="error" />;
-  if (capabilities.isPending) return <p role="status">正在读取课程产品权限…</p>;
+    return (
+      <PageState
+        title="课程与产品"
+        description="正在确认当前账号的课程产品权限。"
+        stateTitle="无法读取课程产品权限"
+        stateHint={capabilities.error.message}
+        action={
+          <Button onClick={() => void capabilities.refetch()}>重试</Button>
+        }
+      />
+    );
+  if (capabilities.isPending)
+    return (
+      <PageState
+        title="课程与产品"
+        description="正在确认当前账号的课程产品权限。"
+        loading
+      />
+    );
   if (!capabilities.data?.canRead)
-    return <Alert title="账号当前无课程产品读取权限" type="error" />;
+    return (
+      <PageState
+        title="课程与产品"
+        stateTitle="没有课程产品读取权限"
+        stateHint="需要 PRODUCT_READ 权限；请联系机构管理员在“账号与权限”中开通。"
+      />
+    );
   const schools = capabilities.data.schools ?? [];
   if (schools.length === 0)
-    return <Alert title="当前范围内没有可查看的学校" type="warning" />;
+    return (
+      <PageState
+        title="课程与产品"
+        stateTitle="当前范围内没有可查看的学校"
+        stateHint="请先建校并给账号分配学校范围，课程与产品才会可用。"
+      />
+    );
 
   return (
-    <>
-      <Space className="toolbar" wrap>
+    <Page>
+      <PageHeader
+        title="课程与产品"
+        description="课程、产品组与价格按学校维护。价格与课时由服务端校验，发布后不可改写；历史版本保留。"
+        actions={
+          <>
+            {school?.maintainable ? (
+              <>
+                <Button
+                  onClick={() => {
+                    setError("");
+                    setCreatingGroup(true);
+                  }}
+                >
+                  新建产品组
+                </Button>
+                <Button
+                  onClick={() => {
+                    setError("");
+                    setCreatingCurriculum(true);
+                  }}
+                >
+                  新建课程
+                </Button>
+                <Button
+                  type="primary"
+                  onClick={() => {
+                    setError("");
+                    setCreatingProduct(true);
+                  }}
+                >
+                  新建产品
+                </Button>
+              </>
+            ) : null}
+            <Button
+              onClick={() => void catalog.refetch()}
+              loading={catalog.isFetching}
+            >
+              刷新
+            </Button>
+          </>
+        }
+      />
+      <Toolbar>
         <Select
           aria-label="归属学校"
           style={{ width: 220 }}
@@ -120,49 +199,21 @@ export function ProductCatalogWorkspace({
           }))}
           onChange={(value) => setSchoolId(value)}
         />
-        {school?.maintainable ? (
-          <>
-            <Button
-              onClick={() => {
-                setError("");
-                setCreatingGroup(true);
-              }}
-            >
-              新建产品组
-            </Button>
-            <Button
-              onClick={() => {
-                setError("");
-                setCreatingCurriculum(true);
-              }}
-            >
-              新建课程
-            </Button>
-            <Button
-              onClick={() => {
-                setError("");
-                setCreatingProduct(true);
-              }}
-            >
-              新建产品
-            </Button>
-          </>
-        ) : null}
-        <Button
-          onClick={() => void catalog.refetch()}
-          loading={catalog.isFetching}
-        >
-          刷新
-        </Button>
         <Typography.Text type="secondary">
           价格与课时由服务端校验，发布后不可改写
         </Typography.Text>
-      </Space>
+      </Toolbar>
       {error ? <Alert title={error} type="error" showIcon /> : null}
       {catalog.error ? (
         <Alert title={catalog.error.message} type="error" />
       ) : null}
-      <Card title="课程" size="small">
+      <Panel
+        head={
+          <span style={{ fontSize: "var(--ts-font-section)", fontWeight: 600 }}>
+            课程
+          </span>
+        }
+      >
         <Table
           rowKey="id"
           size="small"
@@ -177,7 +228,11 @@ export function ProductCatalogWorkspace({
               title: "状态",
               dataIndex: "active",
               render: (active: boolean) =>
-                active ? <Tag color="green">启用</Tag> : <Tag>停用</Tag>,
+                active ? (
+                  <StatusTag tone="ok">启用</StatusTag>
+                ) : (
+                  <StatusTag tone="neutral">停用</StatusTag>
+                ),
             },
             {
               title: "操作",
@@ -191,8 +246,14 @@ export function ProductCatalogWorkspace({
           ]}
           locale={{ emptyText: "该学校还没有课程" }}
         />
-      </Card>
-      <Card title="产品组" size="small" style={{ marginTop: 16 }}>
+      </Panel>
+      <Panel
+        head={
+          <span style={{ fontSize: "var(--ts-font-section)", fontWeight: 600 }}>
+            产品组
+          </span>
+        }
+      >
         <Table
           rowKey="id"
           size="small"
@@ -205,13 +266,23 @@ export function ProductCatalogWorkspace({
               title: "状态",
               dataIndex: "active",
               render: (active: boolean) =>
-                active ? <Tag color="green">启用</Tag> : <Tag>停用</Tag>,
+                active ? (
+                  <StatusTag tone="ok">启用</StatusTag>
+                ) : (
+                  <StatusTag tone="neutral">停用</StatusTag>
+                ),
             },
           ]}
           locale={{ emptyText: "该学校还没有产品组" }}
         />
-      </Card>
-      <Card title="产品与价格" size="small" style={{ marginTop: 16 }}>
+      </Panel>
+      <Panel
+        head={
+          <span style={{ fontSize: "var(--ts-font-section)", fontWeight: 600 }}>
+            产品与价格
+          </span>
+        }
+      >
         <Table
           rowKey="id"
           size="small"
@@ -254,7 +325,11 @@ export function ProductCatalogWorkspace({
               title: "状态",
               dataIndex: "active",
               render: (active: boolean) =>
-                active ? <Tag color="green">在售</Tag> : <Tag>停售</Tag>,
+                active ? (
+                  <StatusTag tone="ok">在售</StatusTag>
+                ) : (
+                  <StatusTag tone="neutral">停售</StatusTag>
+                ),
             },
             {
               title: "操作",
@@ -278,7 +353,7 @@ export function ProductCatalogWorkspace({
           ]}
           locale={{ emptyText: "该学校还没有产品" }}
         />
-      </Card>
+      </Panel>
       {creatingCurriculum ? (
         <CurriculumCreator
           schools={schools.filter((item) => item.maintainable)}
@@ -343,7 +418,7 @@ export function ProductCatalogWorkspace({
           onUnauthorized={onUnauthorized}
         />
       ) : null}
-    </>
+    </Page>
   );
 }
 

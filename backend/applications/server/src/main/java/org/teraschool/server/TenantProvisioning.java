@@ -170,13 +170,62 @@ class TenantProvisioning {
     return Boolean.TRUE.equals(updated);
   }
 
+  /** 平台列表的状态与关键字过滤；只作用于开通信息，不触碰业务数据。 */
+  private record TenantFilter(String where, List<Object> args) {}
+
+  private TenantFilter filter(String status, String keyword) {
+    var cleanStatus = status == null ? "" : status.strip().toUpperCase(Locale.ROOT);
+    if (!cleanStatus.isEmpty() && !Set.of("ACTIVE", "SUSPENDED").contains(cleanStatus))
+      throw new IllegalArgumentException("租户状态筛选无效");
+    var cleanKeyword = keyword == null ? "" : keyword.strip();
+    if (cleanKeyword.length() > 100) throw new IllegalArgumentException("关键字过长");
+    var where = new StringBuilder(" where 1=1");
+    var args = new ArrayList<Object>();
+    if ("ACTIVE".equals(cleanStatus)) where.append(" and active");
+    else if ("SUSPENDED".equals(cleanStatus)) where.append(" and not active");
+    if (!cleanKeyword.isEmpty()) {
+      where.append(" and name ilike ?");
+      args.add("%" + cleanKeyword + "%");
+    }
+    return new TenantFilter(where.toString(), args);
+  }
+
+  /** 租户统计：总数、正常、停用、本月开通；按同一平台可见范围计数。 */
+  record TenantCounts(long total, long active, long suspended, long thisMonth) {}
+
+  TenantCounts counts() {
+    return db.queryForObject(
+        "select count(*) as total,"
+            + " count(*) filter (where active) as active,"
+            + " count(*) filter (where not active) as suspended,"
+            + " count(*) filter (where created_at >= date_trunc('month', current_date)) as this_month"
+            + " from identity.tenant",
+        (rs, index) ->
+            new TenantCounts(
+                rs.getLong("total"),
+                rs.getLong("active"),
+                rs.getLong("suspended"),
+                rs.getLong("this_month")));
+  }
+
+  /** 按筛选条件计数：页脚显示总数，不靠“本页是否满 20 条”猜下一页。 */
+  long countTenants(String status, String keyword) {
+    var value = filter(status, keyword);
+    return db.queryForObject(
+        "select count(*) from identity.tenant" + value.where(), Long.class, value.args().toArray());
+  }
+
   /** 平台只读租户基本信息：名称、状态与开通时间，不含任何业务数据。 */
-  List<Map<String, Object>> tenants(int page, int size) {
+  List<Map<String, Object>> tenants(int page, int size, String status, String keyword) {
+    var value = filter(status, keyword);
+    var args = new ArrayList<>(value.args());
+    args.add(size);
+    args.add(page * size);
     return db.queryForList(
-        "select id, name, active, created_at from identity.tenant order by created_at desc, id"
-            + " limit ? offset ?",
-        size,
-        page * size);
+        "select id, name, active, created_at from identity.tenant"
+            + value.where()
+            + " order by created_at desc, id limit ? offset ?",
+        args.toArray());
   }
 
   static String fingerprint(UUID operator, String name, String login) {

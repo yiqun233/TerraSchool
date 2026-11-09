@@ -69,50 +69,30 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
   // ---------------------------------------------------------------- 查询
 
   @Override
-  public StudentPage list(int page, int size, String search) {
+  public StudentPage list(int page, int size, String search, String status, UUID schoolId) {
     if (page < 0 || page > 100000 || size < 1 || size > 100)
       throw new IllegalArgumentException("分页超出范围");
     if (search != null && search.length() > 50) throw new IllegalArgumentException("检索条件过长");
+    var cleanStatus = status == null ? "" : status.strip().toUpperCase(Locale.ROOT);
+    if (!cleanStatus.isEmpty() && !STATUS.contains(cleanStatus))
+      throw new IllegalArgumentException("学员状态无效");
     var scope = actors.requireResourceScope("STUDENT");
     if (scope.readableSchoolIds().isEmpty()) return new StudentPage(List.of(), page, size, 0);
+    var selectedSchools = selectedSchools(scope, schoolId);
     var value = search == null ? "" : search.strip();
-    var keyword = "%" + value + "%";
-    var phoneDigits = value.replaceAll("[^0-9]", "");
     return tx.execute(
         scope.tenantId(),
         () -> {
-          var filter =
-              " from archive.student s where s.merged_into_id is null and s.school_id in ("
-                  + marks(scope.readableSchoolIds().size())
-                  + ") and (s.name ilike ? or s.student_no ilike ?";
-          var args = new ArrayList<Object>(scope.readableSchoolIds());
-          args.add(keyword);
-          args.add(keyword);
-          if (phoneDigits.length() >= 4) {
-            var phoneReadableSchools =
-                scope.readableSchoolIds().stream()
-                    .filter(
-                        schoolId -> {
-                          var denied = fieldAccess.deniedFields(scope.accountId(), schoolId);
-                          return !denied.contains("STUDENT_PHONE")
-                              && (scope.sensitiveSchoolIds().contains(schoolId)
-                                  || fieldAccess
-                                      .readableFields(scope.accountId(), schoolId)
-                                      .contains("STUDENT_PHONE"));
-                        })
-                    .toList();
-            if (!phoneReadableSchools.isEmpty()) {
-              filter +=
-                  " or (s.school_id in ("
-                      + marks(phoneReadableSchools.size())
-                      + ") and regexp_replace(coalesce(s.phone,''),'[^0-9]','','g') like ?)";
-              args.addAll(phoneReadableSchools);
-              args.add("%" + phoneDigits + "%");
-            }
+          var filter = baseFilter(scope, value, selectedSchools);
+          if (!cleanStatus.isEmpty()) {
+            var statusArgs = new ArrayList<>(filter.args());
+            statusArgs.add(cleanStatus);
+            filter = new Filter(filter.where() + " and s.status=?", statusArgs);
           }
-          filter += ")";
-          long total = sql.fetchOne("select count(*)" + filter, args.toArray()).get(0, Long.class);
-          var pageArgs = new ArrayList<>(args);
+          long total =
+              sql.fetchOne("select count(*)" + filter.where(), filter.args().toArray())
+                  .get(0, Long.class);
+          var pageArgs = new ArrayList<>(filter.args());
           pageArgs.add(size);
           pageArgs.add(page * size);
           var names = schools.names(scope.readableSchoolIds());
@@ -122,20 +102,91 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
                           + "s.owner_id,s.status,s.version,"
                           + "(select count(*) from archive.student_contact c where c.student_id=s.id)"
                           + " as contact_count"
-                          + filter
+                          + filter.where()
                           + " order by s.student_no, s.id limit ? offset ?",
                       pageArgs.toArray())
                   .map(
                       row -> {
-                        var schoolId = row.get("school_id", UUID.class);
+                        var school = row.get("school_id", UUID.class);
                         return summary(
-                            row,
-                            names.get(schoolId),
-                            !scope.sensitiveSchoolIds().contains(schoolId));
+                            row, names.get(school), !scope.sensitiveSchoolIds().contains(school));
                       });
           return new StudentPage(items, page, size, total);
         });
   }
+
+  @Override
+  public StudentCounts counts(String search, UUID schoolId) {
+    if (search != null && search.length() > 50) throw new IllegalArgumentException("检索条件过长");
+    var scope = actors.requireResourceScope("STUDENT");
+    if (scope.readableSchoolIds().isEmpty()) return new StudentCounts(0, 0, 0, 0);
+    var selectedSchools = selectedSchools(scope, schoolId);
+    var value = search == null ? "" : search.strip();
+    return tx.execute(
+        scope.tenantId(),
+        () -> {
+          var filter = baseFilter(scope, value, selectedSchools);
+          var row =
+              sql.fetchOne(
+                  "select count(*) as total,"
+                      + " count(*) filter (where s.status='ACTIVE') as active,"
+                      + " count(*) filter (where s.status='INACTIVE') as inactive,"
+                      + " count(*) filter (where s.created_at >= date_trunc('month', current_date))"
+                      + " as this_month"
+                      + filter.where(),
+                  filter.args().toArray());
+          return new StudentCounts(
+              row.get("total", Long.class),
+              row.get("active", Long.class),
+              row.get("inactive", Long.class),
+              row.get("this_month", Long.class));
+        });
+  }
+
+  /** 指定学校时必须落在当前账号可读范围内，不能靠页面不传就绕过。 */
+  private List<UUID> selectedSchools(ResourceScope scope, UUID schoolId) {
+    if (schoolId == null) return scope.readableSchoolIds().stream().sorted().toList();
+    if (!scope.readableSchoolIds().contains(schoolId)) throw new AccessDeniedException("学校不在可读范围");
+    return List.of(schoolId);
+  }
+
+  /** 列表与计数共用的过滤条件：未合并、学校范围、姓名/学员号/有权限的电话检索。 */
+  private Filter baseFilter(ResourceScope scope, String value, List<UUID> selectedSchools) {
+    var keyword = "%" + value + "%";
+    var phoneDigits = value.replaceAll("[^0-9]", "");
+    var filter =
+        " from archive.student s where s.merged_into_id is null and s.school_id in ("
+            + marks(selectedSchools.size())
+            + ") and (s.name ilike ? or s.student_no ilike ?";
+    var args = new ArrayList<Object>(selectedSchools);
+    args.add(keyword);
+    args.add(keyword);
+    if (phoneDigits.length() >= 4) {
+      var phoneReadableSchools =
+          selectedSchools.stream()
+              .filter(
+                  school -> {
+                    var denied = fieldAccess.deniedFields(scope.accountId(), school);
+                    return !denied.contains("STUDENT_PHONE")
+                        && (scope.sensitiveSchoolIds().contains(school)
+                            || fieldAccess
+                                .readableFields(scope.accountId(), school)
+                                .contains("STUDENT_PHONE"));
+                  })
+              .toList();
+      if (!phoneReadableSchools.isEmpty()) {
+        filter +=
+            " or (s.school_id in ("
+                + marks(phoneReadableSchools.size())
+                + ") and regexp_replace(coalesce(s.phone,''),'[^0-9]','','g') like ?)";
+        args.addAll(phoneReadableSchools);
+        args.add("%" + phoneDigits + "%");
+      }
+    }
+    return new Filter(filter + ")", args);
+  }
+
+  private record Filter(String where, List<Object> args) {}
 
   @Override
   public StudentProfile detail(UUID id) {
@@ -156,7 +207,7 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
     var maintainable = scope.maintainableSchoolIds();
     var assignable = assignableSchoolIds();
     var exportable = exportableSchoolIds(scope.readableSchoolIds());
-    if (maintainable.isEmpty() && exportable.isEmpty())
+    if (scope.readableSchoolIds().isEmpty())
       return new StudentCapabilities(
           true,
           false,
@@ -164,13 +215,15 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
           !assignable.isEmpty(),
           List.of(),
           false,
+          List.of(),
           List.of());
     return tx.execute(
         scope.tenantId(),
         () -> {
-          var names = schools.names(maintainable);
-          var options = schoolOptions(maintainable, names);
-          var exportOptions = schoolOptions(exportable, schools.names(exportable));
+          var readableNames = schools.names(scope.readableSchoolIds());
+          var readableOptions = schoolOptions(scope.readableSchoolIds(), readableNames);
+          var options = schoolOptions(maintainable, readableNames);
+          var exportOptions = schoolOptions(exportable, readableNames);
           return new StudentCapabilities(
               true,
               !options.isEmpty(),
@@ -178,7 +231,8 @@ public class StudentDirectory implements StudentQueries, StudentCommands {
               !assignable.isEmpty(),
               options,
               !exportOptions.isEmpty(),
-              exportOptions);
+              exportOptions,
+              readableOptions);
         });
   }
 

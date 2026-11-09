@@ -85,6 +85,26 @@ public class DatabaseIdentity implements UserDetailsService, CurrentActor {
   }
 
   @Override
+  public SessionContext sessionContext() {
+    var value = permissions();
+    var rows =
+        jdbc.query(
+            "select t.name,a.login from identity.account a join identity.tenant t on t.id=a.tenant_id where a.id=?",
+            (r, n) -> new String[] {r.getString(1), r.getString(2)},
+            value.accountId());
+    if (rows.isEmpty()) throw new AccessDeniedException("账号或机构不可用");
+    var login = rows.getFirst()[1];
+    return new SessionContext(
+        value.accountId(),
+        value.tenantId(),
+        rows.getFirst()[0],
+        login,
+        login,
+        value.tenantAdmin(),
+        value.passwordChangeRequired());
+  }
+
+  @Override
   public Actor requireResource(String kind, boolean maintenance) {
     var value = snapshot();
     return PermissionRules.resource(

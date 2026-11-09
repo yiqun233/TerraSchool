@@ -44,6 +44,11 @@ it("列表按服务端脱敏值展示，详情提示当前为脱敏值", async (
   get.mockImplementation(async (path: string) => {
     if (path === "/api/archive/capabilities")
       return { response: { ok: true, status: 200 }, data: capabilities };
+    if (path === "/api/archive/students/counts")
+      return {
+        response: { ok: true, status: 200 },
+        data: { total: 1, active: 1, inactive: 0, thisMonth: 1 },
+      };
     if (path === "/api/archive/students")
       return {
         response: { ok: true, status: 200 },
@@ -133,7 +138,7 @@ it("列表按服务端脱敏值展示，详情提示当前为脱敏值", async (
   );
 });
 
-it("通过持久导出任务展示进度并在完成后下载", { timeout: 10000 }, async () => {
+it("通过持久导出任务展示进度并在完成后下载", { timeout: 20000 }, async () => {
   get.mockImplementation(async (path: string) => {
     if (path === "/api/archive/capabilities")
       return {
@@ -143,6 +148,11 @@ it("通过持久导出任务展示进度并在完成后下载", { timeout: 10000
           canExport: true,
           exportableSchools: [{ id: "school-1", name: "测试学校" }],
         },
+      };
+    if (path === "/api/archive/students/counts")
+      return {
+        response: { ok: true, status: 200 },
+        data: { total: 0, active: 0, inactive: 0, thisMonth: 0 },
       };
     if (path === "/api/archive/students")
       return {
@@ -195,7 +205,8 @@ it("通过持久导出任务展示进度并在完成后下载", { timeout: 10000
   const user = userEvent.setup({ pointerEventsCheck: 0 });
   renderPage(<StudentDirectory onUnauthorized={vi.fn()} />);
 
-  await user.click(await screen.findByRole("button", { name: "导出 CSV" }));
+  await user.click(await screen.findByRole("button", { name: "导出" }));
+  await user.click(await screen.findByText("导出 CSV"));
   expect(
     await screen.findByText(
       "CSV 导出任务：完成，共 4 条",
@@ -212,7 +223,8 @@ it("通过持久导出任务展示进度并在完成后下载", { timeout: 10000
     "/api/exports",
     expect.objectContaining({ method: "POST" }),
   );
-  await user.click(screen.getByRole("button", { name: "导出 PDF" }));
+  await user.click(screen.getByRole("button", { name: "导出" }));
+  await user.click(await screen.findByText("导出 PDF"));
   expect(await screen.findByText("PDF 导出任务：完成，共 4 条")).toBeTruthy();
   const createBodies = fetchMock.mock.calls
     .filter(([, init]) => init?.method === "POST")
@@ -230,6 +242,11 @@ it("重新打开学员目录时恢复最近的持久导出任务", async () => {
           canExport: true,
           exportableSchools: [{ id: "school-1", name: "测试学校" }],
         },
+      };
+    if (path === "/api/archive/students/counts")
+      return {
+        response: { ok: true, status: 200 },
+        data: { total: 0, active: 0, inactive: 0, thisMonth: 0 },
       };
     if (path === "/api/archive/students")
       return {

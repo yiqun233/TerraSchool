@@ -15,6 +15,7 @@ class WebSecurity {
           "/api/session/password",
           "/api/session/csrf",
           "/api/session/me",
+          "/api/session/context",
           "/api/session/permissions",
           "/api/session/logout");
 

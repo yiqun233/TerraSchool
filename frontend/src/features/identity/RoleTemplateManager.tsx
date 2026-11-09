@@ -41,6 +41,7 @@ const actions = [
   { value: "CUSTOMER_READ", label: "本人客户查看" },
   { value: "CUSTOMER_MAINTAIN", label: "本人客户录入" },
   { value: "CUSTOMER_PHONE_READ", label: "本人客户完整电话查看" },
+  { value: "TENANT_BRANDING_WRITE", label: "品牌设置" },
 ];
 const effects = [
   { value: "ALLOW", label: "允许" },

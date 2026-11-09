@@ -1,12 +1,11 @@
 package org.teraschool.archive.api;
 
 import java.util.List;
-import java.util.UUID;
 
 /**
- * 当前账号可用的档案能力。
+ * 学员档案能力快照。
  *
- * <p>学校列表只包含“可维护学员档案”的学校，供新建表单选择；它不等于组织维护范围。
+ * <p>{@code readableSchools} 只用于筛选选项与名称显示，不代表可修改或可导出； 前端不能用它替代服务端的数据范围校验。
  */
 public record StudentCapabilities(
     boolean canRead,
@@ -15,11 +14,13 @@ public record StudentCapabilities(
     boolean canAssign,
     List<StudentSchoolOption> maintainableSchools,
     boolean canExport,
-    List<StudentSchoolOption> exportableSchools) {
+    List<StudentSchoolOption> exportableSchools,
+    List<StudentSchoolOption> readableSchools) {
   public StudentCapabilities {
     maintainableSchools = List.copyOf(maintainableSchools);
     exportableSchools = List.copyOf(exportableSchools);
+    readableSchools = List.copyOf(readableSchools);
   }
 
-  public record StudentSchoolOption(UUID id, String name) {}
+  public record StudentSchoolOption(java.util.UUID id, String name) {}
 }

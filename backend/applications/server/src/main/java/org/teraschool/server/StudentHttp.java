@@ -33,8 +33,17 @@ class StudentHttp {
   StudentPage list(
       @RequestParam(defaultValue = "0") int page,
       @RequestParam(defaultValue = "20") int size,
-      @RequestParam(defaultValue = "") String search) {
-    return queries.list(page, size, search);
+      @RequestParam(defaultValue = "") String search,
+      @RequestParam(defaultValue = "") String status,
+      @RequestParam(required = false) java.util.UUID schoolId) {
+    return queries.list(page, size, search, status, schoolId);
+  }
+
+  @GetMapping("/api/archive/students/counts")
+  org.teraschool.archive.api.StudentCounts counts(
+      @RequestParam(defaultValue = "") String search,
+      @RequestParam(required = false) java.util.UUID schoolId) {
+    return queries.counts(search, schoolId);
   }
 
   @GetMapping("/api/archive/students/{id}")

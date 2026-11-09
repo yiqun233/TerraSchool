@@ -13,6 +13,7 @@ import {
 } from "antd";
 import { api, csrf } from "../../shared/http";
 import type { components } from "../../shared/generated/api";
+import { Page, PageHeader, PageState, Toolbar } from "../../shared/ui/Page";
 
 type MigrationReport = components["schemas"]["MigrationReport"];
 type MigrationIssue = components["schemas"]["MigrationIssue"];
@@ -226,19 +227,54 @@ export function MigrationConsole({
     }
   }
 
-  return (
-    <>
-      <Select
-        aria-label="迁移学校"
-        style={{ width: 220, marginBottom: 8 }}
-        value={current}
-        options={options.map((item) => ({
-          value: item.id!,
-          label: item.name!,
-        }))}
-        onChange={(value) => setSchoolId(value)}
-        placeholder="选择学校"
+  if (schools.isPending)
+    return (
+      <PageState
+        title="数据迁移"
+        description="正在确认当前账号可迁移的学校范围…"
+        loading
       />
+    );
+  if (schools.error)
+    return (
+      <PageState
+        title="数据迁移"
+        stateTitle="无法读取迁移学校范围"
+        stateHint={schools.error.message}
+        action={<Button onClick={() => void schools.refetch()}>重试</Button>}
+      />
+    );
+  if (options.length === 0)
+    return (
+      <PageState
+        title="数据迁移"
+        stateTitle="当前范围内没有可迁移的学校"
+        stateHint="需要学校维护范围与迁移权限；请联系机构管理员开通。"
+      />
+    );
+
+  return (
+    <Page>
+      <PageHeader
+        title="数据迁移"
+        description="旧库数据先暂存与干跑，核对差异后再确认导入。确认导入在受控样本验证完成前保持关闭，不会因页面操作绕过。"
+      />
+      <Toolbar>
+        <Select
+          aria-label="迁移学校"
+          style={{ width: 220 }}
+          value={current}
+          options={options.map((item) => ({
+            value: item.id!,
+            label: item.name!,
+          }))}
+          onChange={(value) => setSchoolId(value)}
+          placeholder="选择学校"
+        />
+        <Typography.Text type="secondary">
+          暂存与干跑可用；确认导入待受控导入验证完成后开放
+        </Typography.Text>
+      </Toolbar>
       {!canManage ? (
         <Alert
           title="当前账号只能查看"
@@ -459,6 +495,6 @@ export function MigrationConsole({
           />
         </Card>
       ) : null}
-    </>
+    </Page>
   );
 }

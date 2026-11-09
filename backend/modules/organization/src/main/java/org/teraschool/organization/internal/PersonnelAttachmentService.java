@@ -20,7 +20,7 @@ class PersonnelAttachmentService {
   private final TenantTransactions tx;
   private final DSLContext sql;
   private final SchoolWriteGuard guard;
-  private final PrivateObjectStorage storage;
+  private final org.teraschool.platform.api.ObjectStorage storage;
   private final JsonMapper json = JsonMapper.builder().build();
 
   PersonnelAttachmentService(
@@ -28,7 +28,7 @@ class PersonnelAttachmentService {
       TenantTransactions tx,
       DSLContext sql,
       SchoolWriteGuard guard,
-      PrivateObjectStorage storage) {
+      org.teraschool.platform.api.ObjectStorage storage) {
     this.actors = actors;
     this.tx = tx;
     this.sql = sql;
@@ -198,7 +198,7 @@ class PersonnelAttachmentService {
                       employee)
                   .get(0, Long.class)
               >= 100) throw new OrganizationConflict("ATTACHMENT_LIMIT_REACHED");
-          storage.put(key, input.content());
+          storage.put(key, input.content(), "application/octet-stream");
           var row =
               privateSql()
                   .fetchOne(

@@ -11,10 +11,17 @@ import {
   Space,
   Switch,
   Table,
-  Typography,
 } from "antd";
 import { api, csrf } from "../../shared/http";
 import type { components } from "../../shared/generated/api";
+import {
+  Page,
+  PageHeader,
+  PageState,
+  Panel,
+  StatusTag,
+  TableFooter,
+} from "../../shared/ui/Page";
 import { ResourceDetails } from "./ResourceDetails";
 import { PersonnelAttachments } from "./PersonnelAttachments";
 type Kind = "EMPLOYEE" | "TEACHER" | "ROOM";
@@ -72,105 +79,155 @@ export function ResourceWorkspace({ kind }: { kind: Kind }) {
       setSelected(undefined);
     }
   }
-  return (
-    <section>
-      <Typography.Title level={3}>{labels[kind]}管理</Typography.Title>
-      <Space>
-        <Button
-          type="primary"
-          disabled={!writable.length || !!capability.error}
-          onClick={() => {
-            setSelected(undefined);
-            setOpen(true);
-          }}
-        >
-          新增{labels[kind]}
-        </Button>
-        <Button onClick={() => void list.refetch()} disabled={!capability.data}>
-          刷新
-        </Button>
-      </Space>
-      {capability.error ? (
-        <Alert type="error" title={capability.error.message} />
-      ) : list.error ? (
-        <Alert type="error" title={list.error.message} />
-      ) : null}
-      <Table<Resource>
-        rowKey="id"
-        loading={capability.isPending || list.isFetching}
-        dataSource={
-          capability.error || list.error ? [] : (list.data?.items ?? [])
-        }
-        columns={[
-          { title: "名称", dataIndex: "name" },
-          { title: "学校", dataIndex: "schoolName" },
-          ...(kind === "ROOM"
-            ? [
-                {
-                  title: "容量",
-                  dataIndex: "capacity",
-                  render: (value: number | null) => value ?? "未设置",
-                },
-              ]
-            : []),
-          {
-            title: "状态",
-            dataIndex: "active",
-            render: (active: boolean) => (active ? "可用" : "停用"),
-          },
-          {
-            title: "操作",
-            render: (_: unknown, row: Resource) => (
-              <Space wrap>
-                <Button
-                  disabled={!row.schoolId || !writable.includes(row.schoolId)}
-                  onClick={() => {
-                    setSelected(row);
-                    setOpen(true);
-                  }}
-                >
-                  编辑
-                </Button>
-                {kind === "TEACHER" ? (
-                  <ResourceDetails
-                    row={row}
-                    mode="qualification"
-                    onSaved={() => void list.refetch()}
-                  />
-                ) : null}
-                {kind === "EMPLOYEE" ? (
-                  <>
-                    <ResourceDetails
-                      row={row}
-                      mode="personnel"
-                      onSaved={() => void list.refetch()}
-                    />
-                    <ResourceDetails
-                      row={row}
-                      mode="account-link"
-                      onSaved={() => void list.refetch()}
-                    />
-                    <ResourceDetails
-                      row={row}
-                      mode="external"
-                      onSaved={() => void list.refetch()}
-                    />
-                    <PersonnelAttachments row={row} />
-                  </>
-                ) : null}
-              </Space>
-            ),
-          },
-        ]}
-        pagination={{
-          current: page + 1,
-          pageSize: 20,
-          total: list.error ? 0 : (list.data?.total ?? 0),
-          showSizeChanger: false,
-          onChange: (value) => setPage(value - 1),
-        }}
-        locale={{ emptyText: "当前范围内暂无资料" }}
+
+  if (capability.isPending)
+    return (
+      <PageState
+        title={labels[kind]}
+        description={`正在确认当前账号的${labels[kind]}权限…`}
+        loading
       />
+    );
+  if (capability.error)
+    return (
+      <PageState
+        title={labels[kind]}
+        stateTitle={`无法读取${labels[kind]}权限`}
+        stateHint={capability.error.message}
+        action={<Button onClick={() => void capability.refetch()}>重试</Button>}
+      />
+    );
+  if (list.error)
+    return (
+      <PageState
+        title={labels[kind]}
+        stateTitle={`${labels[kind]}列表加载失败`}
+        stateHint={list.error.message}
+        action={<Button onClick={() => void list.refetch()}>重试</Button>}
+      />
+    );
+
+  return (
+    <Page>
+      <PageHeader
+        title={labels[kind]}
+        description={
+          kind === "EMPLOYEE"
+            ? "员工按学校维护；可绑定登录账号、维护资质附件与外部资料。停用只影响后续选择，历史业务保留。"
+            : kind === "TEACHER"
+              ? "教师按学校维护；可关联员工并维护授课资质。停用后不再参与新排课。"
+              : "教室按学校维护；容量参与排课校验，未设置容量视为不限。"
+        }
+        actions={
+          <>
+            <Button
+              type="primary"
+              disabled={!writable.length || !!capability.error}
+              onClick={() => {
+                setSelected(undefined);
+                setOpen(true);
+              }}
+            >
+              新增{labels[kind]}
+            </Button>
+            <Button
+              onClick={() => void list.refetch()}
+              disabled={!capability.data}
+            >
+              刷新
+            </Button>
+          </>
+        }
+      />
+      <Panel
+        ariaLabel={`${labels[kind]}列表`}
+        footer={
+          <TableFooter
+            total={list.data?.total ?? 0}
+            page={page}
+            pageSize={20}
+            onChange={setPage}
+            unit={`名${labels[kind]}`}
+            noun={labels[kind]}
+          />
+        }
+      >
+        <Table<Resource>
+          rowKey="id"
+          loading={capability.isPending || list.isFetching}
+          dataSource={
+            capability.error || list.error ? [] : (list.data?.items ?? [])
+          }
+          columns={[
+            { title: "名称", dataIndex: "name" },
+            { title: "学校", dataIndex: "schoolName" },
+            ...(kind === "ROOM"
+              ? [
+                  {
+                    title: "容量",
+                    dataIndex: "capacity",
+                    render: (value: number | null) => value ?? "未设置",
+                  },
+                ]
+              : []),
+            {
+              title: "状态",
+              dataIndex: "active",
+              render: (active: boolean) =>
+                active ? (
+                  <StatusTag tone="ok">可用</StatusTag>
+                ) : (
+                  <StatusTag tone="neutral">停用</StatusTag>
+                ),
+            },
+            {
+              title: "操作",
+              render: (_: unknown, row: Resource) => (
+                <Space wrap>
+                  <Button
+                    disabled={!row.schoolId || !writable.includes(row.schoolId)}
+                    onClick={() => {
+                      setSelected(row);
+                      setOpen(true);
+                    }}
+                  >
+                    编辑
+                  </Button>
+                  {kind === "TEACHER" ? (
+                    <ResourceDetails
+                      row={row}
+                      mode="qualification"
+                      onSaved={() => void list.refetch()}
+                    />
+                  ) : null}
+                  {kind === "EMPLOYEE" ? (
+                    <>
+                      <ResourceDetails
+                        row={row}
+                        mode="personnel"
+                        onSaved={() => void list.refetch()}
+                      />
+                      <ResourceDetails
+                        row={row}
+                        mode="account-link"
+                        onSaved={() => void list.refetch()}
+                      />
+                      <ResourceDetails
+                        row={row}
+                        mode="external"
+                        onSaved={() => void list.refetch()}
+                      />
+                      <PersonnelAttachments row={row} />
+                    </>
+                  ) : null}
+                </Space>
+              ),
+            },
+          ]}
+          pagination={false}
+          locale={{ emptyText: "当前范围内暂无资料" }}
+        />
+      </Panel>
       <Modal
         title={`${selected ? "编辑" : "新增"}${labels[kind]}`}
         open={open}
@@ -197,7 +254,7 @@ export function ResourceWorkspace({ kind }: { kind: Kind }) {
           />
         ) : null}
       </Modal>
-    </section>
+    </Page>
   );
 }
 

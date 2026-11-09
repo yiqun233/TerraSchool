@@ -5,17 +5,29 @@ import {
   Button,
   Descriptions,
   Drawer,
+  Dropdown,
   Form,
   Input,
   Modal,
   Select,
   Space,
   Table,
+  Tabs,
   Tag,
   Typography,
 } from "antd";
 import { api, csrf } from "../../shared/http";
 import type { components } from "../../shared/generated/api";
+import {
+  LoadingBlock,
+  Page,
+  PageHeader,
+  Panel,
+  StatStrip,
+  StateBlock,
+  StatusTag,
+  TableFooter,
+} from "../../shared/ui/Page";
 
 type StudentProfile = components["schemas"]["StudentProfile"];
 type StudentSummary = components["schemas"]["StudentSummary"];
@@ -73,6 +85,8 @@ export function StudentDirectory({
   // 导出按学校范围进行：取当前账号第一所可读学校。
   const [search, setSearch] = useState("");
   const [keyword, setKeyword] = useState("");
+  const [status, setStatus] = useState("");
+  const [schoolId, setSchoolId] = useState<string>();
   const [detailId, setDetailId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
@@ -95,11 +109,19 @@ export function StudentDirectory({
   // 导出按学校范围进行：取当前账号第一所可读学校。
   const exportSchool = capabilities.data?.exportableSchools?.[0]?.id;
   const students = useQuery({
-    queryKey: ["archive-students", page, keyword],
+    queryKey: ["archive-students", page, keyword, status, schoolId],
     enabled: !!capabilities.data?.canRead,
     queryFn: async ({ signal }) => {
       const { data, response } = await api.GET("/api/archive/students", {
-        params: { query: { page, size: 20, search: keyword } },
+        params: {
+          query: {
+            page,
+            size: 20,
+            search: keyword,
+            status,
+            schoolId,
+          },
+        },
         signal,
       });
       if (response.status === 401) {
@@ -111,6 +133,24 @@ export function StudentDirectory({
       return data;
     },
   });
+  // 计数与列表使用同一学校范围和检索词，但不按状态过滤，供标签页显示。
+  const counts = useQuery({
+    queryKey: ["archive-student-counts", keyword, schoolId],
+    enabled: !!capabilities.data?.canRead,
+    queryFn: async ({ signal }) => {
+      const { data, response } = await api.GET("/api/archive/students/counts", {
+        params: { query: { search: keyword, schoolId } },
+        signal,
+      });
+      if (response.status === 401) {
+        onUnauthorized();
+        throw new Error("登录已失效，请重新登录");
+      }
+      if (!response.ok || !data) throw new Error("无法读取学员计数");
+      return data;
+    },
+  });
+  const readableSchools = capabilities.data?.readableSchools ?? [];
 
   useEffect(() => {
     if (!exportSchool || !capabilities.data?.canExport) {
@@ -252,60 +292,118 @@ export function StudentDirectory({
     }
   }
 
+  const filtered = !!keyword || !!status || !!schoolId;
+  const summary = counts.data;
+  const totalForPage = students.data?.total ?? 0;
+
   return (
-    <>
-      <Space className="toolbar">
-        {capabilities.data.canMaintain ? (
-          <Button
-            onClick={() => {
-              setError("");
-              setHint([]);
-              setCreating(true);
-            }}
-          >
-            新增学员
-          </Button>
-        ) : null}
-        <Input.Search
-          placeholder="按姓名、学员号或有权限的电话检索"
-          allowClear
-          value={search}
-          style={{ width: 260 }}
-          onChange={(event) => setSearch(event.target.value)}
-          onSearch={(value) => {
-            setPage(0);
-            setKeyword(value.trim());
-          }}
+    <Page>
+      <PageHeader
+        title="学员档案"
+        description={
+          summary
+            ? `共 ${summary.total} 名学员，本月新增 ${summary.thisMonth}。敏感字段按当前权限脱敏显示。`
+            : "按姓名、学员号或有权限的电话检索；敏感字段按当前权限脱敏显示。"
+        }
+        actions={
+          <>
+            {capabilities.data.canMaintain ? (
+              <Button
+                type="primary"
+                onClick={() => {
+                  setError("");
+                  setHint([]);
+                  setCreating(true);
+                }}
+              >
+                新增学员
+              </Button>
+            ) : null}
+            <Dropdown
+              trigger={["click"]}
+              disabled={
+                !capabilities.data.canExport || !exportSchool || exporting
+              }
+              menu={{
+                items: [
+                  { key: "CSV", label: "导出 CSV" },
+                  { key: "XLSX", label: "导出 XLSX" },
+                  { key: "PDF", label: "导出 PDF" },
+                ],
+                onClick: ({ key }) => {
+                  if (key === "CSV" || key === "XLSX" || key === "PDF")
+                    void exportStudents(key);
+                },
+              }}
+            >
+              <Button loading={exporting} aria-label="导出">
+                导出
+              </Button>
+            </Dropdown>
+            <Button
+              onClick={() => {
+                void students.refetch();
+                void counts.refetch();
+              }}
+              loading={students.isFetching}
+            >
+              刷新
+            </Button>
+          </>
+        }
+      />
+
+      <StatStrip
+        items={[
+          {
+            label: "学员总数",
+            value: summary?.total ?? "—",
+            detail: "未合并档案",
+          },
+          {
+            label: "在读",
+            value: summary?.active ?? "—",
+            detail: "状态为在读",
+          },
+          {
+            label: "停用",
+            value: summary?.inactive ?? "—",
+            detail: "档案保留，可恢复",
+          },
+          {
+            label: "本月新增",
+            value: summary?.thisMonth ?? "—",
+            detail: "按建档时间",
+          },
+        ]}
+      />
+
+      {error ? <Alert title={error} type="error" showIcon /> : null}
+      {hint.length ? (
+        <Alert
+          type="warning"
+          showIcon
+          title="发现可能重复的档案，请人工核验后再决定是否继续登记"
+          description={
+            <ul>
+              {hint.map((item) => (
+                <li key={item.studentId}>
+                  {item.studentNo} {item.name}（
+                  {item.reason === "SAME_NAME_AND_BIRTHDAY"
+                    ? "姓名与出生日期相同"
+                    : "姓名与电话相同"}
+                  ）
+                </li>
+              ))}
+            </ul>
+          }
         />
-        <Button
-          onClick={() => void students.refetch()}
-          loading={students.isFetching}
-        >
-          刷新
-        </Button>
-        <Button
-          onClick={() => void exportStudents("CSV")}
-          loading={exporting}
-          disabled={!capabilities.data.canExport || !exportSchool || exporting}
-        >
-          导出 CSV
-        </Button>
-        <Button
-          onClick={() => void exportStudents("XLSX")}
-          loading={exporting}
-          disabled={!capabilities.data.canExport || !exportSchool || exporting}
-        >
-          导出 XLSX
-        </Button>
-        <Button
-          onClick={() => void exportStudents("PDF")}
-          loading={exporting}
-          disabled={!capabilities.data.canExport || !exportSchool || exporting}
-        >
-          导出 PDF
-        </Button>
-        {exportTask ? (
-          <Space>
+      ) : null}
+      {exportTask ? (
+        <Panel>
+          <div
+            style={{ padding: 12, display: "flex", gap: 8, flexWrap: "wrap" }}
+          >
             <Typography.Text role="status">
               {exportTask.format} 导出任务：
               {exportTask.status === "PENDING"
@@ -322,20 +420,29 @@ export function StudentDirectory({
             </Typography.Text>
             {exportTask.status === "PENDING" ||
             exportTask.status === "RUNNING" ? (
-              <Button onClick={() => void refreshExportTask()}>刷新进度</Button>
+              <Button size="small" onClick={() => void refreshExportTask()}>
+                刷新进度
+              </Button>
             ) : null}
             {exportTask.status === "PENDING" ? (
-              <Button onClick={() => void updateExportTask("cancel")}>
+              <Button
+                size="small"
+                onClick={() => void updateExportTask("cancel")}
+              >
                 取消
               </Button>
             ) : null}
             {exportTask.status === "FAILED" ? (
-              <Button onClick={() => void updateExportTask("retry")}>
+              <Button
+                size="small"
+                onClick={() => void updateExportTask("retry")}
+              >
                 重试
               </Button>
             ) : null}
             {exportTask.status === "COMPLETED" ? (
               <Button
+                size="small"
                 onClick={() =>
                   void (async () => {
                     const response = await fetch(
@@ -358,77 +465,216 @@ export function StudentDirectory({
                 下载
               </Button>
             ) : null}
-          </Space>
-        ) : null}
-        <Typography.Text type="secondary">
-          敏感字段按当前权限脱敏显示；导出同样按字段权限脱敏
-        </Typography.Text>
-      </Space>
-      {error ? <Alert title={error} type="error" showIcon /> : null}
-      {hint.length ? (
-        <Alert
-          type="warning"
-          showIcon
-          title="发现可能重复的档案，请人工核验后再决定是否继续登记"
-          description={
-            <ul>
-              {hint.map((item) => (
-                <li key={item.studentId}>
-                  {item.studentNo} {item.name}（
-                  {item.reason === "SAME_NAME_AND_BIRTHDAY"
-                    ? "姓名与出生日期相同"
-                    : "姓名与电话相同"}
-                  ）
-                </li>
-              ))}
-            </ul>
-          }
-        />
+          </div>
+        </Panel>
       ) : null}
-      <Table
-        rowKey="id"
-        loading={students.isPending}
-        dataSource={students.data?.items ?? []}
-        onRow={(row) => ({
-          onClick: () => setDetailId(row.id ?? null),
-          style: { cursor: "pointer" },
-        })}
-        columns={[
-          { title: "学员号", dataIndex: "studentNo" },
-          { title: "姓名", dataIndex: "name" },
-          {
-            title: "性别",
-            dataIndex: "sex",
-            render: (sex: string) => SEX_LABEL[sex] ?? sex,
-          },
-          { title: "电话", dataIndex: "phone" },
-          { title: "归属学校", dataIndex: "schoolName" },
-          {
-            title: "负责人",
-            dataIndex: "ownerAccountId",
-            render: (owner: string | null) => (owner ? "已分派" : "未分派"),
-          },
-          {
-            title: "状态",
-            dataIndex: "status",
-            render: (status: string) =>
-              status === "ACTIVE" ? (
-                <Tag color="green">在读</Tag>
-              ) : (
-                <Tag>停用</Tag>
-              ),
-          },
-          { title: "联系人", dataIndex: "contactCount" },
-        ]}
-        locale={{ emptyText: "当前范围内暂无学员档案" }}
-        pagination={{
-          current: page + 1,
-          pageSize: 20,
-          total: students.data?.total ?? 0,
-          showSizeChanger: false,
-          onChange: (next) => setPage(next - 1),
-        }}
-      />
+
+      <Panel
+        ariaLabel="学员列表"
+        head={
+          <Tabs
+            activeKey={status || "ALL"}
+            onChange={(key) => {
+              setStatus(key === "ALL" ? "" : key);
+              setPage(0);
+            }}
+            items={[
+              {
+                key: "ALL",
+                label: `全部${summary ? ` ${summary.total}` : ""}`,
+              },
+              {
+                key: "ACTIVE",
+                label: `在读${summary ? ` ${summary.active}` : ""}`,
+              },
+              {
+                key: "INACTIVE",
+                label: `停用${summary ? ` ${summary.inactive}` : ""}`,
+              },
+            ]}
+          />
+        }
+        headEnd={
+          <Space wrap>
+            <Input.Search
+              placeholder="按姓名、学员号或有权限的电话检索"
+              allowClear
+              value={search}
+              style={{ width: 240 }}
+              onChange={(event) => setSearch(event.target.value)}
+              onSearch={(value) => {
+                setPage(0);
+                setKeyword(value.trim());
+              }}
+            />
+            <Select
+              aria-label="归属学校"
+              allowClear
+              placeholder="全部学校"
+              style={{ width: 160 }}
+              value={schoolId}
+              options={readableSchools.map((school) => ({
+                value: school.id,
+                label: school.name,
+              }))}
+              onChange={(value) => {
+                setSchoolId(value);
+                setPage(0);
+              }}
+            />
+            <Button
+              onClick={() => {
+                setSearch("");
+                setKeyword("");
+                setStatus("");
+                setSchoolId(undefined);
+                setPage(0);
+              }}
+            >
+              重置
+            </Button>
+          </Space>
+        }
+        footer={
+          <TableFooter
+            total={totalForPage}
+            page={page}
+            pageSize={20}
+            onChange={setPage}
+            unit="名学员"
+            noun="学员"
+          />
+        }
+      >
+        {students.isPending ? (
+          <LoadingBlock>正在读取学员档案…</LoadingBlock>
+        ) : students.error ? (
+          <StateBlock
+            title="学员档案加载失败"
+            hint={students.error.message}
+            action={
+              <Button onClick={() => void students.refetch()}>重试</Button>
+            }
+          />
+        ) : (students.data?.items ?? []).length === 0 ? (
+          <StateBlock
+            title={filtered ? "没有符合条件的学员" : "还没有学员档案"}
+            hint={
+              filtered
+                ? "试试清空检索词、学校或状态筛选。"
+                : "新建第一位学员后，这里会显示档案与在读状态。"
+            }
+            action={
+              filtered ? (
+                <Button
+                  onClick={() => {
+                    setSearch("");
+                    setKeyword("");
+                    setStatus("");
+                    setSchoolId(undefined);
+                    setPage(0);
+                  }}
+                >
+                  清空筛选
+                </Button>
+              ) : capabilities.data.canMaintain ? (
+                <Button
+                  type="primary"
+                  onClick={() => {
+                    setError("");
+                    setHint([]);
+                    setCreating(true);
+                  }}
+                >
+                  新增学员
+                </Button>
+              ) : undefined
+            }
+          />
+        ) : (
+          <Table<StudentSummary>
+            rowKey="id"
+            dataSource={students.data?.items ?? []}
+            onRow={(row) => ({
+              onClick: () => setDetailId(row.id ?? null),
+              tabIndex: 0,
+              className: "ts-row-clickable",
+              "aria-label": `打开${row.name ?? "学员"}档案详情`,
+              onKeyDown: (event) => {
+                // 只有行本身获得焦点时才响应，避免行内按钮的回车触发两次。
+                if (event.target !== event.currentTarget) return;
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  setDetailId(row.id ?? null);
+                }
+              },
+            })}
+            columns={[
+              {
+                title: "学员",
+                dataIndex: "name",
+                render: (name: string, row) => (
+                  <div>
+                    <div>{name}</div>
+                    <div
+                      style={{
+                        color: "var(--ts-ink-4)",
+                        fontSize: 11.5,
+                        fontVariantNumeric: "tabular-nums",
+                      }}
+                    >
+                      {row.studentNo}
+                    </div>
+                  </div>
+                ),
+              },
+              {
+                title: "性别",
+                dataIndex: "sex",
+                width: 70,
+                render: (sex: string) => SEX_LABEL[sex] ?? sex,
+              },
+              { title: "电话", dataIndex: "phone" },
+              { title: "归属学校", dataIndex: "schoolName" },
+              {
+                title: "负责人",
+                dataIndex: "ownerAccountId",
+                render: (owner: string | null) => (owner ? "已分派" : "未分派"),
+              },
+              { title: "联系人", dataIndex: "contactCount", width: 80 },
+              {
+                title: "状态",
+                dataIndex: "status",
+                width: 100,
+                render: (value: string) =>
+                  value === "ACTIVE" ? (
+                    <StatusTag tone="ok">在读</StatusTag>
+                  ) : (
+                    <StatusTag tone="neutral">停用</StatusTag>
+                  ),
+              },
+              {
+                title: "操作",
+                key: "actions",
+                width: 80,
+                render: (_: unknown, row) => (
+                  <Button
+                    type="link"
+                    size="small"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setDetailId(row.id ?? null);
+                    }}
+                  >
+                    详情
+                  </Button>
+                ),
+              },
+            ]}
+            pagination={false}
+          />
+        )}
+      </Panel>
       {creating ? (
         <StudentCreator
           schools={capabilities.data.maintainableSchools ?? []}
@@ -439,7 +685,10 @@ export function StudentDirectory({
             setPage(0);
             setKeyword("");
             setSearch("");
+            setStatus("");
+            setSchoolId(undefined);
             void students.refetch();
+            void counts.refetch();
             if (profile?.id) setDetailId(profile.id);
           }}
         />
@@ -451,11 +700,14 @@ export function StudentDirectory({
           canAssign={!!capabilities.data.canAssign}
           onMerged={setDetailId}
           onClose={() => setDetailId(null)}
-          onSaved={() => void students.refetch()}
+          onSaved={() => {
+            void students.refetch();
+            void counts.refetch();
+          }}
           onUnauthorized={onUnauthorized}
         />
       ) : null}
-    </>
+    </Page>
   );
 }
 

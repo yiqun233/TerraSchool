@@ -12,11 +12,18 @@ import org.springframework.web.bind.annotation.*;
 class PlatformHttp {
   private final PlatformIdentity identity;
   private final TenantProvisioning provisioning;
+  private final BrandingService branding;
 
-  PlatformHttp(PlatformIdentity identity, TenantProvisioning provisioning) {
+  PlatformHttp(
+      PlatformIdentity identity, TenantProvisioning provisioning, BrandingService branding) {
     this.identity = identity;
     this.provisioning = provisioning;
+    this.branding = branding;
   }
+
+  record BrandingUpdate(String displayName, String seed, Integer expectedVersion) {}
+
+  record RollbackBranding(Integer version) {}
 
   @GetMapping("/api/platform/session/csrf")
   Map<String, String> csrf(CsrfToken token) {
@@ -95,11 +102,33 @@ class PlatformHttp {
   ResponseEntity<?> tenants(
       @RequestParam(defaultValue = "0") int page,
       @RequestParam(defaultValue = "20") int size,
+      @RequestParam(defaultValue = "") String status,
+      @RequestParam(defaultValue = "") String keyword,
       org.springframework.security.core.Authentication authentication) {
     var operator = operator(authentication);
     if (page < 0 || size < 1 || size > 100) return ResponseEntity.badRequest().build();
     if (!operator.actions().contains("TENANT_READ")) return ResponseEntity.status(403).build();
-    return ResponseEntity.ok(Map.of("items", provisioning.tenants(page, size), "page", page));
+    try {
+      var counts = provisioning.counts();
+      return ResponseEntity.ok(
+          Map.of(
+              "items",
+              provisioning.tenants(page, size, status, keyword),
+              "page",
+              page,
+              "size",
+              size,
+              "total",
+              provisioning.countTenants(status, keyword),
+              "summary",
+              Map.of(
+                  "total", counts.total(),
+                  "active", counts.active(),
+                  "suspended", counts.suspended(),
+                  "thisMonth", counts.thisMonth())));
+    } catch (IllegalArgumentException invalid) {
+      return ResponseEntity.badRequest().build();
+    }
   }
 
   /** 停用租户：只影响登录与访问，数据保留；可恢复。 */
@@ -182,6 +211,72 @@ class PlatformHttp {
   }
 
   record ResetPassword(String password) {}
+
+  /** 平台查看租户品牌：只读呈现信息，不读业务数据。 */
+  @GetMapping("/api/platform/tenants/{id}/branding")
+  ResponseEntity<?> tenantBranding(
+      @PathVariable UUID id, org.springframework.security.core.Authentication authentication) {
+    var operator = operator(authentication);
+    if (!operator.actions().contains("TENANT_READ")) return ResponseEntity.status(403).build();
+    if (provisioning.tenant(id).isEmpty()) return ResponseEntity.status(404).build();
+    return ResponseEntity.ok(
+        branding.platformTenant(id, operator.actions().contains("TENANT_BRANDING_WRITE")));
+  }
+
+  /** 平台查看最近 20 个品牌版本；回滚入口据此选择目标版本。 */
+  @GetMapping("/api/platform/tenants/{id}/branding/history")
+  ResponseEntity<?> tenantBrandingHistory(
+      @PathVariable UUID id, org.springframework.security.core.Authentication authentication) {
+    var operator = operator(authentication);
+    if (!operator.actions().contains("TENANT_READ")) return ResponseEntity.status(403).build();
+    if (provisioning.tenant(id).isEmpty()) return ResponseEntity.status(404).build();
+    return ResponseEntity.ok(branding.historyPlatform(id));
+  }
+
+  /** 平台代改品牌：写平台审计，租户侧立即生效。 */
+  @PutMapping(
+      value = "/api/platform/tenants/{id}/branding",
+      consumes = MediaType.APPLICATION_JSON_VALUE)
+  ResponseEntity<?> updateTenantBranding(
+      @PathVariable UUID id,
+      @RequestBody BrandingUpdate body,
+      org.springframework.security.core.Authentication authentication,
+      HttpServletResponse response) {
+    var operator = operator(authentication);
+    if (!operator.actions().contains("TENANT_BRANDING_WRITE"))
+      return ResponseEntity.status(403).build();
+    if (provisioning.tenant(id).isEmpty()) return problem(response, 404, "TENANT_NOT_FOUND");
+    try {
+      return ResponseEntity.ok(
+          branding.updatePlatform(
+              id,
+              operator.id(),
+              new BrandingService.Update(body.displayName(), body.seed(), body.expectedVersion())));
+    } catch (BrandingService.VersionConflict conflict) {
+      return problem(response, 409, "BRANDING_VERSION_CONFLICT");
+    } catch (BrandingService.InvalidBranding invalid) {
+      return problem(response, 400, "INVALID_BRANDING", invalid.getMessage());
+    }
+  }
+
+  /** 平台按历史版本回滚：复制成新版本，不改写旧版本。 */
+  @PostMapping("/api/platform/tenants/{id}/branding/rollback")
+  ResponseEntity<?> rollbackTenantBranding(
+      @PathVariable UUID id,
+      @RequestBody RollbackBranding body,
+      org.springframework.security.core.Authentication authentication,
+      HttpServletResponse response) {
+    var operator = operator(authentication);
+    if (!operator.actions().contains("TENANT_BRANDING_WRITE"))
+      return ResponseEntity.status(403).build();
+    if (provisioning.tenant(id).isEmpty()) return problem(response, 404, "TENANT_NOT_FOUND");
+    if (body == null || body.version() == null) return problem(response, 400, "INVALID_VERSION");
+    try {
+      return ResponseEntity.ok(branding.rollbackPlatform(id, operator.id(), body.version()));
+    } catch (BrandingService.InvalidBranding invalid) {
+      return problem(response, 400, "INVALID_BRANDING", invalid.getMessage());
+    }
+  }
 
   private static String randomPassword() {
     var alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";

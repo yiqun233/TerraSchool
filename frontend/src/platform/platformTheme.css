@@ -1,0 +1,15 @@
+/*
+ * 平台端固定的品牌令牌。
+ *
+ * 只在这里写平台品牌色；页面样式一律引用 --ts-brand*，不得再出现十六进制。
+ * 平台不读取租户品牌，也不把租户主题代码打进本入口。
+ */
+:root {
+  --ts-brand: #254c78;
+  --ts-brand-hover: #1b3859;
+  --ts-brand-active: #142941;
+  --ts-brand-soft: #eff4fa;
+  --ts-brand-line: #d0dff1;
+  --ts-brand-link: #254c78;
+  --ts-on-brand: #ffffff;
+}

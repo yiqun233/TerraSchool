@@ -11,11 +11,17 @@ import {
   Select,
   Space,
   Table,
-  Tag,
   Typography,
 } from "antd";
 import { api, csrf } from "../../shared/http";
 import type { components } from "../../shared/generated/api";
+import {
+  Page,
+  PageHeader,
+  PageState,
+  StatusTag,
+  Toolbar,
+} from "../../shared/ui/Page";
 
 type ApprovalRequestView = components["schemas"]["ApprovalRequestView"];
 type ApprovalPolicyView = components["schemas"]["ApprovalPolicyView"];
@@ -178,17 +184,63 @@ export function ApprovalInbox({
   }
 
   if (capabilities.error)
-    return <Alert title={capabilities.error.message} type="error" />;
-  if (capabilities.isPending) return <p role="status">正在读取审批权限…</p>;
+    return (
+      <PageState
+        title="审批"
+        description="正在确认当前账号的审批权限。"
+        stateTitle="无法读取审批权限"
+        stateHint={capabilities.error.message}
+        action={
+          <Button onClick={() => void capabilities.refetch()}>重试</Button>
+        }
+      />
+    );
+  if (capabilities.isPending)
+    return (
+      <PageState
+        title="审批"
+        description="正在确认当前账号的审批权限。"
+        loading
+      />
+    );
   if (!capabilities.data?.canRead)
-    return <Alert title="账号当前无审批读取权限" type="error" />;
+    return (
+      <PageState
+        title="审批"
+        stateTitle="没有审批读取权限"
+        stateHint="需要 APPROVAL_READ 权限；请联系机构管理员在“账号与权限”中开通。"
+      />
+    );
   const schools = capabilities.data.schools ?? [];
   if (schools.length === 0)
-    return <Alert title="当前范围内没有可查看的学校" type="warning" />;
+    return (
+      <PageState
+        title="审批"
+        stateTitle="当前范围内没有可查看的学校"
+        stateHint="请先建校并给账号分配学校范围，审批策略与记录才会可用。"
+      />
+    );
 
   return (
-    <>
-      <Space className="toolbar" wrap>
+    <Page>
+      <PageHeader
+        title="审批"
+        description="减免、延期、退课与现金退款按学校策略审批。金额低于免批额度时无需审批；策略变更保留版本与操作记录。"
+        actions={
+          <>
+            <Button type="primary" onClick={() => setRequesting(true)}>
+              申请审批
+            </Button>
+            <Button
+              onClick={() => void requests.refetch()}
+              loading={requests.isFetching}
+            >
+              刷新待办
+            </Button>
+          </>
+        }
+      />
+      <Toolbar>
         <Select
           aria-label="归属学校"
           style={{ width: 200 }}
@@ -199,17 +251,10 @@ export function ApprovalInbox({
           }))}
           onChange={(value) => setSchoolId(value)}
         />
-        <Button
-          onClick={() => void requests.refetch()}
-          loading={requests.isFetching}
-        >
-          刷新待办
-        </Button>
-        <Button onClick={() => setRequesting(true)}>申请审批</Button>
         <Typography.Text type="secondary">
           金额低于免批额度时无需审批
         </Typography.Text>
-      </Space>
+      </Toolbar>
       {error ? <Alert title={error} type="error" showIcon /> : null}
       <Card
         title="审批策略"
@@ -276,7 +321,11 @@ export function ApprovalInbox({
               title: "状态",
               dataIndex: "active",
               render: (active: boolean) =>
-                active ? <Tag color="green">生效</Tag> : <Tag>停用</Tag>,
+                active ? (
+                  <StatusTag tone="ok">生效</StatusTag>
+                ) : (
+                  <StatusTag tone="neutral">停用</StatusTag>
+                ),
             },
             {
               title: "操作",
@@ -316,7 +365,19 @@ export function ApprovalInbox({
               title: "状态",
               dataIndex: "status",
               render: (status: string) => (
-                <Tag>{STATUS_LABEL[status] ?? status}</Tag>
+                <StatusTag
+                  tone={
+                    status === "PENDING"
+                      ? "info"
+                      : status === "APPROVED"
+                        ? "ok"
+                        : status === "REJECTED"
+                          ? "danger"
+                          : "neutral"
+                  }
+                >
+                  {STATUS_LABEL[status] ?? status}
+                </StatusTag>
               ),
             },
             {
@@ -399,7 +460,7 @@ export function ApprovalInbox({
           此操作会关闭待审申请并保留审批人和原因记录；已审批单不能执行此操作。
         </Typography.Paragraph>
       </Modal>
-    </>
+    </Page>
   );
 }
 

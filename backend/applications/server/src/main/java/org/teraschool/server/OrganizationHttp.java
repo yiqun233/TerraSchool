@@ -36,6 +36,20 @@ class OrganizationHttp {
     return actors.requireOrganizationReader();
   }
 
+  @GetMapping("/api/session/context")
+  SessionContext context() {
+    var base = actors.sessionContext();
+    var employeeName = queries.employeeDisplayName(base.accountId());
+    return new SessionContext(
+        base.accountId(),
+        base.tenantId(),
+        base.tenantName(),
+        base.login(),
+        employeeName == null ? base.displayName() : employeeName,
+        base.tenantAdmin(),
+        base.passwordChangeRequired());
+  }
+
   @GetMapping("/api/session/permissions")
   CurrentPermissions permissions() {
     return actors.permissions();

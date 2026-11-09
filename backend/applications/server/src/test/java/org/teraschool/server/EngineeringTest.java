@@ -37,6 +37,7 @@ class EngineeringTest {
   @Autowired OrganizationQueries queries;
   @Autowired TenantTransactions tx;
   @Autowired DSLContext sql;
+  @Autowired BrandingService branding;
 
   @Autowired
   @Qualifier("schedulerDataSource")
@@ -200,6 +201,77 @@ class EngineeringTest {
         .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
     actor();
     assertThatThrownBy(() -> queries.list(0, 101)).isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
+  void brandingDefaultsDerivesPersistsAndIsTenantIsolated() throws Exception {
+    update(
+        "insert into identity.account_permission(account_id,tenant_id,action,effect)"
+            + " values (?,?,'TENANT_BRANDING_WRITE','ALLOW') on conflict do nothing",
+        USER,
+        A);
+    actor();
+    var initial = branding.tenant(A, true);
+    assertThat(initial.version()).isZero();
+    assertThat(initial.seed()).isEqualTo("#254c78");
+    assertThat(initial.presets()).hasSize(6);
+
+    var updated = branding.updateTenant(A, USER, new BrandingService.Update("启明教育", "#3b4e9b", 0));
+    assertThat(updated.version()).isEqualTo(1);
+    assertThat(updated.displayName()).isEqualTo("启明教育");
+    assertThat(updated.brand()).isEqualTo("#3b4e9b");
+    assertThat(updated.canWrite()).isTrue();
+
+    assertThatThrownBy(
+            () -> branding.updateTenant(A, USER, new BrandingService.Update("改坏", "#254c78", 0)))
+        .isInstanceOf(BrandingService.VersionConflict.class);
+
+    // 另一个租户读不到 A 的记录，只能看到自己的默认值。
+    var isolated = branding.tenant(B, false);
+    assertThat(isolated.version()).isZero();
+    assertThat(isolated.displayName()).isNull();
+
+    // 平台只读同一份呈现记录，可看到租户名与品牌值。
+    var platformView = branding.platformTenant(A, false);
+    assertThat(platformView.brand()).isEqualTo("#3b4e9b");
+    assertThat(platformView.displayName()).isEqualTo("启明教育");
+    assertThat(platformView.canWrite()).isFalse();
+
+    var operator = UUID.randomUUID();
+    var platformUpdate =
+        branding.updatePlatform(A, operator, new BrandingService.Update("平台代改", "#0f6e6e", 1));
+    assertThat(platformUpdate.version()).isEqualTo(2);
+    assertThat(platformUpdate.brand()).isEqualTo("#0f6e6e");
+    // 回滚复制历史为新版本，版本号继续递增。
+    var rolledBack = branding.rollbackPlatform(A, operator, 1);
+    assertThat(rolledBack.version()).isEqualTo(3);
+    assertThat(rolledBack.brand()).isEqualTo("#3b4e9b");
+
+    var history = branding.historyPlatform(A);
+    assertThat(history).hasSize(3);
+    assertThat(history.getFirst().version()).isEqualTo(3);
+    assertThat(history.getFirst().brand()).isEqualTo("#3b4e9b");
+    assertThat(history.getLast().version()).isEqualTo(1);
+  }
+
+  @Test
+  void brandingLogoValidatesBeforeStorageAndRejectsNonImage() throws Exception {
+    update(
+        "insert into identity.account_permission(account_id,tenant_id,action,effect)"
+            + " values (?,?,'TENANT_BRANDING_WRITE','ALLOW') on conflict do nothing",
+        USER,
+        A);
+    actor();
+    assertThatThrownBy(() -> branding.uploadLogo(A, USER, "WIDE", new byte[] {1, 2, 3}, null))
+        .isInstanceOf(BrandingService.LogoInvalid.class);
+
+    var image =
+        new java.awt.image.BufferedImage(120, 40, java.awt.image.BufferedImage.TYPE_INT_RGB);
+    var output = new java.io.ByteArrayOutputStream();
+    javax.imageio.ImageIO.write(image, "png", output);
+    assertThatThrownBy(
+            () -> branding.uploadLogo(A, USER, "WIDE", output.toByteArray(), "image/png"))
+        .isInstanceOf(BrandingService.LogoUnavailable.class);
   }
 
   @Test

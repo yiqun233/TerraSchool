@@ -1,0 +1,374 @@
+/* 租户端壳层：侧栏 212、顶栏 52、内容区 24。骨架固定，品牌只改点缀。 */
+
+.shell {
+  display: flex;
+  min-height: 100vh;
+  background: var(--ts-bg);
+}
+
+.side {
+  width: 212px;
+  flex: 0 0 212px;
+  background: var(--ts-surface);
+  border-right: 1px solid var(--ts-line);
+  padding: 14px 10px 12px;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  z-index: 20;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 8px 14px;
+  min-width: 0;
+}
+
+.logoWide {
+  max-width: 170px;
+  max-height: 28px;
+  object-fit: contain;
+  display: block;
+}
+
+.mark {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  background: var(--ts-brand);
+  color: var(--ts-on-brand);
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  font-weight: 700;
+  flex: 0 0 auto;
+  overflow: hidden;
+}
+
+.mark img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.brandText {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+  min-width: 0;
+}
+
+.brandText b {
+  font-size: 13.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.brandText em {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--ts-ink-4);
+  margin-top: 2px;
+}
+
+.navScroll {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.navGroup {
+  font-size: 11px;
+  color: var(--ts-ink-4);
+  padding: 14px 8px 6px;
+  letter-spacing: 0.06em;
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.navItem {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 34px;
+  padding: 0 8px;
+  border-radius: var(--ts-radius-control);
+  color: var(--ts-ink-2);
+  font-size: 13.5px;
+  text-decoration: none;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+}
+
+.navItem:hover {
+  background: var(--ts-bg);
+  color: var(--ts-ink);
+}
+
+.navItemActive,
+.navItemActive:hover {
+  background: var(--ts-brand-soft);
+  color: var(--ts-brand);
+  font-weight: 600;
+}
+
+.navItemActive::before {
+  content: "";
+  position: absolute;
+  left: -10px;
+  top: 7px;
+  bottom: 7px;
+  width: 2px;
+  background: var(--ts-brand);
+  border-radius: 0 2px 2px 0;
+}
+
+.navDisabled {
+  color: var(--ts-ink-4);
+  cursor: not-allowed;
+}
+
+.navDisabled:hover {
+  background: transparent;
+  color: var(--ts-ink-4);
+}
+
+.soon {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--ts-ink-4);
+  border: 1px solid var(--ts-line);
+  border-radius: 3px;
+  padding: 0 4px;
+  line-height: 16px;
+  flex: 0 0 auto;
+}
+
+.sideFoot {
+  margin-top: auto;
+  border-top: 1px solid var(--ts-line-2);
+  padding: 12px 8px 0;
+  color: var(--ts-ink-4);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.topbar {
+  height: 52px;
+  flex: 0 0 52px;
+  background: var(--ts-surface);
+  border-bottom: 1px solid var(--ts-line);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 24px;
+  box-sizing: border-box;
+}
+
+.crumb {
+  font-size: 13px;
+  color: var(--ts-ink-3);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.crumb b {
+  color: var(--ts-ink);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crumb i {
+  font-style: normal;
+  color: var(--ts-ink-4);
+}
+
+.topActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.env {
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 1px solid var(--ts-line);
+  border-radius: 20px;
+  font-size: 11.5px;
+  color: var(--ts-ink-2);
+  background: var(--ts-surface);
+  white-space: nowrap;
+}
+
+.env::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ts-ink-4);
+}
+
+.envProduction::before {
+  background: var(--ts-success-dot);
+}
+
+.envPreview::before {
+  background: var(--ts-info-dot);
+}
+
+.currentSchool {
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  border: 1px solid var(--ts-line);
+  border-radius: 20px;
+  font-size: 11.5px;
+  color: var(--ts-ink-2);
+  background: var(--ts-surface);
+  white-space: nowrap;
+}
+
+.content {
+  padding: 22px 24px 24px;
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.navToggle {
+  display: none;
+  border: 1px solid var(--ts-line);
+  border-radius: var(--ts-radius-control);
+  background: var(--ts-surface);
+  color: var(--ts-ink-2);
+  height: 28px;
+  padding: 0 10px;
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.scrim {
+  display: none;
+}
+
+.accountButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 4px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  color: var(--ts-ink-2);
+  font: inherit;
+}
+
+.accountButton:hover {
+  color: var(--ts-ink);
+}
+
+.accountName {
+  font-size: 13px;
+  color: var(--ts-ink-2);
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.boot {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  background: var(--ts-bg);
+}
+
+.bootCard {
+  text-align: center;
+  color: var(--ts-ink-3);
+  font-size: 13px;
+}
+
+@media (max-width: 960px) {
+  .side {
+    position: fixed;
+    inset: 0 auto 0 0;
+    transform: translateX(-100%);
+    transition: transform 160ms ease;
+    box-shadow: var(--ts-shadow-overlay);
+  }
+
+  .sideOpen {
+    transform: translateX(0);
+  }
+
+  .scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(16, 24, 40, 0.28);
+    z-index: 10;
+  }
+
+  .navToggle {
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .topbar {
+    padding: 0 16px;
+  }
+
+  .content {
+    padding: 16px;
+  }
+
+  .env {
+    display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .crumb {
+    display: none;
+  }
+
+  .accountName {
+    display: none;
+  }
+
+  .topActions {
+    margin-left: auto;
+  }
+}

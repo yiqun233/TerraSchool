@@ -12,6 +12,13 @@ import {
 } from "antd";
 import { api, csrf } from "../../shared/http";
 import type { components } from "../../shared/generated/api";
+import {
+  Page,
+  PageHeader,
+  Panel,
+  SimplePager,
+  StateBlock,
+} from "../../shared/ui/Page";
 import { CustomerRecyclePolicyEditor } from "./CustomerRecyclePolicyEditor";
 import { CustomerPoolCard, CustomerRemindersCard } from "./CustomerPanels";
 import {
@@ -754,10 +761,26 @@ export function CustomerWorkspace({
     }
   }
   return (
-    <section>
-      <Typography.Paragraph>
-        这里只显示您负责的客户。电话默认脱敏，查看完整号码和录入查重需要单独授权；同校公海需要独立权限，认领后成为当前负责人。可将本人同校重复客户合并到明确选择的主档，并保留撤销入口。
-      </Typography.Paragraph>
+    <Page>
+      <PageHeader
+        title="本人客户"
+        description="只显示您负责的客户。电话默认脱敏；查看完整号码、录入查重、同校公海和合并都需要单独授权。"
+        actions={
+          <>
+            {currentSchool?.maintainable ? (
+              <Button onClick={() => setRecyclePolicyOpen(true)}>
+                自动回收规则
+              </Button>
+            ) : null}
+            <Button
+              onClick={() => void rows.refetch()}
+              loading={rows.isFetching}
+            >
+              刷新
+            </Button>
+          </>
+        }
+      />
       {schools.error ? (
         <Alert type="error" title={schools.error.message} showIcon />
       ) : null}
@@ -768,14 +791,6 @@ export function CustomerWorkspace({
           showIcon
           style={{ marginBottom: 12 }}
         />
-      ) : null}
-      {currentSchool?.maintainable ? (
-        <Button
-          onClick={() => setRecyclePolicyOpen(true)}
-          style={{ marginBottom: 12 }}
-        >
-          自动回收规则
-        </Button>
       ) : null}
       {pending ? (
         <Alert
@@ -922,109 +937,129 @@ export function CustomerWorkspace({
           style={{ marginTop: 12 }}
         />
       ) : null}
-      {rows.error ? (
-        <Alert
-          type="error"
-          title={rows.error.message}
-          showIcon
-          style={{ marginTop: 12 }}
-        />
-      ) : null}
-      <Table<Customer>
-        rowKey={(row) => row.id!}
-        loading={rows.isFetching}
-        dataSource={schools.error || rows.error ? [] : (rows.data?.items ?? [])}
-        pagination={false}
-        style={{ marginTop: 16 }}
-        columns={[
-          { title: "客户姓名", dataIndex: "name" },
-          { title: "联系电话", dataIndex: "maskedPhone" },
-          {
-            title: "操作",
-            render: (_, row) =>
-              !rows.error && !schools.error && row.id ? (
-                <Space>
-                  {currentSchool?.phoneReadable ? (
-                    <>
-                      <Button
-                        disabled={busy}
-                        onClick={() => void reveal(row.id!)}
-                      >
-                        查看完整电话
-                      </Button>
-                      <Button
-                        disabled={busy}
-                        onClick={() => setFollowupTarget(row.id!)}
-                      >
-                        跟进记录
-                      </Button>
-                    </>
-                  ) : null}
-                  {currentSchool?.poolManageable ? (
-                    <Button
-                      disabled={busy}
-                      onClick={() =>
-                        void poolAction(
-                          row.id!,
-                          row.version ?? 0,
-                          "release-to-pool",
-                        )
-                      }
-                    >
-                      转入公海
-                    </Button>
-                  ) : null}
-                  {currentSchool?.assignmentManageable ? (
-                    <Button
-                      disabled={busy}
-                      onClick={() => {
-                        setAssignmentTarget(row);
-                        setAssignmentAccount(undefined);
-                        setAssignmentReason("");
-                        setAssignmentRequestId(crypto.randomUUID());
-                      }}
-                    >
-                      转派负责人
-                    </Button>
-                  ) : null}
-                  {currentSchool?.maintainable ? (
-                    <>
-                      {currentSchool.phoneReadable ? (
+      <Panel
+        ariaLabel="本人客户列表"
+        footer={
+          rows.error ? null : (
+            <SimplePager
+              page={page}
+              hasMore={!!rows.data?.hasMore}
+              onPrev={() => {
+                setPage(page - 1);
+                setPhoneDetail(null);
+              }}
+              onNext={() => {
+                setPage(page + 1);
+                setPhoneDetail(null);
+              }}
+              disabled={busy || !!schools.error}
+            />
+          )
+        }
+      >
+        {rows.error ? (
+          <StateBlock
+            title="客户列表加载失败"
+            hint={rows.error.message}
+            action={<Button onClick={() => void rows.refetch()}>重试</Button>}
+          />
+        ) : (
+          <Table<Customer>
+            rowKey={(row) => row.id!}
+            loading={rows.isFetching}
+            dataSource={schools.error ? [] : (rows.data?.items ?? [])}
+            pagination={false}
+            columns={[
+              { title: "客户姓名", dataIndex: "name" },
+              { title: "联系电话", dataIndex: "maskedPhone" },
+              {
+                title: "操作",
+                render: (_, row) =>
+                  !rows.error && !schools.error && row.id ? (
+                    <Space>
+                      {currentSchool?.phoneReadable ? (
+                        <>
+                          <Button
+                            disabled={busy}
+                            onClick={() => void reveal(row.id!)}
+                          >
+                            查看完整电话
+                          </Button>
+                          <Button
+                            disabled={busy}
+                            onClick={() => setFollowupTarget(row.id!)}
+                          >
+                            跟进记录
+                          </Button>
+                        </>
+                      ) : null}
+                      {currentSchool?.poolManageable ? (
+                        <Button
+                          disabled={busy}
+                          onClick={() =>
+                            void poolAction(
+                              row.id!,
+                              row.version ?? 0,
+                              "release-to-pool",
+                            )
+                          }
+                        >
+                          转入公海
+                        </Button>
+                      ) : null}
+                      {currentSchool?.assignmentManageable ? (
                         <Button
                           disabled={busy}
                           onClick={() => {
-                            setConversionTarget(row);
-                            setStudentName("");
-                            setContactRelation("GUARDIAN");
-                            setConversionError("");
-                            setConversionResult(null);
+                            setAssignmentTarget(row);
+                            setAssignmentAccount(undefined);
+                            setAssignmentReason("");
+                            setAssignmentRequestId(crypto.randomUUID());
                           }}
                         >
-                          转为学员
+                          转派负责人
                         </Button>
                       ) : null}
-                      <Button
-                        disabled={busy}
-                        onClick={() => {
-                          setMergeSource(row);
-                          setMergePrimaryId(undefined);
-                        }}
-                      >
-                        合并客户
-                      </Button>
-                      <Button
-                        disabled={busy}
-                        onClick={() => setMergeHistoryFor(row.id!)}
-                      >
-                        合并记录
-                      </Button>
-                    </>
-                  ) : null}
-                </Space>
-              ) : null,
-          },
-        ]}
-      />
+                      {currentSchool?.maintainable ? (
+                        <>
+                          {currentSchool.phoneReadable ? (
+                            <Button
+                              disabled={busy}
+                              onClick={() => {
+                                setConversionTarget(row);
+                                setStudentName("");
+                                setContactRelation("GUARDIAN");
+                                setConversionError("");
+                                setConversionResult(null);
+                              }}
+                            >
+                              转为学员
+                            </Button>
+                          ) : null}
+                          <Button
+                            disabled={busy}
+                            onClick={() => {
+                              setMergeSource(row);
+                              setMergePrimaryId(undefined);
+                            }}
+                          >
+                            合并客户
+                          </Button>
+                          <Button
+                            disabled={busy}
+                            onClick={() => setMergeHistoryFor(row.id!)}
+                          >
+                            合并记录
+                          </Button>
+                        </>
+                      ) : null}
+                    </Space>
+                  ) : null,
+              },
+            ]}
+          />
+        )}
+      </Panel>
       {currentSchool?.poolReadable ? (
         <CustomerPoolCard
           items={poolRows.data?.items ?? []}
@@ -1039,29 +1074,6 @@ export function CustomerWorkspace({
           onClaim={(row) => void poolAction(row.id!, row.version ?? 0, "claim")}
         />
       ) : null}
-      <Space style={{ marginTop: 12 }}>
-        <Button
-          disabled={page === 0 || busy}
-          onClick={() => {
-            setPage(page - 1);
-            setPhoneDetail(null);
-          }}
-        >
-          上一页
-        </Button>
-        <span>第 {page + 1} 页</span>
-        <Button
-          disabled={
-            !!rows.error || !!schools.error || !rows.data?.hasMore || busy
-          }
-          onClick={() => {
-            setPage(page + 1);
-            setPhoneDetail(null);
-          }}
-        >
-          下一页
-        </Button>
-      </Space>
       {followupTarget &&
       currentSchool?.phoneReadable &&
       !schools.error &&
@@ -1293,6 +1305,6 @@ export function CustomerWorkspace({
       >
         <Typography.Text>{phoneDetail}</Typography.Text>
       </Modal>
-    </section>
+    </Page>
   );
 }

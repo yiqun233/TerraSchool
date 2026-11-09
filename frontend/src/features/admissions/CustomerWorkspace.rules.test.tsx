@@ -111,8 +111,7 @@ it("撤销客户查看权限后隐藏旧列表", async () => {
     return response(null, 403);
   });
   await client.invalidateQueries({ queryKey: ["customers"] });
-  await screen.findByText(/无法读取本人客户/);
-  await waitFor(() => expect(screen.queryByText("本人客户")).toBeNull());
+  expect(await screen.findByText("客户列表加载失败")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "录入客户" })).toBeNull();
 });
 

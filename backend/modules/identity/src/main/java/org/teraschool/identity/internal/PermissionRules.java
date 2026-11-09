@@ -52,7 +52,8 @@ final class PermissionRules {
           "CUSTOMER_PHONE_READ",
           "CUSTOMER_POOL_READ",
           "CUSTOMER_POOL_MANAGE",
-          "CUSTOMER_ASSIGN");
+          "CUSTOMER_ASSIGN",
+          "TENANT_BRANDING_WRITE");
   static final String EXPANDED =
       """
     SELECT p.account_id,p.tenant_id,p.action,p.school_id,p.effect FROM identity.account_permission p
@@ -110,11 +111,13 @@ final class PermissionRules {
     var read = new Decision();
     var maintain = new Decision();
     var manage = new Decision();
+    var branding = new Decision();
     if (active)
       for (var rule : rules) {
         if ("ORGANIZATION_READ".equals(rule.action())) read.accept(rule);
         else if ("ORGANIZATION_MAINTAIN".equals(rule.action())) maintain.accept(rule);
         else if ("AUTHORIZATION_MANAGE".equals(rule.action())) manage.accept(rule);
+        else if ("TENANT_BRANDING_WRITE".equals(rule.action())) branding.accept(rule);
       }
     var readable = read.schools();
     var editable = maintain.schools();
@@ -131,7 +134,8 @@ final class PermissionRules {
         manage.enabled() || tenantAdmin,
         manage.schools(),
         tenantAdmin,
-        passwordChangeRequired);
+        passwordChangeRequired,
+        branding.enabled() || tenantAdmin);
   }
 
   /**

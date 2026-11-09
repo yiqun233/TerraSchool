@@ -1,0 +1,109 @@
+/*
+ * L0 骨架令牌：颜色、字号、间距、圆角、阴影只在这里定义。
+ * 页面与组件不得写死色值；品牌相关变量由租户主题或平台主题注入。
+ */
+:root {
+  /* 中性色 */
+  --ts-bg: #f7f8fa;
+  --ts-surface: #ffffff;
+  --ts-line: #e5e7eb;
+  --ts-line-2: #f0f1f3;
+  --ts-line-3: #d5d9e0;
+  --ts-ink: #1f2937;
+  --ts-ink-2: #475467;
+  --ts-ink-3: #6b7280;
+  --ts-ink-4: #9ca3af;
+
+  /* 语义色固定，不随租户品牌变化 */
+  --ts-success: #067647;
+  --ts-success-bg: #ecfdf3;
+  --ts-warning: #b54708;
+  --ts-warning-bg: #fffaeb;
+  --ts-danger: #b42318;
+  --ts-danger-bg: #fef3f2;
+  --ts-info: #175cd3;
+  --ts-info-bg: #eff8ff;
+  --ts-neutral: #475467;
+  --ts-neutral-bg: #f2f4f7;
+
+  /* 状态圆点：文字仍是主表达，颜色只做辅助 */
+  --ts-success-dot: #12b76a;
+  --ts-warning-dot: #f79009;
+  --ts-danger-dot: #f04438;
+  --ts-info-dot: #2e90fa;
+  --ts-neutral-dot: #98a2b3;
+
+  /* 字号与行高 */
+  --ts-font-page: 20px;
+  --ts-line-page: 28px;
+  --ts-font-section: 16px;
+  --ts-line-section: 24px;
+  --ts-font-body: 14px;
+  --ts-line-body: 22px;
+  --ts-font-table: 13px;
+  --ts-line-table: 20px;
+  --ts-font-help: 12px;
+  --ts-line-help: 18px;
+
+  /* 间距五档 */
+  --ts-space-1: 4px;
+  --ts-space-2: 8px;
+  --ts-space-3: 12px;
+  --ts-space-4: 16px;
+  --ts-space-5: 24px;
+
+  /* 圆角、描边与浮层阴影 */
+  --ts-radius-control: 6px;
+  --ts-radius-card: 8px;
+  --ts-shadow-overlay: 0 4px 12px rgba(16, 24, 40, 0.08);
+
+  /* 骨架字体栈；不引入 Web 字体 */
+  --ts-font-family:
+    system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans SC",
+    sans-serif;
+  --ts-font-numeric: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--ts-bg);
+  color: var(--ts-ink);
+  font-family: var(--ts-font-family);
+  font-size: var(--ts-font-body);
+  line-height: var(--ts-line-body);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* 数字在表格里竖排可比；金额、课时、数量、日期统一使用 */
+.ts-numeric {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 可点击表格行保留键盘入口；焦点环用品牌线色，不依赖鼠标。 */
+.ts-row-clickable {
+  cursor: pointer;
+}
+
+.ts-row-clickable:focus-visible {
+  outline: 2px solid var(--ts-brand-line, var(--ts-ink-2));
+  outline-offset: -2px;
+}
+
+/* 键盘焦点不能被移除；颜色在品牌色下由主题变量覆盖 */
+:focus-visible {
+  outline: 2px solid var(--ts-brand-line, var(--ts-ink-2));
+  outline-offset: 2px;
+}

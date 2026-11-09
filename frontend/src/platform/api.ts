@@ -2,6 +2,7 @@
  * 平台运营端接口：与租户的 /api/session/** 完全分开。
  * 平台会话失效语义（401 回登录、403 无权限）与租户端不同，这里独立实现，不复用 shared/http。
  */
+import { normalizeBranding, type TenantBranding } from "../shared/theme/brand";
 
 export interface PlatformOperator {
   login: string;
@@ -125,15 +126,29 @@ export async function setTenantActive(
   }
 }
 
+export interface TenantSummary {
+  total: number;
+  active: number;
+  suspended: number;
+  thisMonth: number;
+}
+
 /** 租户列表：只有名称、状态与开通时间，不含业务数据（DEC-024）。 */
 export async function fetchTenants(
   page: number,
   size = 20,
-): Promise<TenantRow[]> {
-  const response = await fetch(
-    `/api/platform/tenants?page=${page}&size=${size}`,
-    { credentials: "same-origin" },
-  );
+  status = "",
+  keyword = "",
+): Promise<{ items: TenantRow[]; total: number; summary: TenantSummary }> {
+  const params = new URLSearchParams({
+    page: String(page),
+    size: String(size),
+  });
+  if (status) params.set("status", status);
+  if (keyword) params.set("keyword", keyword);
+  const response = await fetch(`/api/platform/tenants?${params}`, {
+    credentials: "same-origin",
+  });
   if (response.status === 401)
     throw new SessionExpired("登录已失效，请重新登录");
   if (response.status === 403) {
@@ -142,8 +157,21 @@ export async function fetchTenants(
   if (!response.ok) {
     throw new RequestFailed(response.status, "加载租户列表失败");
   }
-  const data = (await response.json()) as { items?: TenantRow[] };
-  return data.items ?? [];
+  const data = (await response.json()) as {
+    items?: TenantRow[];
+    total?: number;
+    summary?: Partial<TenantSummary>;
+  };
+  return {
+    items: data.items ?? [],
+    total: data.total ?? 0,
+    summary: {
+      total: data.summary?.total ?? data.total ?? 0,
+      active: data.summary?.active ?? 0,
+      suspended: data.summary?.suspended ?? 0,
+      thisMonth: data.summary?.thisMonth ?? 0,
+    },
+  };
 }
 
 /** 开通租户：只建租户与管理员，不建学校（DEC-024）。 */
@@ -238,6 +266,108 @@ export interface TenantDetail {
   schools: number;
   accounts: number;
   administrators: number;
+}
+
+/** 平台查看租户品牌：与租户端同一份记录，不含业务数据。 */
+export async function fetchTenantBranding(id: string): Promise<TenantBranding> {
+  const response = await fetch(`/api/platform/tenants/${id}/branding`, {
+    credentials: "same-origin",
+  });
+  if (response.status === 401)
+    throw new SessionExpired("登录已失效，请重新登录");
+  if (response.status === 403) throw new AccessDenied("缺少 TENANT_READ 权限");
+  if (!response.ok) throw new RequestFailed(response.status, "加载品牌失败");
+  return normalizeBranding(await response.json());
+}
+
+export interface BrandingHistoryRow {
+  version: number;
+  displayName: string | null;
+  seed: string;
+  brand: string;
+  changedAt: string;
+  changedByKind: "TENANT" | "PLATFORM";
+}
+
+/** 平台查看品牌历史版本，用于选择回滚目标。 */
+export async function fetchBrandingHistory(
+  id: string,
+): Promise<BrandingHistoryRow[]> {
+  const response = await fetch(`/api/platform/tenants/${id}/branding/history`, {
+    credentials: "same-origin",
+  });
+  if (response.status === 401)
+    throw new SessionExpired("登录已失效，请重新登录");
+  if (response.status === 403) throw new AccessDenied("缺少 TENANT_READ 权限");
+  if (!response.ok)
+    throw new RequestFailed(response.status, "加载品牌历史失败");
+  return (await response.json()) as BrandingHistoryRow[];
+}
+
+/** 平台按历史版本回滚；服务端复制成新版本，不删除旧版本。 */
+export async function rollbackTenantBranding(
+  id: string,
+  version: number,
+): Promise<TenantBranding> {
+  const token = await csrfToken();
+  const response = await fetch(
+    `/api/platform/tenants/${id}/branding/rollback`,
+    {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        [token.headerName]: token.token,
+      },
+      body: JSON.stringify({ version }),
+    },
+  );
+  if (response.status === 401)
+    throw new SessionExpired("登录已失效，请重新登录");
+  if (response.status === 403) throw new AccessDenied("缺少回滚品牌的权限");
+  if (response.status === 400) {
+    const problem = (await response.json().catch(() => null)) as {
+      detail?: string;
+    } | null;
+    throw new RequestFailed(400, problem?.detail ?? "回滚版本无效");
+  }
+  if (!response.ok) throw new RequestFailed(response.status, "回滚品牌失败");
+  return normalizeBranding(await response.json());
+}
+
+/** 平台代改品牌：写平台审计，租户侧立即生效。 */
+export async function updateTenantBranding(
+  id: string,
+  input: { displayName: string | null; seed: string; version: number },
+): Promise<TenantBranding> {
+  const token = await csrfToken();
+  const response = await fetch(`/api/platform/tenants/${id}/branding`, {
+    method: "PUT",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      [token.headerName]: token.token,
+      "If-Match": String(input.version),
+    },
+    body: JSON.stringify({
+      displayName: input.displayName,
+      seed: input.seed,
+      expectedVersion: input.version,
+    }),
+  });
+  if (response.status === 401)
+    throw new SessionExpired("登录已失效，请重新登录");
+  if (response.status === 403) throw new AccessDenied("缺少代改品牌的权限");
+  if (response.status === 409)
+    throw new RequestFailed(409, "品牌已被其他人修改，请刷新后重试");
+  if (response.status === 400) {
+    const problem = (await response.json().catch(() => null)) as {
+      detail?: string;
+    } | null;
+    throw new RequestFailed(400, problem?.detail ?? "品牌设置不合规");
+  }
+  if (!response.ok) throw new RequestFailed(response.status, "品牌保存失败");
+  return normalizeBranding(await response.json());
 }
 
 /** 租户详情：只有名称、状态、开通时间与三个计数，没有任何业务明细。 */

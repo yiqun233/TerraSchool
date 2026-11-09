@@ -15,6 +15,13 @@ import {
   Typography,
 } from "antd";
 import { api, csrf } from "../../shared/http";
+import {
+  Page,
+  PageHeader,
+  PageState,
+  StatusTag,
+  Toolbar,
+} from "../../shared/ui/Page";
 import { PersistentCsvExportButton } from "../shared/PersistentCsvExportButton";
 import { SchedulePlanner } from "./SchedulePlanner";
 import { BatchSchedulePlanner } from "./BatchSchedulePlanner";
@@ -633,17 +640,77 @@ export function TeachingWorkspace({
   }
 
   if (capabilities.error)
-    return <Alert title={capabilities.error.message} type="error" />;
-  if (capabilities.isPending) return <p role="status">正在读取教务权限…</p>;
+    return (
+      <PageState
+        title="教务与考勤"
+        description="正在确认当前账号的教务权限。"
+        stateTitle="无法读取教务权限"
+        stateHint={capabilities.error.message}
+        action={
+          <Button onClick={() => void capabilities.refetch()}>重试</Button>
+        }
+      />
+    );
+  if (capabilities.isPending)
+    return (
+      <PageState
+        title="教务与考勤"
+        description="正在确认当前账号的教务权限。"
+        loading
+      />
+    );
   if (!capabilities.data?.canRead)
-    return <Alert title="账号当前无教务读取权限" type="error" />;
+    return (
+      <PageState
+        title="教务与考勤"
+        stateTitle="没有教务读取权限"
+        stateHint="需要 TEACHING_READ 权限；请联系机构管理员在“账号与权限”中开通。"
+      />
+    );
   const schools = capabilities.data.schools ?? [];
   if (schools.length === 0)
-    return <Alert title="当前范围内没有可查看的学校" type="warning" />;
+    return (
+      <PageState
+        title="教务与考勤"
+        stateTitle="当前范围内没有可查看的学校"
+        stateHint="请先建校并给账号分配学校范围，班级与课次才会可用。"
+      />
+    );
 
   return (
-    <>
-      <Space className="toolbar" wrap>
+    <Page>
+      <PageHeader
+        title="教务与考勤"
+        description="班级、课次、考勤与消费在这里完成。关闭课次才固化消费；草稿与发布不产生课时消耗。"
+        actions={
+          <>
+            {school?.maintainable ? (
+              <>
+                <Button type="primary" onClick={() => setCreatingClass(true)}>
+                  新建班级
+                </Button>
+                <Button onClick={() => setBatchScheduling(true)}>
+                  多班自动排课
+                </Button>
+              </>
+            ) : null}
+            <Button onClick={() => setSettingsOpen(true)}>排课设置</Button>
+            <Button
+              onClick={() => setOverviewOpen(true)}
+              loading={teachingOverview.isFetching}
+            >
+              {overviewOpen ? "刷新教务汇总" : "加载教务汇总"}
+            </Button>
+            <Button
+              onClick={() => void classes.refetch()}
+              loading={classes.isFetching}
+            >
+              刷新
+            </Button>
+          </>
+        }
+      />
+      <Toolbar>
         <Select
           aria-label="归属学校"
           style={{ width: 200 }}
@@ -657,31 +724,10 @@ export function TeachingWorkspace({
             setClassId(undefined);
           }}
         />
-        {school?.maintainable ? (
-          <>
-            <Button onClick={() => setCreatingClass(true)}>新建班级</Button>
-            <Button onClick={() => setBatchScheduling(true)}>
-              多班自动排课
-            </Button>
-          </>
-        ) : null}
-        <Button onClick={() => setSettingsOpen(true)}>排课设置</Button>
-        <Button
-          onClick={() => setOverviewOpen(true)}
-          loading={teachingOverview.isFetching}
-        >
-          {overviewOpen ? "刷新教务汇总" : "加载教务汇总"}
-        </Button>
-        <Button
-          onClick={() => void classes.refetch()}
-          loading={classes.isFetching}
-        >
-          刷新
-        </Button>
         <Typography.Text type="secondary">
           关闭课次才固化消费；草稿与发布不产生课时消耗
         </Typography.Text>
-      </Space>
+      </Toolbar>
       {error ? <Alert title={error} type="error" showIcon /> : null}
       <TeacherWorkbenchPanel
         from={workbenchFrom}
@@ -854,7 +900,16 @@ export function TeachingWorkspace({
           pagination={false}
           onRow={(row) => ({
             onClick: () => setClassId(row.id ?? undefined),
-            style: { cursor: "pointer" },
+            tabIndex: 0,
+            className: "ts-row-clickable",
+            "aria-label": `打开${row.name ?? "班级"}的课次`,
+            onKeyDown: (event) => {
+              if (event.target !== event.currentTarget) return;
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                setClassId(row.id ?? undefined);
+              }
+            },
           })}
           columns={[
             { title: "班级", dataIndex: "name" },
@@ -877,11 +932,11 @@ export function TeachingWorkspace({
               dataIndex: "status",
               render: (status: string) =>
                 status === "ACTIVE" ? (
-                  <Tag color="green">进行中</Tag>
+                  <StatusTag tone="ok">进行中</StatusTag>
                 ) : status === "CANCELLED" ? (
-                  <Tag color="default">已取消</Tag>
+                  <StatusTag tone="neutral">已取消</StatusTag>
                 ) : (
-                  <Tag>已结班</Tag>
+                  <StatusTag tone="info">已结班</StatusTag>
                 ),
             },
             {
@@ -1324,6 +1379,6 @@ export function TeachingWorkspace({
           onClose={() => setReconcileFor(null)}
         />
       ) : null}
-    </>
+    </Page>
   );
 }

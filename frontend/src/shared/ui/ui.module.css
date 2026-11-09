@@ -1,0 +1,248 @@
+/* 页面级通用骨架：页头、面板、数字条、状态块。页面只组合，不重复造一套。 */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ts-space-4);
+  min-width: 0;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--ts-space-5);
+}
+
+.title {
+  font-size: var(--ts-font-page);
+  line-height: var(--ts-line-page);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0;
+  color: var(--ts-ink);
+}
+
+.description {
+  color: var(--ts-ink-3);
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 5px 0 0;
+  max-width: 720px;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--ts-space-2);
+  flex: 0 0 auto;
+  padding-top: 2px;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--ts-space-2);
+  min-width: 0;
+}
+
+.panel {
+  background: var(--ts-surface);
+  border: 1px solid var(--ts-line);
+  border-radius: var(--ts-radius-card);
+  overflow: hidden;
+  min-width: 0;
+}
+
+.panelHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ts-space-4);
+  min-height: 48px;
+  padding: 8px var(--ts-space-4);
+  border-bottom: 1px solid var(--ts-line);
+}
+
+.panelHeadStart {
+  display: flex;
+  align-items: center;
+  gap: var(--ts-space-3);
+  min-width: 0;
+}
+
+.panelHeadEnd {
+  display: flex;
+  align-items: center;
+  gap: var(--ts-space-2);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.panelBody {
+  min-width: 0;
+}
+
+.panelFoot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ts-space-4);
+  padding: 10px var(--ts-space-4);
+  border-top: 1px solid var(--ts-line);
+  color: var(--ts-ink-3);
+  font-size: 12.5px;
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--ts-line);
+  border: 1px solid var(--ts-line);
+  border-radius: var(--ts-radius-card);
+  overflow: hidden;
+}
+
+.stat {
+  background: var(--ts-surface);
+  padding: 12px var(--ts-space-4);
+  min-width: 0;
+}
+
+.statLabel {
+  font-size: 12px;
+  color: var(--ts-ink-3);
+}
+
+.statValue {
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 30px;
+  margin-top: 1px;
+  color: var(--ts-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.statDetail {
+  font-size: 11.5px;
+  color: var(--ts-ink-4);
+  margin-top: 1px;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.tag::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.85;
+  flex: 0 0 auto;
+}
+
+.tagOk {
+  background: var(--ts-success-bg);
+  color: var(--ts-success);
+}
+
+.tagWarn {
+  background: var(--ts-warning-bg);
+  color: var(--ts-warning);
+}
+
+.tagDanger {
+  background: var(--ts-danger-bg);
+  color: var(--ts-danger);
+}
+
+.tagInfo {
+  background: var(--ts-info-bg);
+  color: var(--ts-info);
+}
+
+.tagNeutral {
+  background: var(--ts-neutral-bg);
+  color: var(--ts-neutral);
+}
+
+.state {
+  padding: 44px var(--ts-space-5);
+  text-align: center;
+}
+
+.stateTitle {
+  font-size: var(--ts-font-body);
+  color: var(--ts-ink);
+  margin: 0 0 6px;
+}
+
+.stateHint {
+  font-size: 12.5px;
+  color: var(--ts-ink-3);
+  margin: 0;
+  line-height: 1.7;
+}
+
+.stateAction {
+  margin-top: var(--ts-space-4);
+}
+
+.loading {
+  padding: 44px var(--ts-space-5);
+  text-align: center;
+  color: var(--ts-ink-3);
+  font-size: 13px;
+}
+
+.muted {
+  color: var(--ts-ink-3);
+}
+
+.dim {
+  color: var(--ts-ink-4);
+  font-size: 12.5px;
+}
+
+.numeric {
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 900px) {
+  .stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .header {
+    flex-direction: column;
+    gap: var(--ts-space-3);
+  }
+
+  .actions {
+    flex-wrap: wrap;
+  }
+
+  .panelHead {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .panelHeadEnd {
+    justify-content: flex-start;
+  }
+}

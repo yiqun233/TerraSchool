@@ -3,7 +3,18 @@ package org.teraschool.archive.api;
 import java.util.UUID;
 
 public interface StudentQueries {
-  StudentPage list(int page, int size, String search);
+  StudentPage list(int page, int size, String search, String status, java.util.UUID schoolId);
+
+  /** 兼容既有调用：不按状态、学校过滤。 */
+  default StudentPage list(int page, int size, String search) {
+    return list(page, size, search, "", null);
+  }
+
+  StudentCounts counts(String search, java.util.UUID schoolId);
+
+  default StudentCounts counts(String search) {
+    return counts(search, null);
+  }
 
   StudentProfile detail(UUID id);
 

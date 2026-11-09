@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Alert, Button, Form, Input, Modal } from "antd";
+import { Alert, App as AntApp, Button, Form, Input, Modal } from "antd";
 import {
   AccessDenied,
   RequestFailed,
@@ -21,8 +21,8 @@ function generatePassword() {
 /**
  * 开通向导：两步。
  *
- * 第一步只填机构名称与管理员登录名，口令由服务端生成，界面上先按同一规则生成一份待提交；
- * 第二步展示**一次性**的初始密码，离开后无法再次查看，只能重置。
+ * 第一步只填机构名称与管理员登录名；初始口令由前端生成并随请求提交，
+ * 平台重置密码时才由服务端生成。第二步展示一次性的初始密码，离开后只能重置。
  */
 export default function ProvisionWizard({
   open,
@@ -37,6 +37,7 @@ export default function ProvisionWizard({
   onCreated: (name: string) => void;
   onSessionLost: () => void;
 }) {
+  const { message } = AntApp.useApp();
   const [form] = Form.useForm<{ name: string; adminLogin: string }>();
   const [requestId, setRequestId] = useState(() => crypto.randomUUID());
   const [password, setPassword] = useState("");
@@ -53,6 +54,18 @@ export default function ProvisionWizard({
     setErrorText("");
     setDone(null);
     setBusy(false);
+  }
+
+  async function copyCredential() {
+    if (!done) return;
+    try {
+      await navigator.clipboard.writeText(
+        `登录名：${done.login}\n初始密码：${password}`,
+      );
+      message.success("登录信息已复制");
+    } catch {
+      message.error("复制失败，请手动选择登录名和初始密码");
+    }
   }
 
   async function submit() {
@@ -105,7 +118,7 @@ export default function ProvisionWizard({
         <div className={styles.result}>
           <p className={styles.stateTitle}>「{done.name}」已开通</p>
           <p className={styles.stateHint}>
-            把下面的登录信息交给客户。初始密码**只显示这一次**，离开后无法再次查看；
+            把下面的登录信息交给客户。初始密码只显示这一次，离开后无法再次查看；
             忘记只能重置，客户首次登录会被要求改密。
           </p>
           <dl className={styles.credential}>
@@ -116,15 +129,7 @@ export default function ProvisionWizard({
               <code>{password}</code>
             </dd>
           </dl>
-          <Button
-            onClick={() => {
-              void navigator.clipboard?.writeText(
-                `登录名：${done.login}\n初始密码：${password}`,
-              );
-            }}
-          >
-            复制登录信息
-          </Button>
+          <Button onClick={() => void copyCredential()}>复制登录信息</Button>
           <Button
             type="primary"
             style={{ marginLeft: 8 }}
@@ -153,7 +158,12 @@ export default function ProvisionWizard({
               style={{ marginBottom: 12 }}
             />
           ) : null}
-          <Form form={form} layout="vertical" disabled={!canCreate || busy}>
+          <Form
+            form={form}
+            layout="vertical"
+            disabled={!canCreate || busy}
+            onValuesChange={() => setRequestId(crypto.randomUUID())}
+          >
             <Form.Item
               name="name"
               label="机构名称"

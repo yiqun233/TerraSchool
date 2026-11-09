@@ -1,0 +1,155 @@
+.section {
+  padding: var(--ts-space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ts-space-3);
+}
+
+.sectionTitle {
+  font-size: var(--ts-font-section);
+  line-height: var(--ts-line-section);
+  font-weight: 600;
+  margin: 0;
+}
+
+.sectionHint {
+  font-size: 12.5px;
+  color: var(--ts-ink-3);
+  margin: 0;
+  line-height: 1.7;
+}
+
+.presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ts-space-3);
+}
+
+.preset {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--ts-line);
+  border-radius: var(--ts-radius-control);
+  background: var(--ts-surface);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ts-ink-2);
+}
+
+.presetActive {
+  border-color: var(--ts-brand-line);
+  box-shadow: 0 0 0 1px var(--ts-brand-line);
+  color: var(--ts-ink);
+  font-weight: 600;
+}
+
+.swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  flex: 0 0 auto;
+}
+
+.preview {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--ts-space-3);
+  padding: var(--ts-space-4);
+  background: var(--ts-bg);
+  border: 1px solid var(--ts-line);
+  border-radius: var(--ts-radius-card);
+}
+
+.navSample {
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 10px;
+  border-radius: var(--ts-radius-control);
+  background: var(--ts-brand-soft);
+  color: var(--ts-brand);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.linkSample {
+  color: var(--ts-brand-link);
+  font-size: 13px;
+  text-decoration: underline;
+}
+
+.primarySample {
+  height: 32px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--ts-radius-control);
+  background: var(--ts-brand);
+  color: var(--ts-on-brand);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.textField {
+  max-width: 360px;
+}
+
+.actions {
+  display: flex;
+  gap: var(--ts-space-2);
+  align-items: center;
+}
+
+.logoRow {
+  display: flex;
+  align-items: center;
+  gap: var(--ts-space-3);
+  flex-wrap: wrap;
+}
+
+.logoPreview {
+  min-width: 120px;
+  min-height: 48px;
+  padding: 8px 12px;
+  border: 1px dashed var(--ts-line-3);
+  border-radius: var(--ts-radius-control);
+  background: var(--ts-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.logoPreview img {
+  max-width: 180px;
+  max-height: 48px;
+  object-fit: contain;
+}
+
+.logoMark {
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+}
+
+.logoMeta {
+  font-size: 12px;
+  color: var(--ts-ink-3);
+  line-height: 1.6;
+}
+
+.fileButton {
+  position: relative;
+  overflow: hidden;
+  display: inline-flex;
+}
+
+.fileButton input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}

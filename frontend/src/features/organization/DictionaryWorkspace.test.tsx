@@ -50,7 +50,10 @@ it("学校维护者可创建稳定代码字典项并刷新列表", async () => {
   post.mockResolvedValue({ response: { ok: true, status: 201 }, data: {} });
   renderPage();
 
-  await user.type(screen.getByRole("textbox", { name: "新增代码" }), "active");
+  await user.type(
+    await screen.findByRole("textbox", { name: "新增代码" }),
+    "active",
+  );
   await user.type(screen.getByRole("textbox", { name: "新增名称" }), "有效");
   await user.click(screen.getByRole("button", { name: "新增字典项" }));
   await waitFor(() => expect(post).toHaveBeenCalledTimes(1));

@@ -256,6 +256,18 @@ class TenantProvisioningTest {
     var list = get(platform, "/api/platform/tenants?page=0&size=50");
     assertThat(list.statusCode()).isEqualTo(200);
     assertThat(list.body()).contains(name);
+    assertThat(json.readTree(list.body()).get("summary").get("total").asLong())
+        .isGreaterThanOrEqualTo(1);
+
+    var encoded = java.net.URLEncoder.encode(name, java.nio.charset.StandardCharsets.UTF_8);
+    var active =
+        get(platform, "/api/platform/tenants?page=0&size=50&status=ACTIVE&keyword=" + encoded);
+    assertThat(active.statusCode()).isEqualTo(200);
+    assertThat(active.body()).contains(name);
+    var suspended =
+        get(platform, "/api/platform/tenants?page=0&size=50&status=SUSPENDED&keyword=" + encoded);
+    assertThat(suspended.statusCode()).isEqualTo(200);
+    assertThat(suspended.body()).doesNotContain(name);
 
     var detail = get(platform, "/api/platform/tenants/" + tenantId);
     assertThat(detail.statusCode()).isEqualTo(200);

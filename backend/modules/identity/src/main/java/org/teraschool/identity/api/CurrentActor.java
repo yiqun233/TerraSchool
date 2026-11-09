@@ -3,6 +3,9 @@ package org.teraschool.identity.api;
 public interface CurrentActor {
   CurrentPermissions permissions();
 
+  /** 会话呈现上下文：身份、租户名与强制改密状态；不含业务权限。 */
+  SessionContext sessionContext();
+
   /** 使用当前业务事务连接复核会话，不隐含任何业务范围。 */
   Actor requireIdentityInTransaction();
 

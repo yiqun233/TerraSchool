@@ -213,7 +213,7 @@ export function CustomerFollowups({
           <div
             key={row.id}
             style={{
-              borderTop: "1px solid #ddd",
+              borderTop: "1px solid var(--ts-line)",
               marginTop: 12,
               paddingTop: 12,
             }}

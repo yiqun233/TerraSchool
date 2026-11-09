@@ -28,7 +28,9 @@ export function MyPermissions() {
   });
   return (
     <>
-      <Button onClick={() => setOpen(true)}>我的权限</Button>
+      <Button type="text" size="small" onClick={() => setOpen(true)}>
+        我的权限
+      </Button>
       <Modal
         title="我的组织权限"
         open={open}

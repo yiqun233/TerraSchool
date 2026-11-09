@@ -16,6 +16,7 @@ import {
 } from "antd";
 import { api, csrf } from "../../shared/http";
 import type { components } from "../../shared/generated/api";
+import { Page, PageHeader, PageState, Toolbar } from "../../shared/ui/Page";
 
 type PeriodView = components["schemas"]["PeriodView"];
 type FundsReconciliation = components["schemas"]["FundsReconciliation"];
@@ -188,18 +189,53 @@ export function PeriodManager({
   });
 
   if (capabilities.error)
-    return <Alert title={capabilities.error.message} type="error" />;
-  if (capabilities.isPending) return <p role="status">正在读取期间权限…</p>;
+    return (
+      <PageState
+        title="财务期间"
+        description="正在确认当前账号的财务期间权限。"
+        stateTitle="无法读取财务期间权限"
+        stateHint={capabilities.error.message}
+        action={
+          <Button onClick={() => void capabilities.refetch()}>重试</Button>
+        }
+      />
+    );
+  if (capabilities.isPending)
+    return (
+      <PageState
+        title="财务期间"
+        description="正在确认当前账号的财务期间权限。"
+        loading
+      />
+    );
   const schools = capabilities.data?.schools ?? [];
   if (schools.length === 0)
-    return <Alert title="当前范围内没有可查看的学校" type="warning" />;
+    return (
+      <PageState
+        title="财务期间"
+        stateTitle="当前范围内没有可查看的学校"
+        stateHint="请先建校并给账号分配学校范围，财务期间才会可用。"
+      />
+    );
   const locked = (periods.data ?? []).filter(
     (item) => item.status === "LOCKED",
   );
 
   return (
-    <>
-      <Space className="toolbar" wrap>
+    <Page>
+      <PageHeader
+        title="财务期间"
+        description="按自然月锁定资金与消费事实。锁定后该月收款、分配、释放、退课时、现金退款与课次关闭都不可写入；解锁需重新确认。"
+        actions={
+          <Button
+            onClick={() => void periods.refetch()}
+            loading={periods.isFetching}
+          >
+            刷新
+          </Button>
+        }
+      />
+      <Toolbar>
         <Select
           aria-label="归属学校"
           style={{ width: 200 }}
@@ -220,16 +256,10 @@ export function PeriodManager({
           }))}
           onChange={(value) => setYear(value)}
         />
-        <Button
-          onClick={() => void periods.refetch()}
-          loading={periods.isFetching}
-        >
-          刷新
-        </Button>
         <Typography.Text type="secondary">
           已锁定 {locked.length} 个月；锁定后该月资金与消费事实不可写入
         </Typography.Text>
-      </Space>
+      </Toolbar>
       {error ? <Alert title={error} type="error" showIcon /> : null}
       <Descriptions column={1} size="small" bordered>
         <Descriptions.Item label="锁定范围">
@@ -531,7 +561,7 @@ export function PeriodManager({
           onError={setError}
         />
       ) : null}
-    </>
+    </Page>
   );
 }
 

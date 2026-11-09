@@ -14,4 +14,11 @@ public interface OrganizationQueries {
   java.util.List<EmployeeAssignmentOption> studentAssignmentOptions(java.util.UUID schoolId);
 
   boolean isActiveStudentAssignee(java.util.UUID schoolId, java.util.UUID accountId);
+
+  /**
+   * 当前账号在本租户的员工姓名；没有绑定员工时返回 null。
+   *
+   * <p>只用于会话顶栏呈现，不作为权限或人员身份判断；同账号多条在职记录时取姓名排序第一条。
+   */
+  String employeeDisplayName(java.util.UUID accountId);
 }
