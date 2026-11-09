@@ -32,11 +32,13 @@ backend:
       - .m2/repository
   before_script:
     - |
-      # maven 镜像基于 Ubuntu：换阿里云源后再装 psql（建角色用）与 python3（抽取自检用）。
+      # maven 镜像基于 Ubuntu：换阿里云源后再装 psql（建角色用）、python3（抽取自检用）
+      # 与 unzip。缺 unzip 时 Maven Wrapper 会降级去下 .tar.gz，却仍用 zip 的
+      # distributionSha256Sum 校验，必然报 "Failed to validate Maven distribution SHA-256"。
       if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
         sed -i 's|http://archive.ubuntu.com|https://mirrors.aliyun.com|g; s|http://security.ubuntu.com|https://mirrors.aliyun.com|g' /etc/apt/sources.list.d/ubuntu.sources
       fi
-    - apt-get update && apt-get install -y --no-install-recommends postgresql-client python3
+    - apt-get update && apt-get install -y --no-install-recommends postgresql-client python3 unzip
     - mkdir -p .m2/repository
     - |
       for i in $(seq 1 40); do
