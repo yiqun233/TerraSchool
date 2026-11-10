@@ -22,7 +22,7 @@
 
 ## 本地查看与验证
 
-在 Windows 项目目录运行 `start-local.cmd`，退出使用 `stop-local.cmd`。当前默认 WSL PostgreSQL，本地查看的详细地址、工具、秘密位置与重启操作见[本地启动与演示验收](doc/03-研发规范/开发环境/本地启动与演示验收.md)。默认不停止共享 PostgreSQL，不重置手工数据。
+在 Windows 项目目录的 PowerShell 运行 `.\start-local.ps1`，退出使用 `.\stop-local.ps1` 或在该窗口按 Ctrl+C；后端与前端日志实时打印在启动窗口，同一份写入 `.local\dev\`。当前默认 WSL PostgreSQL，本地查看的详细地址、工具、秘密位置与重启操作见[本地启动与演示验收](doc/03-研发规范/开发环境/本地启动与演示验收.md)。默认不停止共享 PostgreSQL，不重置手工数据。
 
 完整工程验证入口：
 

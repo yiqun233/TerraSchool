@@ -146,3 +146,5 @@ Testcontainers 需要 Docker API 兼容运行时；项目已选的真实 Postgre
 ## 用户明确改用WSL（当前生效）
 
 用户要求本地查看复用WSL，并明确允许删除无用vectordb。已将原Docker演示库完整备份、导入Ubuntu PostgreSQL18.6的teraschool_dev，全部项目表行数/内容摘要一致；账号/组织/审计和原密码保留。连接改为127.0.0.1:5432，日常启停不需要Docker、不停止共享PostgreSQL。vectordb已先备份后按授权删除，仅断开该库的一个Navicat空闲连接，vecuser保留；旧Docker卷保留且不再运行。最新入口、限制和实际验证统一见[本地启动指南](本地启动与演示验收.md)，前节55432为历史方案，已被本次明确替代。
+
+2026-11-10 起根入口改为PowerShell脚本 start-local.ps1/stop-local.ps1（原.cmd已删除），后端Spring与前端Vite日志实时打印在启动窗口并同步写入.local/dev，详见本地启动指南第1节。

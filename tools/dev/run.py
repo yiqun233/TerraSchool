@@ -13,6 +13,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import shutil
 import socket
@@ -71,23 +72,80 @@ def redact(text, config=None):
     return text
 
 
-def command(args, config=None, env=None, input_text=None, log=None, cwd=ROOT, timeout=600):
+# 本地启动窗口直接显示后端/前端日志；前缀颜色仅用于区分来源，不影响日志文件。
+PREFIX_COLORS = {'backend': '36', 'frontend': '35'}
+ANSI_SEQUENCE = re.compile(r'\x1b\[[0-9;]*[A-Za-z]')
+color_enabled = None
+
+
+def console_colors_available():
+    if not sys.stdout.isatty():
+        return False
+    if os.name != 'nt':
+        return True
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(-11)
+        mode = ctypes.c_uint32()
+        if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            return False
+        # 打开ENABLE_VIRTUAL_TERMINAL_PROCESSING，终端才会把颜色序列当格式而不是字符。
+        return bool(kernel32.SetConsoleMode(handle, mode.value | 0x0004))
+    except (AttributeError, OSError):
+        return False
+
+
+def emit(label, text):
+    global color_enabled
+    if color_enabled is None:
+        color_enabled = console_colors_available()
+    if color_enabled:
+        sys.stdout.write('\x1b[' + PREFIX_COLORS.get(label, '33') + 'm[' + label + ']\x1b[0m ' + text + '\n')
+    else:
+        # 不支持颜色时去掉子进程自带的颜色序列，避免日志里出现乱码字符。
+        sys.stdout.write('[' + label + '] ' + ANSI_SEQUENCE.sub('', text) + '\n')
+    sys.stdout.flush()
+
+
+def command(args, config=None, env=None, input_text=None, log=None, cwd=ROOT, timeout=600,
+            echo=False, label=None):
+    """执行命令并收集输出；echo=True时逐行上屏，日志文件仍保存完整脱敏输出。"""
     process = subprocess.Popen(args, cwd=cwd, env=env,
         stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8',
-        errors='replace', start_new_session=os.name != 'nt',
+        errors='replace', bufsize=1, start_new_session=os.name != 'nt',
         creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+    chunks = []
+
+    def drain():
+        for line in process.stdout:
+            chunks.append(line)
+            if echo:
+                emit(label or '命令', redact(line.rstrip('\n'), config))
+        process.stdout.close()
+
+    reader = threading.Thread(target=drain, daemon=True)
+    reader.start()
     timed_out = False
     try:
+        if input_text is not None:
+            try:
+                process.stdin.write(input_text)
+                process.stdin.close()
+            except OSError:
+                pass
         try:
-            output, _ = process.communicate(input=input_text, timeout=timeout)
+            process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             timed_out = True
             stop_tree(process)
-            output, _ = process.communicate(timeout=15)
     finally:
         stop_tree(process)
-    output = redact(output, config)
+        reader.join(timeout=15)
+        if not process.stdout.closed:
+            process.stdout.close()
+    output = redact(''.join(chunks), config)
     if log:
         (LOCAL / log).write_text(output, encoding='utf-8')
     if timed_out:
@@ -166,7 +224,7 @@ def available(port):
             listener.bind(('127.0.0.1', port))
         except OSError as error:
             raise RuntimeError('端口 ' + str(port) + ' 已被占用：可能上一次启动的进程没有退出。'
-                               '请先运行 stop-local.cmd；仍被占用时，在任务管理器结束残留的 java / node 进程后重试。') from error
+                               '请先运行 .\\stop-local.ps1；仍被占用时，在任务管理器结束残留的 java / node 进程后重试。') from error
 
 
 def wsl_args(program, *arguments):
@@ -327,14 +385,16 @@ def prepare(config):
     print('[2/4] 以独立迁移账号迁移、生成类型并构建后端', flush=True)
     for label, arguments in [('backend-clean', ['clean']), ('migration', ['-N', 'flyway:migrate']), ('codegen', ['-N', 'jooq-codegen:generate']),
                              ('backend-build', ['package', '-DskipTests'])]:
-        command(mvn + arguments, config, env=env, cwd=ROOT / 'backend', log=label + '.log')
+        command(mvn + arguments, config, env=env, cwd=ROOT / 'backend', log=label + '.log',
+                echo=True, label=label)
     print('[3/4] 首次装载合成资料，已有修改不会重置', flush=True)
     seed = (ROOT / 'tools/dev/seed.sql').read_text(encoding='utf-8')
     sql(config, seed.replace('@@LOGIN_PASSWORD@@', literal(config['passwords']['login'])))
     write_runtime_config(config)
     print('[4/4] 安装锁定的前端依赖', flush=True)
     command([pnpm, 'install', '--frozen-lockfile', '--ignore-scripts', '--strict-peer-dependencies',
-             '--store-dir', str(ROOT / '.local/pnpm-store')], config, cwd=ROOT / 'frontend', log='frontend-install.log')
+             '--store-dir', str(ROOT / '.local/pnpm-store')], config, cwd=ROOT / 'frontend',
+            log='frontend-install.log', echo=True, label='pnpm')
     write_json(LOCAL / 'build.json', {'fingerprint': fingerprint()})
     print('开发环境已准备。演示账号密码见 ' + str(LOCAL / 'accounts.txt'), flush=True)
 
@@ -371,7 +431,7 @@ def open_browser(url):
 def wait_http(url, processes):
     for _ in range(120):
         if any(p.poll() is not None for p in processes):
-            raise RuntimeError('服务提前退出，请查看.local/dev的backend.log和frontend.log。')
+            raise RuntimeError('服务提前退出；失败原因见上面窗口的日志（同一份在 .local/dev/backend.log、frontend.log）。')
         try:
             with urlopen(url, timeout=1) as response:
                 if response.status == 200:
@@ -386,6 +446,15 @@ def urls():
     return {'frontend': 'http://127.0.0.1:' + str(SETTINGS['frontend_port']),
             'backend': 'http://127.0.0.1:' + str(SETTINGS['backend_port']),
             'database': '127.0.0.1:' + str(SETTINGS['database_port']) + '/teraschool_dev'}
+
+
+def relay(label, process, handle):
+    """把子进程输出同时写入日志文件和当前控制台；文件保留完整原文。"""
+    for line in process.stdout:
+        handle.write(line)
+        handle.flush()
+        emit(label, line.rstrip('\n'))
+    process.stdout.close()
 
 
 def start(config):
@@ -425,6 +494,7 @@ def start(config):
     serving = False
     children = []
     logs = []
+    readers = []
     try:
         for label, args, cwd, env in [
             ('backend', [java, '-jar', str(JAR), '--spring.config.additional-location=file:' +
@@ -433,16 +503,22 @@ def start(config):
              dict(os.environ, TERASCHOOL_BACKEND_URL=urls()['backend']))]:
             handle = (LOCAL / (label + '.log')).open('w', encoding='utf-8')
             logs.append(handle)
-            children.append(subprocess.Popen(args, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
-                stdout=handle, stderr=subprocess.STDOUT, start_new_session=os.name != 'nt',
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0))
+            child = subprocess.Popen(args, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8',
+                errors='replace', bufsize=1, start_new_session=os.name != 'nt',
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+            children.append(child)
+            reader = threading.Thread(target=relay, args=(label, child, handle), daemon=True)
+            reader.start()
+            readers.append(reader)
         wait_http(urls()['backend'] + '/api/session/csrf', children)
         wait_http(urls()['frontend'], children)
         # 契约从实际开发后端导出，前端派生仍由固定生成器维护。
         client = login(config, 'local-admin')
         with client.open(urls()['backend'] + '/v3/api-docs') as response:
             (ROOT / 'backend/applications/server/target/openapi.json').write_bytes(response.read())
-        command([pnpm, 'run', 'generate'], config, cwd=ROOT / 'frontend', log='contract.log')
+        command([pnpm, 'run', 'generate'], config, cwd=ROOT / 'frontend', log='contract.log',
+                echo=True, label='contract')
         write_json(RUNNING, {'workspace': WORKSPACE, 'port': server.server_port, 'token': token})
         threading.Thread(target=server.serve_forever, daemon=True).start()
         serving = True
@@ -451,13 +527,15 @@ def start(config):
             open_browser(urls()['frontend'])
         print('后端：' + urls()['backend'] + '；数据库：' + urls()['database'], flush=True)
         print('账号密码：' + str(LOCAL / 'accounts.txt'), flush=True)
-        print('保持此终端运行；Ctrl+C或stop-local.cmd停止前后端，WSL数据库继续运行。', flush=True)
+        print('保持此终端运行；按 Ctrl+C 或在另一个窗口执行 .\\stop-local.ps1 停止前后端，WSL数据库继续运行。', flush=True)
         while not done.wait(0.5):
             if any(p.poll() is not None for p in children):
-                raise RuntimeError('服务退出，请查看.local/dev日志。')
+                raise RuntimeError('服务退出，原因见上面的日志（同一份在 .local/dev/backend.log、frontend.log）。')
     finally:
         for child in children:
             stop_tree(child)
+        for reader in readers:
+            reader.join(timeout=5)
         for handle in logs:
             handle.close()
         if RUNNING.exists():
@@ -581,13 +659,13 @@ def main():
         return
     if args.action == 'check':
         if not STATE.exists() or not control('status'):
-            raise RuntimeError('请先通过start-local启动本项目，再执行check。')
+            raise RuntimeError('请先通过 .\\start-local.ps1 启动本项目，再执行 check。')
         smoke(configuration(), args.write)
         return
     if control('status'):
         print('前后端已经运行：' + urls()['frontend'])
         print('如果浏览器没有自动打开，请手动访问上面的地址。')
-        print('需要重启时，先运行 stop-local.cmd 再运行本脚本。')
+        print('需要重启时，先运行 .\\stop-local.ps1 再运行本脚本。')
         if not args.no_open:
             open_browser(urls()['frontend'])
         # 专用退出码：批处理据此区分“已在运行”和“启动失败”，避免窗口一闪而过。
