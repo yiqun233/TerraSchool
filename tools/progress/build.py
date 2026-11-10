@@ -31,6 +31,24 @@ SOURCES = {
 STATES = {"未开始", "进行中", "局部实现", "已实现", "暂缓"}
 VERIFY = {"未验证", "局部有证据", "已验证"}
 ACCEPTANCE = {"未提请", "待验收", "已验收"}
+QUESTION_STATES = {"待确认", "部分已确认", "已确认"}
+# 分类与优先度口径见 doc/05-决策与问题/待确认问题登记.md；枚举不合法即拒绝生成。
+# 顺序即总览矩阵与筛选下拉的展示顺序；新增领域同时更新问题登记的领域表。
+CATEGORIES = ["金额与结算", "审批与期间", "教务与排课", "学员与招生", "旧库迁移", "报表与导出", "平台与租户", "交付与运维"]
+QUESTION_TYPES = {"规则口径", "证据缺失", "实现缺陷"}
+IMPORTANCE = {"高", "中", "低"}
+URGENCY = {"立即", "本阶段", "可后置"}
+
+
+def priority(importance: str, urgency: str) -> str:
+    """重要度与紧急度推导处理档位；规则只在这里定义一次。"""
+    if importance == "高" and urgency == "立即":
+        return "S"
+    if importance == "高" or urgency == "立即":
+        return "A"
+    if importance == "低" and urgency == "可后置":
+        return "C"
+    return "B"
 
 
 def cells(line):
@@ -104,10 +122,16 @@ def build_data():
         if not in_state_index and row and re.fullmatch(r"Q\d+|C[1-6]", row[0]) and len(row) in (4, 5):
             require(row[0] not in questions, f"重复问题正文：{row[0]}")
             questions[row[0]] = dict(id=row[0], title=row[1], current="；".join(row[2:-1]), impact=row[-1])
-        if in_state_index and row and re.fullmatch(r"Q\d+|C[1-6]", row[0]) and len(row) == 5:
+        if in_state_index and row and re.fullmatch(r"Q\d+|C[1-6]", row[0]) and len(row) == 9:
             require(row[0] not in decisions, f"重复问题状态：{row[0]}")
-            require(row[1] in {"待确认", "部分已确认", "已确认"}, f"问题状态不合法：{row[0]}")
-            decisions[row[0]] = dict(state=row[1], owner=row[2], next=row[3], conclusion=row[4])
+            require(row[1] in CATEGORIES, f"问题领域不合法：{row[0]}/{row[1]}")
+            require(row[2] in QUESTION_TYPES, f"问题类型不合法：{row[0]}/{row[2]}")
+            require(row[3] in IMPORTANCE, f"问题重要度不合法：{row[0]}/{row[3]}")
+            require(row[4] in URGENCY, f"问题紧急度不合法：{row[0]}/{row[4]}")
+            require(row[5] in QUESTION_STATES, f"问题状态不合法：{row[0]}")
+            decisions[row[0]] = dict(category=row[1], kind=row[2], importance=row[3], urgency=row[4],
+                                     priority=priority(row[3], row[4]),
+                                     state=row[5], owner=row[6], next=row[7], conclusion=row[8])
     require(set(questions) == set(decisions), "问题状态索引与 Q/C 正文不一致")
     known = set(questions)
     known.update(re.findall(r"\| (BQ-\d+|DATA-\d+) \|", texts["baseline"]))
@@ -143,7 +167,7 @@ def build_data():
     updated = max(re.findall(r"\| 更新日期 \| (\d{4}-\d{2}-\d{2}) \|", "\n".join(texts.values())))
     return dict(updated=updated, fingerprint=fingerprint, modules=modules, details=details,
                 questions=[dict(**q, **decisions[code]) for code, q in questions.items()],
-                materials=materials, tasks=tasks, gates=gates,
+                categories=CATEGORIES, materials=materials, tasks=tasks, gates=gates,
                 sources={key: Path(os.path.relpath(path, PLAN)).as_posix() for key, path in SOURCES.items()})
 
 
