@@ -63,6 +63,7 @@ export const TENANT_NAV: NavItem[] = [
     group: "招生",
     enabled: true,
     title: "学员档案",
+    visible: (permissions) => granted(permissions, "STUDENT_READ"),
   },
   {
     path: "/products",
@@ -70,6 +71,7 @@ export const TENANT_NAV: NavItem[] = [
     group: "教务",
     enabled: true,
     title: "课程与产品",
+    visible: (permissions) => granted(permissions, "PRODUCT_READ"),
   },
   {
     path: "/enrollment",
@@ -77,6 +79,7 @@ export const TENANT_NAV: NavItem[] = [
     group: "教务",
     enabled: true,
     title: "报名与收款",
+    visible: (permissions) => granted(permissions, "ENROLLMENT_READ"),
   },
   {
     path: "/teaching",
@@ -84,6 +87,7 @@ export const TENANT_NAV: NavItem[] = [
     group: "教务",
     enabled: true,
     title: "教务与考勤",
+    visible: (permissions) => granted(permissions, "TEACHING_READ"),
   },
   {
     path: "/approval",
@@ -91,6 +95,7 @@ export const TENANT_NAV: NavItem[] = [
     group: "教务",
     enabled: true,
     title: "审批",
+    visible: (permissions) => granted(permissions, "APPROVAL_READ"),
   },
   {
     path: "/organization",
@@ -98,6 +103,7 @@ export const TENANT_NAV: NavItem[] = [
     group: "管理",
     enabled: true,
     title: "组织目录",
+    visible: (permissions) => !!permissions?.canReadOrganizations,
   },
   {
     path: "/employees",
@@ -105,6 +111,7 @@ export const TENANT_NAV: NavItem[] = [
     group: "管理",
     enabled: true,
     title: "员工",
+    visible: (permissions) => granted(permissions, "EMPLOYEE_READ"),
   },
   {
     path: "/teachers",
@@ -112,6 +119,7 @@ export const TENANT_NAV: NavItem[] = [
     group: "管理",
     enabled: true,
     title: "教师",
+    visible: (permissions) => granted(permissions, "TEACHER_READ"),
   },
   {
     path: "/rooms",
@@ -119,6 +127,7 @@ export const TENANT_NAV: NavItem[] = [
     group: "管理",
     enabled: true,
     title: "教室",
+    visible: (permissions) => granted(permissions, "ROOM_READ"),
   },
   {
     path: "/dictionaries",
@@ -134,6 +143,7 @@ export const TENANT_NAV: NavItem[] = [
     group: "财务",
     enabled: true,
     title: "财务期间",
+    visible: (permissions) => granted(permissions, "PERIOD_READ"),
   },
   {
     path: "/reports",
@@ -164,6 +174,7 @@ export const TENANT_NAV: NavItem[] = [
     group: "设置",
     enabled: true,
     title: "数据迁移",
+    visible: (permissions) => granted(permissions, "MIGRATION_MANAGE"),
   },
 ];
 
@@ -189,4 +200,17 @@ export function visibleNavigation(
   return TENANT_NAV.filter(
     (item) => !item.visible || item.visible(permissions, tenantAdmin),
   );
+}
+
+/**
+ * 登录后的默认落点。
+ *
+ * <p>只按“这个账号真能打开哪个页面”判断，不拿学校范围当业务能力的替身：有学校范围
+ * 只说明能看组织，并不代表能看学员档案。曾经按可读学校非空就落到学员档案，导致刚建完
+ * 学校的机构管理员一登录就吃 403（2026-11-10 反馈）。
+ */
+export function startPath(permissions: CurrentPermissions | null): string {
+  if (granted(permissions, "STUDENT_READ")) return "/students";
+  if (permissions?.canReadOrganizations) return "/organization";
+  return "/start";
 }

@@ -454,4 +454,68 @@ public final class PermissionCatalog {
   /** 全部动作码；授权校验只接受这里的取值。 */
   public static final Set<String> CODES =
       ACTIONS.stream().map(Action::code).collect(Collectors.toUnmodifiableSet());
+
+  /**
+   * 新建学校时按该校范围铺给创建者的动作集合。
+   *
+   * <p>为什么不从 {@link #ACTIONS} 里按 {@code scope == SCHOOL} 自动派生：新增一个敏感动作
+   * （退款付款、锁月解锁、数据迁移）是否随建校自动授出去，必须逐次评审；隐式派生等于悄悄扩权。 这里显式列举，并由 {@code PermissionCatalogTest}
+   * 卡住“目录新增了按学校生效的动作， 但既没进本表、也没进 {@link #SCHOOL_PROVISION_EXCLUDED}”的情况。
+   *
+   * <p>为什么都放进来：建校人就是本机构管理员，且本就持有 {@code AUTHORIZATION_MANAGE}，
+   * 这些动作他可以自己授给自己；自动铺开只是省掉一遍手工授权，不扩大他的有效权限。 只授“能看组织”会让建校后学员、报名、教务、财务全部 403（2026-11-10 本地反馈）。
+   */
+  public static final List<String> SCHOOL_PROVISION_ACTIONS =
+      List.of(
+          "ORGANIZATION_READ",
+          "ORGANIZATION_MAINTAIN",
+          "AUTHORIZATION_MANAGE",
+          "EMPLOYEE_READ",
+          "EMPLOYEE_MAINTAIN",
+          "TEACHER_READ",
+          "TEACHER_MAINTAIN",
+          "ROOM_READ",
+          "ROOM_MAINTAIN",
+          "PERSONNEL_READ",
+          "PERSONNEL_MAINTAIN",
+          "STUDENT_READ",
+          "STUDENT_MAINTAIN",
+          "STUDENT_SENSITIVE_READ",
+          "STUDENT_ASSIGN",
+          "STUDENT_EXPORT",
+          "PRODUCT_READ",
+          "PRODUCT_MAINTAIN",
+          "PRICE_PUBLISH",
+          "CHANNEL_READ",
+          "CHANNEL_MAINTAIN",
+          "CUSTOMER_READ",
+          "CUSTOMER_MAINTAIN",
+          "CUSTOMER_PHONE_READ",
+          "CUSTOMER_POOL_READ",
+          "CUSTOMER_POOL_MANAGE",
+          "CUSTOMER_ASSIGN",
+          "ENROLLMENT_READ",
+          "ENROLLMENT_MAINTAIN",
+          "ENROLLMENT_APPROVE",
+          "ENROLLMENT_DISCOUNT",
+          "FUNDS_READ",
+          "FUNDS_RECEIPT",
+          "FUNDS_ALLOCATE",
+          "REFUND_READ",
+          "REFUND_APPLY",
+          "REFUND_PAY",
+          "TEACHING_READ",
+          "TEACHING_MAINTAIN",
+          "ATTENDANCE_RECORD",
+          "LESSON_CLOSE",
+          "APPROVAL_READ",
+          "APPROVAL_MANAGE",
+          "APPROVAL_DECIDE",
+          "PERIOD_READ",
+          "PERIOD_LOCK",
+          "PERIOD_UNLOCK",
+          "MIGRATION_MANAGE");
+
+  /** 明确不随建校铺开的按学校动作；租户级动作不随学校生效，不在此列。 */
+  public static final Set<String> SCHOOL_PROVISION_EXCLUDED = Set.of();
 }

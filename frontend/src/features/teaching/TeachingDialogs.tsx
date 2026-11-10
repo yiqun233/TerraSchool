@@ -19,6 +19,7 @@ import {
 import { api, csrf } from "../../shared/http";
 import type { components } from "../../shared/generated/api";
 import type { LessonView, ClassMemberView, Curriculum } from "./teachingTypes";
+import { newRequestId } from "../../shared/ids";
 
 /**
  * 教务工作台的弹窗与面板：发布/关闭课次、调课、换课、补课、考勤、名额、建班、对账。
@@ -155,7 +156,7 @@ export function RescheduleLessonModal({
       reason.trim(),
     ]);
     if (!requestRef.current || requestRef.current.fingerprint !== fingerprint)
-      requestRef.current = { fingerprint, requestId: crypto.randomUUID() };
+      requestRef.current = { fingerprint, requestId: newRequestId() };
     setBusy(true);
     try {
       const token = await csrf();
@@ -280,7 +281,7 @@ export function SwapLessonModal({
       reason.trim(),
     ]);
     if (!requestRef.current || requestRef.current.fingerprint !== fingerprint)
-      requestRef.current = { fingerprint, requestId: crypto.randomUUID() };
+      requestRef.current = { fingerprint, requestId: newRequestId() };
     setBusy(true);
     try {
       const token = await csrf();
@@ -386,7 +387,7 @@ export function MakeupLessonModal({
       reason.trim(),
     ]);
     if (!requestRef.current || requestRef.current.fingerprint !== fingerprint)
-      requestRef.current = { fingerprint, requestId: crypto.randomUUID() };
+      requestRef.current = { fingerprint, requestId: newRequestId() };
     setBusy(true);
     try {
       const token = await csrf();
@@ -664,7 +665,7 @@ export function ClassCapacityEditor({
     const reason = String(values.reason ?? "").trim();
     const fingerprint = `${classView.id}|${classView.version}|${capacity ?? "UNLIMITED"}|${reason}`;
     if (pendingRequest.current?.fingerprint !== fingerprint) {
-      pendingRequest.current = { fingerprint, requestId: crypto.randomUUID() };
+      pendingRequest.current = { fingerprint, requestId: newRequestId() };
     }
     setBusy(true);
     setError("");
@@ -791,7 +792,7 @@ export function ClassCreator({
       const { response } = await api.POST("/api/teaching/classes", {
         headers: { [token.headerName!]: token.token! },
         body: {
-          requestId: crypto.randomUUID(),
+          requestId: newRequestId(),
           schoolId,
           curriculumId: values.curriculumId,
           name: values.name,
@@ -927,7 +928,7 @@ export function LessonCreator({
       const { response } = await api.POST("/api/teaching/lessons", {
         headers: { [token.headerName!]: token.token! },
         body: {
-          requestId: crypto.randomUUID(),
+          requestId: newRequestId(),
           classId,
           lessonDate: values.lessonDate,
           startsAt: values.startsAt,

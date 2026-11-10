@@ -22,6 +22,8 @@ public class RoleTemplates {
   }
 
   private String slots(Set<UUID> ids) {
+    // 与授权管理同一处理：空范围不能拼成 in ()（语法错误），用零行子查询表达空集。
+    if (ids.isEmpty()) return "select null::uuid where false";
     return String.join(",", Collections.nCopies(ids.size(), "?"));
   }
 

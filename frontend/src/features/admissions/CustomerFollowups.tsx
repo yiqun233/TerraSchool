@@ -2,6 +2,8 @@ import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Input, Modal, Space, Typography } from "antd";
 import { csrf } from "../../shared/http";
+import { newRequestId } from "../../shared/ids";
+import { digestText } from "../../shared/digest";
 
 type Followup = {
   id: string;
@@ -28,13 +30,7 @@ function readPending(key: string): Pending | null {
   return null;
 }
 async function digest(requestId: string, values: string[]) {
-  const hash = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(JSON.stringify([requestId, ...values])),
-  );
-  return Array.from(new Uint8Array(hash), (v) =>
-    v.toString(16).padStart(2, "0"),
-  ).join("");
+  return digestText(JSON.stringify([requestId, ...values]));
 }
 export function CustomerFollowups({
   customerId,
@@ -85,7 +81,7 @@ export function CustomerFollowups({
     setNotice("");
     let sent = false;
     try {
-      const requestId = pending?.requestId ?? crypto.randomUUID();
+      const requestId = pending?.requestId ?? newRequestId();
       const fingerprint = await digest(requestId, [
         customerId,
         clean,

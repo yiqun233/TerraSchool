@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Space, Tabs } from "antd";
+import { Alert, Button, Segmented, Space, Tabs } from "antd";
+import { useNavigate } from "react-router-dom";
 import { api } from "../../shared/http";
 import {
   groupActions,
@@ -23,7 +24,6 @@ import {
 import { AuthorizationManager } from "./AuthorizationManager";
 import { RoleTemplateManager } from "./RoleTemplateManager";
 import { AccountLifecycleManager } from "./AccountLifecycleManager";
-import { SchoolCreator } from "../organization/SchoolCreator";
 import styles from "./permissions.module.css";
 
 /**
@@ -121,6 +121,8 @@ export function PermissionConsole() {
   );
 }
 
+type PermissionFilter = "all" | "granted" | "missing";
+
 function MineTab({
   permissions,
   catalog,
@@ -138,6 +140,8 @@ function MineTab({
   error: Error | null;
   schoolNames: Map<string, string>;
 }) {
+  // 只看“未开通”是业务人员最常用的视角：他要知道自己少什么、该申请什么。
+  const [filter, setFilter] = useState<PermissionFilter>("all");
   if (error) {
     return (
       <StateBlock
@@ -158,9 +162,18 @@ function MineTab({
   const grants = new Map(
     (mine.actions ?? []).map((grant) => [grant.action ?? "", grant]),
   );
-  const groups = groupActions(catalog);
   const total = catalog.length;
   const granted = [...grants.values()].length;
+  const has = (action: PermissionAction) => !!grants.get(action.code ?? "");
+  const matches = (action: PermissionAction) =>
+    filter === "all" ? true : filter === "granted" ? has(action) : !has(action);
+  const groups = groupActions(catalog.filter(matches)).map((section) => ({
+    ...section,
+    // 已开通的排在前面、未开通的沉下去；同一段内保持目录原顺序（sort 稳定）。
+    actions: [...section.actions].sort(
+      (left, right) => Number(has(right)) - Number(has(left)),
+    ),
+  }));
 
   return (
     <div>
@@ -168,30 +181,53 @@ function MineTab({
         <StatusTag tone={granted > 0 ? "ok" : "neutral"}>
           已开通 {granted} / {total} 项
         </StatusTag>
+        <Segmented
+          size="small"
+          value={filter}
+          onChange={(value) => setFilter(value as PermissionFilter)}
+          options={[
+            { label: `全部 ${total}`, value: "all" },
+            { label: `已开通 ${granted}`, value: "granted" },
+            { label: `未开通 ${total - granted}`, value: "missing" },
+          ]}
+        />
         <span className={styles.meta}>
           {permissions?.tenantAdmin
             ? "租户管理员：组织、授权与品牌动作默认开通；业务学校范围仍按学校授权计算。"
             : "按动作分别计算学校范围；功能级允许不产生学校范围。"}
         </span>
       </div>
-      {groups.map(({ group, actions }) => (
-        <section key={group}>
-          <h3 className={styles.groupTitle}>
-            {group}
-            <span className={styles.groupCount}>{actions.length} 项</span>
-          </h3>
-          <div className={styles.grid}>
-            {actions.map((action) => (
-              <ActionCard
-                key={action.code}
-                action={action}
-                grant={grants.get(action.code ?? "")}
-                schoolNames={schoolNames}
-              />
-            ))}
-          </div>
-        </section>
-      ))}
+      {groups.length === 0 ? (
+        <StateBlock
+          title={
+            filter === "missing" ? "目录里的动作都已开通" : "没有符合条件的动作"
+          }
+          hint={
+            filter === "missing"
+              ? "当前账号没有任何未开通动作；如果业务上仍用不了，多半是学校范围没覆盖。"
+              : "换一个筛选条件再看看；“全部”下也为空说明动作目录没返回内容，请刷新页面。"
+          }
+        />
+      ) : (
+        groups.map(({ group, actions }) => (
+          <section key={group}>
+            <h3 className={styles.groupTitle}>
+              {group}
+              <span className={styles.groupCount}>{actions.length} 项</span>
+            </h3>
+            <div className={styles.grid}>
+              {actions.map((action) => (
+                <ActionCard
+                  key={action.code}
+                  action={action}
+                  grant={grants.get(action.code ?? "")}
+                  schoolNames={schoolNames}
+                />
+              ))}
+            </div>
+          </section>
+        ))
+      )}
     </div>
   );
 }
@@ -209,7 +245,7 @@ function ActionCard({
     .map((id) => schoolNames.get(id))
     .filter((name): name is string => !!name);
   return (
-    <div className={styles.card}>
+    <div className={`${styles.card} ${grant ? "" : styles.cardMuted}`}>
       <div className={styles.cardHead}>
         <span className={styles.name}>{action.label}</span>
         <GrantTag grant={grant} />
@@ -236,6 +272,7 @@ function ManageTab({
   permissions: CurrentPermissions | null;
 }) {
   const client = useQueryClient();
+  const navigate = useNavigate();
   const canManage = !!permissions?.canManageAuthorizations;
   const schools = permissions?.manageableSchoolIds?.length ?? 0;
   const refresh = () => {
@@ -262,8 +299,21 @@ function ManageTab({
         <AuthorizationManager onChanged={refresh} />
         <RoleTemplateManager onClosed={refresh} />
         <AccountLifecycleManager onClosed={refresh} />
-        <SchoolCreator onClosed={refresh} />
       </Space>
+      {schools === 0 ? (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginTop: 16 }}
+          title="还没有学校：先到“组织目录”开通第一所"
+          description="开通学校是组织动作，已挪到“组织目录”里完成；建好后回到这里给账号分配角色和学校范围，员工的业务菜单才会出现。"
+          action={
+            <Button size="small" onClick={() => navigate("/organization")}>
+              去组织目录
+            </Button>
+          }
+        />
+      ) : null}
       <Alert
         type="info"
         showIcon

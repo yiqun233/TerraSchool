@@ -26,6 +26,8 @@ import {
   type CustomerDraft,
 } from "./CustomerCreateFields";
 import { CustomerFollowups } from "./CustomerFollowups";
+import { newRequestId } from "../../shared/ids";
+import { digestText } from "../../shared/digest";
 
 type Customer = components["schemas"]["Customer"];
 type MergedCustomer = components["schemas"]["MergedCustomer"];
@@ -40,13 +42,7 @@ type Pending = {
 
 /** 浏览器仅保存请求身份与摘要，不持久化客户姓名或电话。 */
 async function fingerprint(requestId: string, values: unknown[]) {
-  const bytes = new TextEncoder().encode(
-    JSON.stringify([requestId, ...values]),
-  );
-  const hash = await crypto.subtle.digest("SHA-256", bytes);
-  return Array.from(new Uint8Array(hash), (value) =>
-    value.toString(16).padStart(2, "0"),
-  ).join("");
+  return digestText(JSON.stringify([requestId, ...values]));
 }
 function readPending(key: string): Pending | null {
   try {
@@ -305,7 +301,7 @@ export function CustomerWorkspace({
     setNotice("");
     let sent = false;
     try {
-      const requestId = pending?.requestId ?? crypto.randomUUID();
+      const requestId = pending?.requestId ?? newRequestId();
       const digest = await fingerprint(requestId, [
         current,
         cleanName,
@@ -547,7 +543,7 @@ export function CustomerWorkspace({
       return;
     const cleanReason = assignmentReason.trim();
     if (!cleanReason) return;
-    const requestId = assignmentRequestId ?? crypto.randomUUID();
+    const requestId = assignmentRequestId ?? newRequestId();
     setAssignmentRequestId(requestId);
     guard.current = true;
     setBusy(true);
@@ -693,7 +689,7 @@ export function CustomerWorkspace({
       ];
       const attemptKey = `teraschool.customer-conversion.${accountKey}.${conversionTarget.id}`;
       const digest = await fingerprint("customer-conversion", values);
-      let requestId: string = crypto.randomUUID();
+      let requestId: string = newRequestId();
       try {
         const saved = JSON.parse(
           localStorage.getItem(attemptKey) ?? "null",
@@ -1014,7 +1010,7 @@ export function CustomerWorkspace({
                             setAssignmentTarget(row);
                             setAssignmentAccount(undefined);
                             setAssignmentReason("");
-                            setAssignmentRequestId(crypto.randomUUID());
+                            setAssignmentRequestId(newRequestId());
                           }}
                         >
                           转派负责人
@@ -1135,7 +1131,7 @@ export function CustomerWorkspace({
             value={assignmentAccount}
             onChange={(value) => {
               setAssignmentAccount(value);
-              setAssignmentRequestId(crypto.randomUUID());
+              setAssignmentRequestId(newRequestId());
             }}
             options={(assignees.data ?? []).map((employee) => ({
               value: employee.accountId!,
@@ -1149,7 +1145,7 @@ export function CustomerWorkspace({
             value={assignmentReason}
             onChange={(event) => {
               setAssignmentReason(event.target.value);
-              setAssignmentRequestId(crypto.randomUUID());
+              setAssignmentRequestId(newRequestId());
             }}
           />
         </Space>

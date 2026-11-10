@@ -2,6 +2,8 @@ import { lazy } from "react";
 import { createBrowserRouter, Navigate, useRouteError } from "react-router-dom";
 import { Button } from "antd";
 import { AppShell } from "./AppShell";
+import { PendingAccessPage } from "./PendingAccessPage";
+import { startPath } from "./navigation";
 import { useSession } from "./session";
 import {
   LoadingBlock,
@@ -146,14 +148,14 @@ const PermissionsPage = lazy(async () => {
 });
 
 /**
- * 默认落点：有可读学校去学员档案；零学校先去组织目录完成建校引导。
- * 不用登录后的空学员列表掩盖“还没有学校”这一事实。
+ * 默认落点：按“这个账号真能打开哪个页面”决定，不拿可读学校当业务能力的替身。
+ * 有学校范围只代表能看组织目录，不代表能看学员档案；什么都没有时去 /start 说明，
+ * 而不是落进一个必然 403 的业务页。
  */
 function StartPage() {
   const { permissions, permissionsLoading } = useSession();
   if (permissionsLoading) return <LoadingBlock>正在确认可用范围…</LoadingBlock>;
-  const hasSchool = (permissions?.readableSchoolIds?.length ?? 0) > 0;
-  return <Navigate to={hasSchool ? "/students" : "/organization"} replace />;
+  return <Navigate to={startPath(permissions)} replace />;
 }
 
 function NotFound() {
@@ -215,6 +217,7 @@ export const router = createBrowserRouter([
     errorElement: <RouteError />,
     children: [
       { index: true, element: <StartPage /> },
+      { path: "start", element: <PendingAccessPage /> },
       { path: "organization", element: <OrganizationPage /> },
       { path: "employees", element: <EmployeesPage /> },
       { path: "teachers", element: <TeachersPage /> },

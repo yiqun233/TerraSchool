@@ -7,6 +7,7 @@ import {
   provisionTenant,
 } from "./api";
 import styles from "./platform.module.css";
+import { newRequestId } from "../shared/ids";
 
 /** 生成 16 位口令：去掉容易看错的 0/O/1/l/I。 */
 function generatePassword() {
@@ -39,7 +40,7 @@ export default function ProvisionWizard({
 }) {
   const { message } = AntApp.useApp();
   const [form] = Form.useForm<{ name: string; adminLogin: string }>();
-  const [requestId, setRequestId] = useState(() => crypto.randomUUID());
+  const [requestId, setRequestId] = useState(() => newRequestId());
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [errorText, setErrorText] = useState("");
@@ -49,7 +50,7 @@ export default function ProvisionWizard({
 
   function reset() {
     form.resetFields();
-    setRequestId(crypto.randomUUID());
+    setRequestId(newRequestId());
     setPassword("");
     setErrorText("");
     setDone(null);
@@ -162,7 +163,7 @@ export default function ProvisionWizard({
             form={form}
             layout="vertical"
             disabled={!canCreate || busy}
-            onValuesChange={() => setRequestId(crypto.randomUUID())}
+            onValuesChange={() => setRequestId(newRequestId())}
           >
             <Form.Item
               name="name"

@@ -26,6 +26,7 @@ import type {
   Allocation,
 } from "./enrollmentShared";
 import { STATUS_LABEL } from "./enrollmentShared";
+import { newRequestId } from "../../shared/ids";
 
 /**
  * 报名/收款的表单与弹窗：收款、分配、释放、作废、优惠、批量报名、详情。
@@ -91,7 +92,7 @@ export function PrepaymentCreator({
     };
     const fingerprint = JSON.stringify(body);
     if (requestRef.current?.fingerprint !== fingerprint) {
-      requestRef.current = { fingerprint, requestId: crypto.randomUUID() };
+      requestRef.current = { fingerprint, requestId: newRequestId() };
     }
     setBusy(true);
     setError("");
@@ -354,7 +355,7 @@ export function EnrollmentBatchCreator({
         fingerprint,
         body: {
           items: priceVersionIds.map((priceVersionId) => ({
-            requestId: crypto.randomUUID(),
+            requestId: newRequestId(),
             studentId,
             priceVersionId,
             enrolledOn: values.enrolledOn,
@@ -615,7 +616,7 @@ export function EnrollmentCreator({
       const { response } = await api.POST("/api/enrollment/enrollments", {
         headers: { [token.headerName!]: token.token! },
         body: {
-          requestId: crypto.randomUUID(),
+          requestId: newRequestId(),
           studentId,
           priceVersionId: values.priceVersionId,
           enrolledOn: values.enrolledOn,
@@ -1126,7 +1127,7 @@ export function ReceiptCreator({
       const { response } = await api.POST("/api/funds/receipts", {
         headers: { [token.headerName!]: token.token! },
         body: {
-          requestId: crypto.randomUUID(),
+          requestId: newRequestId(),
           schoolId,
           studentId,
           amount: String(values.amount),
@@ -1434,7 +1435,7 @@ export function DiscountModal({
     try {
       const token = await csrf();
       const base = {
-        requestId: crypto.randomUUID(),
+        requestId: newRequestId(),
         amount: String(values.amount),
         reason: values.reason || undefined,
         expectedVersion,

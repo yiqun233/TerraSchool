@@ -66,23 +66,26 @@ public class SchoolProvisioner implements SchoolProvisioning {
             return result;
           }
           var before = authorization.load(actor.accountId());
-          for (String action :
-              List.of(
-                  "AUTHORIZATION_MANAGE",
-                  "ORGANIZATION_READ",
-                  "ORGANIZATION_MAINTAIN",
-                  "EMPLOYEE_READ",
-                  "EMPLOYEE_MAINTAIN",
-                  "TEACHER_READ",
-                  "TEACHER_MAINTAIN",
-                  "ROOM_READ",
-                  "ROOM_MAINTAIN"))
+          // 按新学校铺开机构管理员动作：只授“能看组织”会让建校人一登录就撞 403，
+          // 学员、报名、教务、财务全部不可用。集合见 PermissionCatalog.SCHOOL_PROVISION_ACTIONS。
+          //
+          // 但委派管理员不能借建校升权：不是租户管理员时只铺“他本来就有”的动作，
+          // 避免顺手拿到自己没有的退款付款、锁月解锁等敏感动作。
+          var own = before.effective();
+          var provisioned =
+              own.tenantAdmin()
+                  ? PermissionCatalog.SCHOOL_PROVISION_ACTIONS
+                  : PermissionCatalog.SCHOOL_PROVISION_ACTIONS.stream()
+                      .filter(code -> own.grantedActions().contains(code))
+                      .toList();
+          for (String action : provisioned) {
             sql.execute(
                 "insert into identity.account_permission(tenant_id,account_id,action,school_id,effect) values (?,?,?,?,'ALLOW') on conflict do nothing",
                 actor.tenantId(),
                 actor.accountId(),
                 action,
                 result.id());
+          }
           sql.execute(
               "update identity.account set authorization_version=authorization_version+1 where id=?",
               actor.accountId());

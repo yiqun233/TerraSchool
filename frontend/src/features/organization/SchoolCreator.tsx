@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Alert, Button, Form, Input, Modal } from "antd";
 import { api, csrf } from "../../shared/http";
 import type { components } from "../../shared/generated/api";
+import { newRequestId } from "../../shared/ids";
 type CreateSchool = components["schemas"]["CreateSchool"];
 export function SchoolCreator({ onClosed }: { onClosed: () => void }) {
   const [open, setOpen] = useState(false),
@@ -42,7 +43,7 @@ export function SchoolCreator({ onClosed }: { onClosed: () => void }) {
     let sent = false;
     try {
       if (!pending.current)
-        pending.current = { requestId: crypto.randomUUID(), name: values.name };
+        pending.current = { requestId: newRequestId(), name: values.name };
       const token = await csrf();
       sent = true;
       const { response } = await api.POST("/api/organization/schools", {

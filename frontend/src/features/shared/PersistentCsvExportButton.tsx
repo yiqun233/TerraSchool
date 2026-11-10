@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Alert, Button, Space, Typography } from "antd";
 import { csrf } from "../../shared/http";
+import { newRequestId } from "../../shared/ids";
 
 type ExportType = "ENROLLMENT" | "RECEIPTS" | "LESSONS";
 type ExportFormat = "CSV" | "XLSX" | "PDF";
@@ -98,8 +99,7 @@ export function PersistentCsvExportButton({
     if (!schoolId) return;
     setError("");
     const requestKey = `${key}\n${format}`;
-    const requestId =
-      request?.key === requestKey ? request.id : crypto.randomUUID();
+    const requestId = request?.key === requestKey ? request.id : newRequestId();
     setRequest({ key: requestKey, id: requestId });
     try {
       const token = await csrf();

@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter } from "react-router-dom";
 import type { components } from "../../shared/generated/api";
 import { PermissionConsole } from "./PermissionConsole";
 
@@ -103,7 +104,9 @@ function view() {
         new QueryClient({ defaultOptions: { queries: { retry: false } } })
       }
     >
-      <PermissionConsole />
+      <MemoryRouter>
+        <PermissionConsole />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -134,7 +137,7 @@ it("动作目录与账号管理入口分别呈现，无管理权限时给出说�
   expect(screen.getAllByText("ORGANIZATION_READ").length).toBe(1);
 });
 
-it("有管理权限时给出四个管理入口，不需要再点开嵌套弹窗", async () => {
+it("有管理权限时给出三个管理入口，开通学校归入组织目录", async () => {
   get.mockReset();
   mockApi();
   session = {
@@ -150,9 +153,30 @@ it("有管理权限时给出四个管理入口，不需要再点开嵌套弹窗"
   view();
   await user.click(screen.getByRole("tab", { name: "账号与角色" }));
   await screen.findByText(/可管理授权的学校：1 所/);
-  for (const name of ["管理账号授权", "维护角色模板", "管理账号", "开通学校"]) {
+  for (const name of ["管理账号授权", "维护角色模板", "管理账号"]) {
     expect(await screen.findByRole("button", { name })).toBeTruthy();
   }
+  // 开通学校属于组织动作，只在组织目录提供，避免两个入口互相矛盾。
+  expect(screen.queryByRole("button", { name: "开通学校" })).toBeNull();
+});
+
+it("还没有学校时说明先开通学校，并给出组织目录入口", async () => {
+  get.mockReset();
+  mockApi();
+  session = {
+    ...session,
+    permissions: {
+      ...current,
+      canManageAuthorizations: true,
+      manageableSchoolIds: [],
+    } as components["schemas"]["CurrentPermissions"],
+    permissionsLoading: false,
+  };
+  const user = userEvent.setup();
+  view();
+  await user.click(screen.getByRole("tab", { name: "账号与角色" }));
+  await screen.findByText("还没有学校：先到“组织目录”开通第一所");
+  expect(screen.getByRole("button", { name: "去组织目录" })).toBeTruthy();
 });
 
 it("读取失败时说明原因，不把空列表当成没有权限", async () => {

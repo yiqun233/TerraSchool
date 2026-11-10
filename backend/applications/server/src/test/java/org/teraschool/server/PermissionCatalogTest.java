@@ -95,6 +95,27 @@ class PermissionCatalogTest {
   }
 
   @Test
+  void everySchoolScopedActionIsProvisionedOrExplicitlyExcluded() {
+    var decided = new TreeSet<>(PermissionCatalog.SCHOOL_PROVISION_ACTIONS);
+    decided.addAll(PermissionCatalog.SCHOOL_PROVISION_EXCLUDED);
+    var missing = new TreeSet<String>();
+    for (var action : PermissionCatalog.ACTIONS)
+      if (action.scope() == PermissionCatalog.Scope.SCHOOL && !decided.contains(action.code()))
+        missing.add(action.code());
+    assertThat(missing)
+        .as("目录新增了按学校生效的动作，但没有决定是否随建校铺开：请加入 SCHOOL_PROVISION_ACTIONS 或 SCHOOL_PROVISION_EXCLUDED")
+        .isEmpty();
+
+    // 铺开集合本身也要干净：不能有目录外动作，也不能把租户级动作按学校授出去。
+    for (var code : PermissionCatalog.SCHOOL_PROVISION_ACTIONS) {
+      assertThat(PermissionCatalog.CODES).as("铺开集合含目录外动作 %s", code).contains(code);
+      assertThat(PermissionCatalog.ACTIONS.stream().filter(a -> a.code().equals(code)))
+          .as("租户级动作 %s 不随学校生效，不应进建校铺开集合", code)
+          .allMatch(a -> a.scope() == PermissionCatalog.Scope.SCHOOL);
+    }
+  }
+
+  @Test
   void everyCatalogActionHasAnEnforcementPoint() throws Exception {
     var root = backendRoot();
     var enforced = new TreeSet<>(literalActions(root));

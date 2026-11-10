@@ -57,6 +57,7 @@ import type {
   AttendanceReport,
   TeachingOverviewReport,
 } from "./teachingTypes";
+import { newRequestId } from "../../shared/ids";
 
 // 原有导入路径保持不变：外部（含测试）仍可从本文件取这些组件。
 export {
@@ -446,7 +447,7 @@ export function TeachingWorkspace({
     const requestId =
       previous?.fingerprint === fingerprint
         ? previous.requestId
-        : crypto.randomUUID();
+        : newRequestId();
     transferRequests.current.set(enrollmentId, { fingerprint, requestId });
     setError("");
     try {
@@ -498,7 +499,7 @@ export function TeachingWorkspace({
     const requestId =
       previous?.fingerprint === fingerprint
         ? previous.requestId
-        : crypto.randomUUID();
+        : newRequestId();
     withdrawalRequests.current.set(enrollmentId, { fingerprint, requestId });
     setError("");
     try {
@@ -596,7 +597,7 @@ export function TeachingWorkspace({
           request.reason !== reason ||
           request.version !== version
         ) {
-          request = { reason, version, requestId: crypto.randomUUID() };
+          request = { reason, version, requestId: newRequestId() };
           cancelRequests.current.set(classId, request);
         }
         setError("");

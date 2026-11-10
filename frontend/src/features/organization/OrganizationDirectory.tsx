@@ -36,16 +36,19 @@ export function OrganizationDirectory() {
   const { session, permissions, permissionsLoading, onUnauthorized, reload } =
     useSession();
   const [page, setPage] = useState(0);
+  // 引导可以跳过，但跳过只在本次访问有效：不落库、不记住，刷新后仍按事实判定。
+  const [guideSkipped, setGuideSkipped] = useState(false);
   const canRead = !!permissions?.canReadOrganizations;
   const needsOnboarding =
     canRead &&
     (permissions?.readableSchoolIds?.length ?? 0) === 0 &&
     (!!permissions?.canMaintainOrganizations ||
       !!permissions?.canManageAuthorizations);
+  const showGuide = needsOnboarding && !guideSkipped;
 
   const schoolOptions = useQuery({
     queryKey: ["organization-school-options", session.tenantId],
-    enabled: canRead && !needsOnboarding,
+    enabled: canRead && !showGuide,
     queryFn: async ({ signal }) => {
       const { data, response } = await api.GET(
         "/api/organization/school-options",
@@ -68,7 +71,7 @@ export function OrganizationDirectory() {
       "units",
       page,
     ],
-    enabled: canRead && !needsOnboarding,
+    enabled: canRead && !showGuide,
     queryFn: async ({ signal }) => {
       const { data, response } = await api.GET("/api/organization/units", {
         params: { query: { page, size: 20 } },
@@ -114,14 +117,17 @@ export function OrganizationDirectory() {
     );
   }
 
-  if (needsOnboarding) {
+  if (showGuide) {
     return (
       <Page>
         <PageHeader
           title="先建一所学校"
           description="学校是校区、部门、员工、班级和报名的起点；建好后本页会显示完整的组织目录。"
         />
-        <OnboardingGuide onSchoolCreated={() => reload()} />
+        <OnboardingGuide
+          onSchoolCreated={() => reload()}
+          onSkip={() => setGuideSkipped(true)}
+        />
       </Page>
     );
   }

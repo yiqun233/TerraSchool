@@ -22,6 +22,7 @@ import {
   StatusTag,
   Toolbar,
 } from "../../shared/ui/Page";
+import { newRequestId } from "../../shared/ids";
 
 type Item = components["schemas"]["Item"];
 type CreateItem = components["schemas"]["CreateItem"];
@@ -118,7 +119,7 @@ export function DictionaryWorkspace({ identityKey }: { identityKey: string }) {
         pendingCreate.current = {
           key,
           payload,
-          requestId: crypto.randomUUID(),
+          requestId: newRequestId(),
         };
       const token = await csrf();
       const result = await api.POST(

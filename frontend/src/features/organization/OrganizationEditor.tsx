@@ -3,6 +3,7 @@ import { Alert, Button, Form, Input, Modal, Select, Space } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { api, csrf } from "../../shared/http";
 import type { components } from "../../shared/generated/api";
+import { newRequestId } from "../../shared/ids";
 
 type Unit = components["schemas"]["OrganizationUnit"];
 type Create = components["schemas"]["CreateOrganizationUnit"];
@@ -130,7 +131,7 @@ export function OrganizationEditor({
           );
       } else {
         pending.current ??= {
-          requestId: crypto.randomUUID(),
+          requestId: newRequestId(),
           schoolId: values.schoolId,
           kind: values.kind,
           name: values.name,

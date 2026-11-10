@@ -72,6 +72,9 @@ public class AccountAuthorizations {
   }
 
   private String slots(Set<UUID> ids) {
+    // 空集合不能拼成 in ()：那是语法错误，会让“刚开通、还没有任何学校”的机构管理员
+    // 打开账号管理直接 500。用零行子查询表达空集，in 与 not in 都能得到正确语义。
+    if (ids.isEmpty()) return "select null::uuid where false";
     return String.join(",", Collections.nCopies(ids.size(), "?"));
   }
 

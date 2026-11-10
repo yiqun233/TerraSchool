@@ -21,6 +21,12 @@
   background: var(--ts-surface);
 }
 
+/* 未开通的动作不能和已开通的一样显眼：虚线边框 + 透明底，扫一眼就能分出两类。 */
+.cardMuted {
+  border-style: dashed;
+  background: transparent;
+}
+
 .cardHead {
   display: flex;
   align-items: center;

@@ -6,7 +6,7 @@ import { ChangePasswordGate } from "../features/identity/ChangePasswordGate";
 import { useTenantBranding } from "../shared/theme/TenantBrandingProvider";
 import { LoadingBlock } from "../shared/ui/Page";
 import { findNav, TENANT_GROUPS, visibleNavigation } from "./navigation";
-import { signOut, useSession } from "./session";
+import { endSession, signOut, useSession } from "./session";
 import styles from "./app.module.css";
 
 function environment() {
@@ -81,8 +81,8 @@ export function AppShell() {
         error instanceof Error ? error.message : "退出失败，请重试",
       );
     } finally {
-      client.clear();
-      client.setQueryData(["session-context"], null);
+      // 服务端退出成功与否都要回登录页：本地会话留着只会让人卡在已失效的壳层里。
+      endSession(client, session.tenantId);
       setLeaving(false);
     }
   }

@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Modal, Space, Table } from "antd";
 import { api, csrf } from "../../shared/http";
 import type { components } from "../../shared/generated/api";
+import { newRequestId } from "../../shared/ids";
 type Resource = components["schemas"]["ResourceView"];
 type Attachment = components["schemas"]["AttachmentView"];
 
@@ -47,8 +48,7 @@ export function PersonnelAttachments({ row }: { row: Resource }) {
   }
   async function upload() {
     if (sending.current || blocked || (!file && !pending.current)) return;
-    if (!pending.current)
-      pending.current = { id: crypto.randomUUID(), file: file! };
+    if (!pending.current) pending.current = { id: newRequestId(), file: file! };
     sending.current = true;
     setBusy(true);
     setError("");

@@ -16,6 +16,7 @@ import {
 } from "antd";
 import { api, csrf } from "../../shared/http";
 import type { components } from "../../shared/generated/api";
+import { newRequestId } from "../../shared/ids";
 
 type CashRefundView = components["schemas"]["CashRefundView"];
 type StudentBalance = components["schemas"]["StudentBalance"];
@@ -277,7 +278,7 @@ export function CancelHoursModal({
           params: { path: { id: enrollmentId } },
           headers: { [token.headerName!]: token.token! },
           body: {
-            requestId: crypto.randomUUID(),
+            requestId: newRequestId(),
             hours: String(values.hours),
             reason: values.reason || undefined,
             curriculumId: values.curriculumId || undefined,
@@ -427,7 +428,7 @@ export function PrepareRefundModal({
       const { response } = await api.POST("/api/funds/refunds", {
         headers: { [token.headerName!]: token.token! },
         body: {
-          requestId: crypto.randomUUID(),
+          requestId: newRequestId(),
           enrollmentId,
           amount: String(values.amount),
           approvalId: approvalId ?? undefined,

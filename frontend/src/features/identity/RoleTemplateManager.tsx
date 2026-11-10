@@ -17,6 +17,7 @@ import {
   permissionCatalogQuery,
 } from "../../shared/permissions";
 import type { components } from "../../shared/generated/api";
+import { newRequestId } from "../../shared/ids";
 type Template = components["schemas"]["RoleTemplate"];
 type Create = components["schemas"]["CreateRole"];
 type Change = components["schemas"]["RoleChange"];
@@ -203,7 +204,7 @@ export function RoleTemplateForm({
   const snapshot = useRef(
     selected ? { id: selected.id!, version: selected.version! } : null,
   );
-  const requestId = useRef(crypto.randomUUID());
+  const requestId = useRef(newRequestId());
   const pending = useRef<Create | null>(null);
   async function save(values: Draft) {
     if (inFlight.current || blocked) return;

@@ -6,6 +6,7 @@ import {
   type ReactNode,
 } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import type { QueryClient } from "@tanstack/react-query";
 import type { components } from "../shared/generated/api";
 import { login, logout, SessionExpired } from "../shared/http";
 import { clearBrandingCache } from "../shared/theme/TenantBrandingProvider";
@@ -70,10 +71,7 @@ export function SessionProvider({
   });
 
   const onUnauthorized = useCallback(() => {
-    clearBrandingCache(session.tenantId);
-    void client.cancelQueries();
-    client.clear();
-    client.setQueryData(["session-context"], null);
+    endSession(client, session.tenantId);
   }, [client, session.tenantId]);
 
   const reload = useCallback(() => {
@@ -99,6 +97,26 @@ export function useSession() {
   const value = useContext(Context);
   if (!value) throw new Error("useSession 必须在 SessionProvider 内使用");
   return value;
+}
+
+/**
+ * 结束本地会话：退出登录与会话失效共用同一段清理。
+ *
+ * <p>顺序不能换。先把会话查询写回 null，挂载中的 useQuery 立刻看到“未登录”；
+ * 再清其余业务缓存。反过来先 clear() 会把 Query 实例从缓存里摘掉，而页面上的
+ * observer 仍绑在旧实例上，随后写 null 只是新建了一个实例，界面要刷新才回登录页
+ * （2026-11-10 用同版本 query-core 实测：clear 后写 null，observer 读到的仍是旧会话）。
+ *
+ * <p>会话查询本身留在缓存里，是为了让写 null 作用在同一个实例上；其余缓存按身份/租户
+ * 敏感清理，避免上一个账号的数据回灌到下一个会话。
+ */
+export function endSession(client: QueryClient, tenantId: string) {
+  clearBrandingCache(tenantId);
+  void client.cancelQueries();
+  client.setQueryData(["session-context"], null);
+  client.removeQueries({
+    predicate: (query) => query.queryKey[0] !== "session-context",
+  });
 }
 
 /** 登录：成功后清空旧缓存与旧品牌，避免上一个身份的请求或颜色回灌。 */

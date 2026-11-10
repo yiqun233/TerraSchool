@@ -24,6 +24,7 @@ import {
 } from "../../shared/ui/Page";
 import { ResourceDetails } from "./ResourceDetails";
 import { PersonnelAttachments } from "./PersonnelAttachments";
+import { newRequestId } from "../../shared/ids";
 type Kind = "EMPLOYEE" | "TEACHER" | "ROOM";
 type Resource = components["schemas"]["ResourceView"];
 type Create = components["schemas"]["CreateResource"];
@@ -115,7 +116,7 @@ export function ResourceWorkspace({ kind }: { kind: Kind }) {
           kind === "EMPLOYEE"
             ? "员工按学校维护；可绑定登录账号、维护资质附件与外部资料。停用只影响后续选择，历史业务保留。"
             : kind === "TEACHER"
-              ? "教师按学校维护；可关联员工并维护授课资质。停用后不再参与新排课。"
+              ? "教师按学校维护；可对应一名员工并维护授课资质。停用后不再参与新排课。"
               : "教室按学校维护；容量参与排课校验，未设置容量视为不限。"
         }
         actions={
@@ -362,7 +363,7 @@ export function ResourceForm({
     try {
       if (!snapshot.current && !pending.current)
         pending.current = {
-          requestId: crypto.randomUUID(),
+          requestId: newRequestId(),
           schoolId: values.schoolId,
           ...fields(values),
         };
@@ -537,7 +538,11 @@ export function ResourceForm({
         </Form.Item>
       ) : null}
       {kind === "TEACHER" ? (
-        <Form.Item name="employeeId" label="关联员工（可选）">
+        <Form.Item
+          name="employeeId"
+          label="对应员工（可选）"
+          extra="只用来把授课教师和员工档案对上号；外聘、兼职老师可以留空，不影响排课。"
+        >
           <Select
             allowClear
             disabled={disabled || !school}

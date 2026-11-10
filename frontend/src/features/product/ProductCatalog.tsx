@@ -24,6 +24,7 @@ import {
   StatusTag,
   Toolbar,
 } from "../../shared/ui/Page";
+import { newRequestId } from "../../shared/ids";
 
 type Capabilities = components["schemas"]["ProductCapabilities"];
 type Curriculum = components["schemas"]["Curriculum"];
@@ -442,7 +443,7 @@ export function CurriculumCreator({
   async function save() {
     const values = await form.validateFields();
     const body: CreateCurriculum = {
-      requestId: pending.current?.requestId ?? crypto.randomUUID(),
+      requestId: pending.current?.requestId ?? newRequestId(),
       schoolId,
       name: values.name,
       category: values.category || undefined,
@@ -538,7 +539,7 @@ function ProductGroupCreator({
   async function save() {
     const values = await form.validateFields();
     const body: CreateProductGroup = {
-      requestId: pending.current?.requestId ?? crypto.randomUUID(),
+      requestId: pending.current?.requestId ?? newRequestId(),
       schoolId,
       name: values.name,
     };
@@ -765,7 +766,7 @@ export function ProductCreator({
   async function save() {
     const values = await form.validateFields();
     const body: components["schemas"]["CreateProduct"] = {
-      requestId: pending.current?.requestId ?? crypto.randomUUID(),
+      requestId: pending.current?.requestId ?? newRequestId(),
       schoolId,
       curriculumId: values.curriculumId,
       name: values.name,
@@ -873,7 +874,7 @@ export function PriceDrafter({
   async function save() {
     const values = await form.validateFields();
     const body: DraftPriceVersion = {
-      requestId: pending.current?.requestId ?? crypto.randomUUID(),
+      requestId: pending.current?.requestId ?? newRequestId(),
       productId: product.id!,
       price: String(values.price),
       hours: String(values.hours),

@@ -12,6 +12,7 @@ import {
 } from "antd";
 import { api, csrf } from "../../shared/http";
 import type { components } from "../../shared/generated/api";
+import { newRequestId } from "../../shared/ids";
 
 type CustomerRecyclePolicy = components["schemas"]["CustomerRecyclePolicy"];
 
@@ -69,7 +70,7 @@ export function CustomerRecyclePolicyEditor({
     if (pending.current?.fingerprint !== fingerprintValue)
       pending.current = {
         fingerprint: fingerprintValue,
-        requestId: crypto.randomUUID(),
+        requestId: newRequestId(),
       };
     setSaving(true);
     setError("");

@@ -21,6 +21,7 @@ import {
   StatusTag,
 } from "../../shared/ui/Page";
 import { ChannelAddress } from "./ChannelAddress";
+import { newRequestId } from "../../shared/ids";
 
 type Channel = components["schemas"]["Channel"];
 type Draft = { id: string; name: string; active: boolean; version: number };
@@ -114,7 +115,7 @@ export function ChannelWorkspace({
   async function create() {
     if (guard.current || !current) return;
     const input = pending ?? {
-      requestId: crypto.randomUUID(),
+      requestId: newRequestId(),
       schoolId: current,
       name: name.trim(),
     };

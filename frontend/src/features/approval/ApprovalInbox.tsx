@@ -22,6 +22,7 @@ import {
   StatusTag,
   Toolbar,
 } from "../../shared/ui/Page";
+import { newRequestId } from "../../shared/ids";
 
 type ApprovalRequestView = components["schemas"]["ApprovalRequestView"];
 type ApprovalPolicyView = components["schemas"]["ApprovalPolicyView"];
@@ -474,7 +475,7 @@ function RequestEditor({
   onError: (message: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
-  const [requestId, setRequestId] = useState(() => crypto.randomUUID());
+  const [requestId, setRequestId] = useState(() => newRequestId());
   const [form] = Form.useForm();
 
   async function save() {
@@ -522,7 +523,7 @@ function RequestEditor({
         form={form}
         layout="vertical"
         onValuesChange={(changed) => {
-          setRequestId(crypto.randomUUID());
+          setRequestId(newRequestId());
           if (changed.action === "ENROLLMENT_DEFER")
             form.setFieldsValue({ amount: 0 });
         }}

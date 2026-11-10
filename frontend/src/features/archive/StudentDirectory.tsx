@@ -28,6 +28,7 @@ import {
   StatusTag,
   TableFooter,
 } from "../../shared/ui/Page";
+import { newRequestId } from "../../shared/ids";
 
 type StudentProfile = components["schemas"]["StudentProfile"];
 type StudentSummary = components["schemas"]["StudentSummary"];
@@ -225,7 +226,7 @@ export function StudentDirectory({
         body: JSON.stringify({
           exportType: "STUDENT",
           schoolId: exportSchool,
-          requestId: crypto.randomUUID(),
+          requestId: newRequestId(),
           format,
         }),
       });
@@ -734,7 +735,7 @@ export function StudentCreator({
   async function save() {
     const values = await form.validateFields();
     const body: CreateStudent = {
-      requestId: pending.current?.requestId ?? crypto.randomUUID(),
+      requestId: pending.current?.requestId ?? newRequestId(),
       schoolId: values.schoolId,
       name: values.name,
       nameEnglish: values.nameEnglish || undefined,
@@ -1008,7 +1009,7 @@ export function StudentDetail({
     const requestId =
       pendingAssignment.current?.fingerprint === fingerprint
         ? pendingAssignment.current.requestId
-        : crypto.randomUUID();
+        : newRequestId();
     pendingAssignment.current = { fingerprint, requestId };
     setBusy(true);
     setError("");
@@ -1058,7 +1059,7 @@ export function StudentDetail({
     const requestId =
       previous?.fingerprint === fingerprint
         ? previous.requestId
-        : crypto.randomUUID();
+        : newRequestId();
     pendingReverse.current.set(item.sourceStudentId, {
       fingerprint,
       requestId,
@@ -1367,7 +1368,7 @@ function StudentMergeModal({
     const requestId =
       pending.current?.fingerprint === fingerprint
         ? pending.current.requestId
-        : crypto.randomUUID();
+        : newRequestId();
     pending.current = { fingerprint, requestId };
     setBusy(true);
     setError("");

@@ -44,3 +44,23 @@ it("学校创建完成后通知调用方刷新会话", async () => {
   await user.click(screen.getByRole("button", { name: "开通学校" }));
   expect(onSchoolCreated).toHaveBeenCalled();
 });
+
+it("说明学校建好前业务菜单不可用，并可以跳过", async () => {
+  const user = userEvent.setup();
+  const onSkip = vi.fn();
+  render(<OnboardingGuide onSchoolCreated={vi.fn()} onSkip={onSkip} />);
+  expect(
+    screen.getByText(/学校建好之前，学员、报名、教务、财务等业务菜单不可用/),
+  ).toBeTruthy();
+  await user.click(
+    screen.getByRole("button", { name: "先跳过，直接看组织目录" }),
+  );
+  expect(onSkip).toHaveBeenCalled();
+});
+
+it("没传跳过回调时不渲染跳过入口，避免出现点了没反应的按钮", () => {
+  render(<OnboardingGuide onSchoolCreated={vi.fn()} />);
+  expect(
+    screen.queryByRole("button", { name: "先跳过，直接看组织目录" }),
+  ).toBeNull();
+});

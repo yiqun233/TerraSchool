@@ -93,6 +93,14 @@ class SchoolAndResourcesTest {
         .containsExactlyInAnyOrder(f.a, f.b, first.id());
     for (var kind : Kind.values())
       assertThat(resources.capabilities(kind).editableSchoolIds()).contains(first.id());
+    // 委派管理员（非租户管理员）不能借建校升权：只铺他本来就有动作的子集。
+    assertThat(
+            f.count(
+                "select count(*) from identity.account_permission where account_id=? and school_id=? and action='REFUND_PAY'",
+                f.root,
+                first.id()))
+        .as("建校不应给委派管理员额外授予退款付款")
+        .isZero();
     assertThat(
             f.count(
                 "select count(*) from audit.business_event where action='SCHOOL_CREATED' and resource_id=?",

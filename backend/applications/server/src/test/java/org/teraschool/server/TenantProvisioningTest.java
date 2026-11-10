@@ -171,6 +171,22 @@ class TenantProvisioningTest {
                     + " on a.tenant_id=u.tenant_id where a.login=? and u.kind='SCHOOL'",
                 admin))
         .isEqualTo(1);
+
+    // 建校后必须按新学校铺开机构管理员动作：否则学员、报名、教务、财务一进去就 403
+    // （本地测试反馈第 2/6/8 条）。
+    var permissions = json.readTree(get(fresh, "/api/session/permissions").body());
+    var granted = new java.util.ArrayList<String>();
+    permissions.get("grantedActions").forEach(node -> granted.add(node.asText()));
+    assertThat(granted)
+        .as("建校后创建者的动作铺开情况")
+        .contains(
+            "STUDENT_READ",
+            "STUDENT_MAINTAIN",
+            "ENROLLMENT_READ",
+            "TEACHING_READ",
+            "PERIOD_READ",
+            "FUNDS_READ");
+    assertThat(permissions.get("readableSchoolIds")).hasSize(1);
   }
 
   @Test
