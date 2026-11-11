@@ -2,6 +2,8 @@
 #
 # - 会被 Linux 容器直接执行的脚本必须是 LF，否则挂载进容器后 sh 会因 CRLF 报错。
 # - 迁移 SQL 与 Compose/YAML 同理（Flyway 对 CRLF 敏感，报错信息会指向缺字符）。
+# - 文档统一 LF：仓库内 Markdown 的 blob 本就全是 LF，这里只是钉住检出结果，
+#   避免不同编辑器/工具各写一种行尾，后续出现“整篇全改”的假 diff。
 # - Windows 上的 .cmd/.ps1 保留 CRLF。
 *.sh text eol=lf
 *.sql text eol=lf
@@ -10,3 +12,4 @@
 Dockerfile* text eol=lf
 *.cmd text eol=crlf
 *.ps1 text eol=crlf
+*.md text eol=lf

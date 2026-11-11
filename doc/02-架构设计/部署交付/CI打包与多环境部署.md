@@ -1,16 +1,16 @@
-# 部署与发布（CI/CD 与多环境）
+# CI 打包与多环境部署
 
 | 项目 | 内容 |
 | --- | --- |
-| 版本 | v0.1 |
+| 版本 | v0.2 |
 | 状态 | 测试环境已落地；生产环境待启动（负责人确认“生产之后上”） |
 | 创建日期 | 2026-11-09 |
-| 更新日期 | 2026-11-09 |
+| 更新日期 | 2026-11-11 |
 | 维护 | AI 协作者记录，负责人确认后回填结论 |
 | 关联 | [技术决策记录](../../05-决策与问题/技术决策记录.md) DEC-026～028、[部署说明](../../../deploy/README.md) |
 
 本文件描述“在 CI 中打包镜像、用该镜像部署到服务器、支持测试/生产两套环境”的落地方案。
-结论先行：**镜像由 CI 构建并推送到阿里云 ACR，部署只做 `pull + up`，测试与生产用目录、项目名、卷、数据库、对象存储四重隔离。**
+结论先行：**镜像由 CI 构建并推送到阿里云 ACR，部署只做文件搬运后的 `pull + up`，测试与生产用目录、项目名、卷、数据库、对象存储四重隔离。**
 
 ## 1. 已确认决策（2026-11-09 负责人答复）
 
@@ -29,7 +29,7 @@
 | --- | --- | --- |
 | 构建 | 临时 PostgreSQL → Flyway 迁移 → jOOQ 生成 → Maven 打包 → pnpm 构建 → docker build | `deploy/build-images.sh` |
 | 推送 | `docker push $ACR_REGISTRY/$ACR_NAMESPACE/{backend,web}:<commit>`，同时打 `latest` | 同上 |
-| 回退 | 把 `TS_IMAGE_TAG` 指到旧 commit 重新部署 | `deploy/docker-compose.registry.yml` |
+| 回退 | 把 `TS_IMAGE_TAG` 指到旧 commit 重新部署（代码回退；数据回退走备份） | `deploy/docker-compose.registry.yml` |
 | 本地开发 | 不设置 ACR 变量时只构建本地镜像，不推送 | 同左 |
 
 需要四个 CI/CD 变量：`ACR_REGISTRY`、`ACR_NAMESPACE`、`ACR_USERNAME`、`ACR_PASSWORD`。
@@ -72,6 +72,8 @@ docker compose -f docker-compose.yml -f docker-compose.registry.yml \
     └── docker-compose.registry.yml
 ```
 
+compose 与初始化文件由 `deploy/release.sh` 从仓库复制到目标目录，除两个 compose 文件外还包括 `init-db.sql` 与迁移脚本。
+
 | 维度 | 测试 `teraschool-test` | 生产 `teraschool-prod` |
 | --- | --- | --- |
 | 项目名 | `teraschool-test` | `teraschool-prod` |
@@ -95,7 +97,7 @@ docker compose -f docker-compose.yml -f docker-compose.registry.yml \
 生产（待启动）额外两步：
 
 ```bash
-# 部署前强制备份（脚本内实现，失败即中止）
+# 部署前手工强制备份（release.sh 目前不含备份步骤，自动备份待补）
 pg_dump -Fc -Z6 "$PROD_DSN" > /www/backup/prod-$(date +%F-%H%M).dump
 
 # 固定版本部署
@@ -148,9 +150,9 @@ docker login registry-vpc.cn-beijing.aliyuncs.com -u <AccessKeyId>
 落地方式：
 
 - 测试环境：保持容器内 PostgreSQL，**不需要备份**（可随时重建）。
-- 生产环境：RDS 负责实例级备份与 PITR；应用侧再每日 `pg_dump -Fc` 到 OSS，防止误删与逻辑损坏。
+- 生产环境：RDS 负责实例级备份与 PITR；应用侧计划每日 `pg_dump -Fc` 到 OSS（OSS 未购买前先落本地磁盘），防止误删与逻辑损坏。
 - 备份保留：`(待补充：保留天数，建议 7 日备 + 4 周备 + 3 月备)`。
-- 迁移纪律：Flyway 只做前向迁移，**没有自动回滚**；因此每次生产部署前必须完成备份，回滚 = 恢复备份。
+- 迁移纪律：Flyway 只做前向迁移，**没有自动回滚**；因此每次生产部署前必须完成备份，回滚 = 恢复备份（代码回退用 `TS_IMAGE_TAG`，数据回退用备份）。
 - 跨环境迁移（测试 → 生产）：数据不搬运，只搬结构与配置；对象存储需从 SeaweedFS 复制到 OSS（`ossutil cp`）。
 
 ## 8. 待补充事项（生产就绪前逐条确认）
@@ -172,4 +174,4 @@ docker login registry-vpc.cn-beijing.aliyuncs.com -u <AccessKeyId>
 | 2 | 部署后容器镜像来自 ACR | `docker inspect <c> -f '{{.Config.Image}}'` 含 `registry-vpc` |
 | 3 | 重复部署不重建容器 | `up -d --dry-run` 无重建输出 |
 | 4 | 回滚可用 | 改 `TS_IMAGE_TAG` 到旧 commit，容器镜像随之变化 |
-| 5 | 生产部署前有备份 | 脚本在迁移前生成 dump，缺失则中止 |
+| 5 | 生产部署前有备份 | 手工在迁移前生成 dump 并留存；脚本自动备份待补 |

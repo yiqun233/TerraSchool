@@ -11,16 +11,16 @@
 
 ## 一、远程 CI
 
-两份等价配置：
+两份配置（GitLab 为主，GitHub 只覆盖三段验证）：
 
 | 平台 | 文件 | 触发 |
 | --- | --- | --- |
 | GitLab | [`.gitlab-ci.yml`](../../../.gitlab-ci.yml) | push / MR |
 | GitHub | [`.github/workflows/verify.yml`](../../../.github/workflows/verify.yml) | push main / PR |
 
-步骤与本机 `tools/engineering/verify.py` 一一对应：
+步骤与本机 `tools/engineering/verify.py` 基本一致；差异是 CI 用 `-Dtest='!ContainerRuntimeTest,!PermissionMigrationTest'` 排除两项依赖本机环境的用例：
 
-1. 起 `postgres:18` 服务，建四个业务角色（`ts_app`/`ts_identity`/`ts_session`/`ts_audit`）；
+1. 起 `postgres:18` 服务，建六个受限业务角色（`ts_app`/`ts_identity`/`ts_session`/`ts_audit`/`ts_scheduler`/`ts_platform`）；
 2. `flyway:migrate` → `jooq-codegen:generate` → `spotless:check` → `mvn verify`；
 3. 前端 `pnpm install --frozen-lockfile` → `typecheck` → `lint` → `format:check` → `test` → `build`；
 4. 后端 job 上传 surefire 报告。
@@ -29,7 +29,7 @@
 
 **必须知道的两件事**：
 
-- 这两份配置**从未在真实 Runner 上跑过**（本机没有 Runner，且环境离线）。它们按 `verify.py` 的步骤复刻，但没有运行证据；
+- GitLab 配置已在自带 `docker-ci`/`shell` 执行器的 Runner 上实际运行（验证、打包镜像、部署测试环境均有执行记录，执行器取舍见 `.gitlab-ci.yml` 头部注释）；GitHub 配置仍未在托管 Runner 上验证；
 - GitLab 侧用了 `/dev/tcp` 探活与 `psql` 建角色，Runner 镜像需要自带 `psql`（`postgres:18` 镜像有；如果换成精简镜像需要补）。
 
 ## 二、生产首次初始化
@@ -61,5 +61,5 @@ python tools/ops/bootstrap_admin.py --tenant "示例培训" --school "示例校�
 ## 三、仍未覆盖
 
 - Runner 实际执行与失败重跑；
-- 生产部署流水线（镜像构建、灰度、回滚）——本轮只做"验证流水线"；
+- 生产部署流水线（审批闸门、灰度、回滚）——打包与测试环境部署已落地，生产尚未启动；
 - 初始化后没有强制的首次改密流程（只靠提示），可后续加"首次登录必须改密"。

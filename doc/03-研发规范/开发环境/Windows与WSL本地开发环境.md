@@ -2,10 +2,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 版本 | v1.5 |
+| 版本 | v1.6 |
 | 状态 | 当前Windows Java25主链已通过；日常查看已改用WSL专用项目库，早期检查保留为历史 |
 | 创建日期 | 2026-10-31 |
-| 更新日期 | 2026-10-31 |
+| 更新日期 | 2026-11-11 |
 | 维护 | 项目负责人；AI 协作者按实际检查维护 |
 | 关联 | [工程准备规范](../开发前准备与工程规范.md)、[工程工具与质量门禁](../工程质量/工程工具与质量门禁.md)、[执行路线](../../04-执行计划/后续开发执行路线.md)、[根协作规范](../../../AGENT.md) |
 
@@ -23,11 +23,11 @@
 | --- | --- | --- |
 | 系统与源码 | Windows 11；实际项目为 `D:\TeraSchool`，WSL 可见 `/mnt/d/TeraSchool` | 维持源码位置；旧路径 `D:\TSchool` 已不存在，工具工作目录不得继续指向旧路径 |
 | Git | 2.45.1.windows.1 | 日常 Git 在 Windows 使用；版本事实不替代仓库权限和 CI 检查 |
-| Java / javac | Oracle JDK 21.0.9；`JAVA_HOME` 指向 `C:\Program Files\Java\jdk-21` | Java 21 是本轮完整验证可用基线；另已独立解压 Temurin 25.0.5，但本机命名管道被拒，未改全局 PATH |
-| Maven | 3.9.12，实际运行使用上述 Java 21 | 无须重复装全局 Maven；工程建立后以 Wrapper 和受控 JDK 为准 |
+| Java / javac | Adoptium JDK 25.0.5+8；`JAVA_HOME` 指向 `C:\Program Files\Eclipse Adoptium\jdk-25.0.5.8-hotspot\` | JDK 25 是工程硬要求（见第 9 节）；早期 Oracle JDK 21.0.9 结果仅作历史对照 |
+| Maven | 3.9.12，实际运行使用上述 JDK 25 | 无须重复装全局 Maven；工程以 `backend/mvnw` Wrapper 为准 |
 | Node / npm | Node 24.19.0 / npm 11.17.0 | 已具备前端工具基础，项目确定后固定实际版本，不凭已安装宣称依赖可编译 |
 | pnpm / Corepack | pnpm 11.23.0 / Corepack 0.35.0 | 无须重复安装；待验证项目及插件与该 pnpm 大版本的兼容性 |
-| Docker 客户端 / Compose | Docker CLI / Engine 29.6.2；Docker Desktop 4.84.0；Compose v5.3.1；context 为 `desktop-linux` | 用户启动后 Server 和 Linux 引擎接口可连接；随后 Java 21 下真实 Testcontainers 测试已通过；Temurin 25 的本机限制另记 |
+| Docker 客户端 / Compose | Docker CLI / Engine 29.6.2；Docker Desktop 4.84.0；Compose v5.3.1；context 为 `desktop-linux` | 用户启动后 Server 和 Linux 引擎接口可连接；随后 JDK 25 下真实 Testcontainers 测试已通过；早期 Temurin 25 便携版限制另记 |
 | 浏览器与诊断工具 | Edge、Chrome、Python、curl 已安装；Python 可使用 psycopg、Redis 和 boto3 客户端 | 已用于本次只读核验；不是产品新增 Python 运行时，也不能替代版本配套的 Playwright 浏览器 |
 | Windows 专用客户端 | PATH 未找到 psql、redis-cli、AWS CLI | 不属于必装缺口；现有 WSL 客户端及应用 SDK 足够，图形管理工具按个人需要选择 |
 
@@ -93,12 +93,12 @@ PostgreSQL 的顶层 systemd 包装单元显示 active/exited，不能单凭它�
 
 | 优先级/时点 | 缺口或动作 | 本轮处理 |
 | --- | --- | --- |
-| 接口连通已完成；真实集成验证仍待做 | 用户已启动 Docker Desktop；Windows/Ubuntu 各自 `docker version`、`docker info` 和 Compose 均成功，Server 为 Linux Engine 29.6.2 | 关闭引擎/集成接口连通待办；未拉取镜像、创建容器或执行 Testcontainers，后续在明确范围内验证；无须在 Ubuntu 再装一套 Docker Engine |
-| 项目版本锁定时 | 当前 Windows/WSL 都是 JDK 21；如果候选 Java 25 最终采用，则在 Windows 补齐选定发行版的 JDK 25，并统一 IDE、Wrapper/工具链与 CI | 尚未锁版本或安装；不要求 WSL 同时补一套日常 JDK，不凭现有版本强行修改技术候选 |
-| 工程初始化时 | 固定 Node/pnpm、Maven Wrapper、插件/生成器；安装项目依赖及必要浏览器；完成最小构建、生成与检查 | 工具已具备，具体工程依赖尚未安装；没有 jOOQ/Flyway/OpenAPI 或浏览器运行验证 |
-| 数据访问实现前 | 为 TeraSchool 建独立开发库，区分迁移/结构所有权与普通运行角色；普通角色非 owner、无绕过 RLS 权限 | 尚未建库/建角色；不要把 `postgres` 超级用户或当前 `vecuser` 库所有者用作普通业务运行账号 |
-| 文件功能验证时 | 在现有 S3 建受控项目/测试资源范围，区分日常文件与可清理临时对象 | 现有 `tschool-dev` 仅验证读取；后续上传/删除测试需限于明确的临时范围，不能清整个共享桶 |
-| CI 落地时 | 核实并落实 GitLab Linux Runner、容器执行条件、凭据与镜像/依赖来源 | 与本机 Docker 分开；本机可运行不代表远程 Runner 已配置 |
+| 接口连通已完成；真实集成验证仍待做 | 用户已启动 Docker Desktop；Windows/Ubuntu 各自 `docker version`、`docker info` 和 Compose 均成功，Server 为 Linux Engine 29.6.2 | 已落实：Testcontainers 已在 JDK 25 下实际运行（第 9 节）；无须在 Ubuntu 再装一套 Docker Engine |
+| 项目版本锁定时 | JDK 25 已在 Windows 就绪，Wrapper 与 CI 同口径；WSL 保留 OpenJDK 21 作对照 | 已落实：不要求 WSL 另补一套日常 JDK |
+| 工程初始化时 | 固定 Node/pnpm、Maven Wrapper、插件/生成器；安装项目依赖及必要浏览器；完成最小构建、生成与检查 | 已落实：Wrapper、pnpm 与依赖已固定，构建/生成/检查统一走 `tools/engineering/verify.py` |
+| 数据访问实现前 | 为 TeraSchool 建独立开发库，区分迁移/结构所有权与普通运行角色；普通角色非 owner、无绕过 RLS 权限 | 已落实：WSL `teraschool_dev` 与 `ts_migrator`/`ts_app` 等受限角色已建，见[本地启动指南](本地启动与演示验收.md) |
+| 文件功能验证时 | 在现有 S3 建受控项目/测试资源范围，区分日常文件与可清理临时对象 | 已落实：本机私有桶上传/下载/拒绝验收通过（REV-013）；不得清整个共享桶 |
+| CI 落地时 | 核实并落实 GitLab Linux Runner、容器执行条件、凭据与镜像/依赖来源 | GitLab Runner 已执行验证/打包/部署 job；GitHub 托管 Runner 仍未验证 |
 | 对应专项前 | PDF 的匹配浏览器/中文字体；Nginx 代理；pgBackRest/restic 和 SeaweedFS 配套恢复验证工具 | 按功能/上线阶段准备，优先隔离容器或受控环境，不现在安装整套生产监控/备份平台 |
 
 Testcontainers 需要 Docker API 兼容运行时；项目已选的真实 PostgreSQL 集成验证不能由已安装 CLI 或人工登录替代。[Testcontainers 运行环境要求](https://java.testcontainers.org/supported_docker_environment/)。Docker Desktop 官方给出了 WSL2 引擎与发行版集成入口，优先复用现有安装。[Docker Desktop WSL2 集成](https://docs.docker.com/desktop/features/wsl/)。
@@ -133,17 +133,17 @@ Testcontainers 需要 Docker API 兼容运行时；项目已选的真实 Postgre
 完整版本、证据、复现与剩余项以[核心技术组合验证记录](../工程质量/验证记录/20261031-核心技术组合验证记录.md)为准。前文第 2–7 节描述初次检查及当时未做项，已被本节覆盖的项目以本节为准；独立项目正式开发库/角色、正式 JDK 发行版与安全补丁、Linux 应用运行、CI、PDF 和恢复仍待对应任务落实，不把临时角色误记为已建立正式开发账号。
 
 
-## 2026-10-31 重启后的 JDK25 复核
+## 9. 2026-10-31 重启后的 JDK25 复核
 
 用户安装并重启后，JAVA_HOME、java、javac 均指向 `C:\Program Files\Eclipse Adoptium\jdk-25.0.5.8-hotspot\`，版本25.0.5+8。正式工程采用 release25；Java Testcontainers 实际创建、连接并销毁PG成功，历史便携目录的管道限制本次未复现。详见[正式验证记录](../工程质量/验证记录/20261031-正式工程初始化验证记录.md)。此前Java21结果保留为历史，不再作为当前正式开发默认值；Linux交付和CI尚未验证。
 
 
-## LOCAL-DEV-001本地查看环境（当前）
+## 10. LOCAL-DEV-001本地查看环境（已被 WSL 方案替代）
 
 用户明确要求准备可自己启动查看的环境。已新增独立Docker持久PG 127.0.0.1:55432/teraschool_dev、迁移/运行角色分离、一次性合成装载与两个演示账号，以及根start-local.cmd/stop-local.cmd。该入口不用现有WSL5432或vectordb，不改变正式产品PG技术路线，避免依赖共享库管理员凭据。实际地址、密码文件位置、热更新、启停和限制以[本地启动指南](本地启动与演示验收.md)为准；原文“尚未创建项目库”描述此前历史阶段，不再代表当前查看环境状态。
 
 
-## 用户明确改用WSL（当前生效）
+## 11. 用户明确改用WSL（当前生效）
 
 用户要求本地查看复用WSL，并明确允许删除无用vectordb。已将原Docker演示库完整备份、导入Ubuntu PostgreSQL18.6的teraschool_dev，全部项目表行数/内容摘要一致；账号/组织/审计和原密码保留。连接改为127.0.0.1:5432，日常启停不需要Docker、不停止共享PostgreSQL。vectordb已先备份后按授权删除，仅断开该库的一个Navicat空闲连接，vecuser保留；旧Docker卷保留且不再运行。最新入口、限制和实际验证统一见[本地启动指南](本地启动与演示验收.md)，前节55432为历史方案，已被本次明确替代。
 
