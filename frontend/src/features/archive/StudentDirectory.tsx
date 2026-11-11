@@ -16,7 +16,7 @@ import {
   Tag,
   Typography,
 } from "antd";
-import { api, csrf } from "../../shared/http";
+import { api, csrf, saveBlob, SessionExpired } from "../../shared/http";
 import type { components } from "../../shared/generated/api";
 import {
   LoadingBlock,
@@ -107,8 +107,16 @@ export function StudentDirectory({
       return data;
     },
   });
-  // 导出按学校范围进行：取当前账号第一所可读学校。
-  const exportSchool = capabilities.data?.exportableSchools?.[0]?.id;
+  // 导出按学校范围进行：优先跟随列表的“归属学校”筛选；未选或该校不可导出时退回第一所可导出学校。
+  // 之前固定取第一所，筛到 B 校后点导出会静默导出 A 校数据。
+  const exportableSchools = capabilities.data?.exportableSchools ?? [];
+  const exportSchool =
+    schoolId && exportableSchools.some((item) => item.id === schoolId)
+      ? schoolId
+      : exportableSchools[0]?.id;
+  const exportSchoolName = exportableSchools.find(
+    (item) => item.id === exportSchool,
+  )?.name;
   const students = useQuery({
     queryKey: ["archive-students", page, keyword, status, schoolId],
     enabled: !!capabilities.data?.canRead,
@@ -248,6 +256,8 @@ export function StudentDirectory({
       setError("无法创建导出任务，请稍后重试。");
     } finally {
       setExporting(false);
+      // 复位后，切换学校时仍能恢复“最近的导出任务”；一直置 true 会让画面停在旧任务。
+      exportRequestStarted.current = false;
     }
   }
 
@@ -337,7 +347,17 @@ export function StudentDirectory({
                 },
               }}
             >
-              <Button loading={exporting} aria-label="导出">
+              <Button
+                loading={exporting}
+                aria-label={
+                  exportSchoolName ? `导出（${exportSchoolName}）` : "导出"
+                }
+                title={
+                  exportSchoolName
+                    ? `导出学校：${exportSchoolName}`
+                    : "导出学校：未确定"
+                }
+              >
                 导出
               </Button>
             </Dropdown>
@@ -446,20 +466,26 @@ export function StudentDirectory({
                 size="small"
                 onClick={() =>
                   void (async () => {
-                    const response = await fetch(
-                      `/api/exports/${encodeURIComponent(exportTask.id)}/download`,
-                      { credentials: "same-origin" },
-                    );
-                    if (!response.ok) {
-                      setError("下载失败，可能是权限已变更或文件已过期。");
-                      return;
+                    try {
+                      const response = await fetch(
+                        `/api/exports/${encodeURIComponent(exportTask.id)}/download`,
+                        { credentials: "same-origin" },
+                      );
+                      if (response.status === 401) {
+                        onUnauthorized();
+                        return;
+                      }
+                      if (!response.ok) {
+                        setError("下载失败，可能是权限已变更或文件已过期。");
+                        return;
+                      }
+                      saveBlob(
+                        await response.blob(),
+                        `students-${exportTask.schoolId}.${exportTask.format.toLowerCase()}`,
+                      );
+                    } catch {
+                      setError("下载失败，请检查网络后重试。");
                     }
-                    const url = URL.createObjectURL(await response.blob());
-                    const anchor = document.createElement("a");
-                    anchor.href = url;
-                    anchor.download = `students-${exportTask.schoolId}.${exportTask.format.toLowerCase()}`;
-                    anchor.click();
-                    URL.revokeObjectURL(url);
                   })()
                 }
               >
@@ -680,6 +706,7 @@ export function StudentDirectory({
         <StudentCreator
           schools={capabilities.data.maintainableSchools ?? []}
           onCancel={() => setCreating(false)}
+          onUnauthorized={onUnauthorized}
           onCreated={(profile, duplicates) => {
             setCreating(false);
             setHint(duplicates);
@@ -719,6 +746,7 @@ export function StudentCreator({
   schools,
   onCancel,
   onCreated,
+  onUnauthorized,
 }: {
   schools: components["schemas"]["StudentSchoolOption"][];
   onCancel: () => void;
@@ -726,6 +754,7 @@ export function StudentCreator({
     profile: StudentProfile | undefined,
     duplicates: DuplicateHint[],
   ) => void;
+  onUnauthorized: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -733,7 +762,9 @@ export function StudentCreator({
   const pending = useRef<CreateStudent | null>(null);
 
   async function save() {
-    const values = await form.validateFields();
+    // 校验失败时 antd 以 reject 返回错误详情；接住它，避免变成未处理的 Promise 拒绝。
+    const values = await form.validateFields().catch(() => null);
+    if (!values) return;
     const body: CreateStudent = {
       requestId: pending.current?.requestId ?? newRequestId(),
       schoolId: values.schoolId,
@@ -766,6 +797,10 @@ export function StudentCreator({
         headers: { [token.headerName!]: token.token! },
         body: pending.current,
       });
+      if (response.status === 401) {
+        onUnauthorized();
+        return;
+      }
       if (!response.ok) {
         if (response.status >= 500 || response.status === 408) {
           setError("结果尚未确认，请使用相同内容重试。");
@@ -782,7 +817,11 @@ export function StudentCreator({
       }
       pending.current = null;
       onCreated(data?.profile, data?.possibleDuplicates ?? []);
-    } catch {
+    } catch (failure) {
+      if (failure instanceof SessionExpired) {
+        onUnauthorized();
+        return;
+      }
       setError("无法获取安全令牌或网络中断，请重试。");
     } finally {
       setBusy(false);
@@ -1339,7 +1378,16 @@ function StudentMergeModal({
     enabled: keyword.trim().length >= 2,
     queryFn: async ({ signal }) => {
       const { data, response } = await api.GET("/api/archive/students", {
-        params: { query: { search: keyword.trim(), page: 0, size: 20 } },
+        params: {
+          query: {
+            search: keyword.trim(),
+            // 主档必须同校且可用：把条件交给服务端，避免先取 20 条再在客户端筛掉大半。
+            schoolId: source.schoolId,
+            status: "ACTIVE",
+            page: 0,
+            size: 20,
+          },
+        },
         signal,
       });
       if (response.status === 401) {

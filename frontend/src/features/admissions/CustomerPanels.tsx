@@ -1,5 +1,6 @@
 import { Alert, Button, Card, Space, Table } from "antd";
 import type { components } from "../../shared/generated/api";
+import { SimplePager } from "../../shared/ui/Page";
 
 type Customer = components["schemas"]["Customer"];
 type CustomerReminder = NonNullable<
@@ -122,13 +123,13 @@ export function CustomerPoolCard({
         ]}
       />
       <Space style={{ marginTop: 8 }}>
-        <Button disabled={page === 0 || busy} onClick={onPrev}>
-          上一页
-        </Button>
-        <span>第 {page + 1} 页</span>
-        <Button disabled={!hasMore || busy} onClick={onNext}>
-          下一页
-        </Button>
+        <SimplePager
+          page={page}
+          hasMore={hasMore}
+          onPrev={onPrev}
+          onNext={onNext}
+          disabled={busy}
+        />
       </Space>
     </Card>
   );

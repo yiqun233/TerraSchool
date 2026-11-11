@@ -1,5 +1,10 @@
 import { lazy } from "react";
-import { createBrowserRouter, Navigate, useRouteError } from "react-router-dom";
+import {
+  createBrowserRouter,
+  Navigate,
+  useNavigate,
+  useRouteError,
+} from "react-router-dom";
 import { Button } from "antd";
 import { AppShell } from "./AppShell";
 import { PendingAccessPage } from "./PendingAccessPage";
@@ -159,6 +164,7 @@ function StartPage() {
 }
 
 function NotFound() {
+  const navigate = useNavigate();
   return (
     <Page>
       <PageHeader
@@ -170,7 +176,8 @@ function NotFound() {
           title="没有找到这个页面"
           hint="请从左侧导航进入已有功能；未实现的功能会标记“即将开放”。"
           action={
-            <Button type="primary" href="/organization">
+            // 站内跳转走路由，不整页重载：重载会丢掉当前会话缓存和懒加载已取到的分包。
+            <Button type="primary" onClick={() => navigate("/organization")}>
               回到组织目录
             </Button>
           }

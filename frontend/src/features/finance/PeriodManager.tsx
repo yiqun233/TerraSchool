@@ -82,7 +82,13 @@ export function PeriodManager({
         params: { query: { schoolId: current!, year } },
         signal,
       });
-      if (!response.ok || !data) return [];
+      if (response.status === 401) {
+        onUnauthorized();
+        throw new Error("登录已失效，请重新登录");
+      }
+      // 不能把失败当成“这个月没有期间”：空表和读不到是两种状态，用户要能区分。
+      if (!response.ok || !data)
+        throw new Error("无法读取财务期间，请稍后重试");
       return data;
     },
   });
@@ -500,11 +506,24 @@ export function PeriodManager({
           Q62 确认。
         </Typography.Text>
       </Card>
+      {periods.error ? (
+        <Alert
+          type="error"
+          title={periods.error.message}
+          showIcon
+          action={
+            <Button size="small" onClick={() => void periods.refetch()}>
+              重试
+            </Button>
+          }
+        />
+      ) : null}
       <Table
         rowKey="period"
         size="small"
-        loading={periods.isPending}
-        dataSource={periods.data ?? []}
+        loading={periods.isPending || periods.isFetching}
+        dataSource={periods.error ? [] : (periods.data ?? [])}
+        locale={{ emptyText: "该年度还没有财务期间记录" }}
         pagination={false}
         columns={[
           { title: "期间", dataIndex: "period" },

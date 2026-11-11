@@ -304,6 +304,7 @@ it("新建成功后展示重复提示且不再自动合并", { timeout: 15000 },
       schools={capabilities.maintainableSchools}
       onCancel={vi.fn()}
       onCreated={created}
+      onUnauthorized={vi.fn()}
     />,
   );
   await user.click(screen.getByRole("combobox", { name: "归属学校" }));
@@ -333,6 +334,7 @@ it(
         schools={capabilities.maintainableSchools}
         onCancel={vi.fn()}
         onCreated={vi.fn()}
+        onUnauthorized={vi.fn()}
       />,
     );
     await user.click(screen.getByRole("combobox", { name: "归属学校" }));

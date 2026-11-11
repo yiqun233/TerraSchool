@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Alert, Button, Space, Typography } from "antd";
-import { csrf } from "../../shared/http";
+import { csrf, saveBlob } from "../../shared/http";
 import { newRequestId } from "../../shared/ids";
 
 type ExportType = "ENROLLMENT" | "RECEIPTS" | "LESSONS";
@@ -156,12 +156,10 @@ export function PersistentCsvExportButton({
       );
       if (!response.ok)
         throw new Error("下载失败，可能是权限已变更或文件已过期");
-      const url = URL.createObjectURL(await response.blob());
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = `${exportType.toLowerCase()}-${task.id}.${task.format.toLowerCase()}`;
-      anchor.click();
-      URL.revokeObjectURL(url);
+      saveBlob(
+        await response.blob(),
+        `${exportType.toLowerCase()}-${task.id}.${task.format.toLowerCase()}`,
+      );
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "下载失败");
     }

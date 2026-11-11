@@ -204,7 +204,8 @@ export function RoleTemplateForm({
   const snapshot = useRef(
     selected ? { id: selected.id!, version: selected.version! } : null,
   );
-  const requestId = useRef(newRequestId());
+  // 请求身份只在首次渲染生成一次；useRef 的参数每次渲染都会求值，不能直接写 newRequestId()。
+  const [requestId] = useState(() => newRequestId());
   const pending = useRef<Create | null>(null);
   async function save(values: Draft) {
     if (inFlight.current || blocked) return;
@@ -215,7 +216,7 @@ export function RoleTemplateForm({
     let sent = false;
     if (!snapshot.current && !uncertain)
       pending.current = {
-        requestId: requestId.current,
+        requestId,
         code: values.code,
         name: values.name,
         actions: values.actions ?? [],

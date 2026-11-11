@@ -17,10 +17,7 @@ export function PasswordChangePage({
     <div className={styles.page}>
       <div className={styles.gateCard}>
         <h1 className={styles.gateTitle}>请先设置新密码</h1>
-        <p className={styles.hint}>
-          这是账号首次登录或被管理员重置后的第一次登录，必须先修改密码。
-          新密码至少 12 位，不能与登录名或当前密码相同，也不能纯为数字或字母。
-        </p>
+        {/* 说明与规则由 ChangePasswordGate 统一渲染，这里再写一遍会重复两段同样的文字。 */}
         <ChangePasswordGate
           variant="modal"
           onChanged={onChanged}

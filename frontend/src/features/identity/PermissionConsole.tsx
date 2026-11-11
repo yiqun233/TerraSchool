@@ -163,7 +163,7 @@ function MineTab({
     (mine.actions ?? []).map((grant) => [grant.action ?? "", grant]),
   );
   const total = catalog.length;
-  const granted = [...grants.values()].length;
+  const granted = grants.size;
   const has = (action: PermissionAction) => !!grants.get(action.code ?? "");
   const matches = (action: PermissionAction) =>
     filter === "all" ? true : filter === "granted" ? has(action) : !has(action);

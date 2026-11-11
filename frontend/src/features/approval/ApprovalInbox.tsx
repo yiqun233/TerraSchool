@@ -89,7 +89,13 @@ export function ApprovalInbox({
         params: { query: { schoolId: current! } },
         signal,
       });
-      if (!response.ok || !data) return [];
+      if (response.status === 401) {
+        onUnauthorized();
+        throw new Error("登录已失效，请重新登录");
+      }
+      // 读不到策略不等于“未配置策略”：后者会免审批放行，两者不能混成同一个空表。
+      if (!response.ok || !data)
+        throw new Error("无法读取审批策略，请稍后重试");
       return data;
     },
   });
@@ -101,25 +107,53 @@ export function ApprovalInbox({
         params: { query: { schoolId: current! } },
         signal,
       });
-      if (!response.ok || !data) return [];
+      if (response.status === 401) {
+        onUnauthorized();
+        throw new Error("登录已失效，请重新登录");
+      }
+      if (!response.ok || !data)
+        throw new Error("无法读取审批记录，请稍后重试");
       return data;
     },
   });
 
-  async function decide(request: ApprovalRequestView, decision: string) {
+  // 审批、撤回、执行延期与失效都是一次性动作：请求在途时必须挡住第二次点击，
+  // 否则第二次会拿到 409，用户会以为第一次也失败了。
+  const [acting, setActing] = useState(false);
+  const [expireReason, setExpireReason] = useState("");
+
+  async function runAction(action: () => Promise<void>) {
+    if (acting) return;
+    setActing(true);
     setError("");
-    const token = await csrf();
-    const { response } = await api.POST("/api/approval/requests/{id}/decide", {
-      params: { path: { id: request.id! } },
-      headers: { [token.headerName!]: token.token! },
-      body: { expectedVersion: request.version, decision, note: undefined },
-    });
-    if (response.status === 409) {
-      setError("审批单已变化或不能审批自己的单据。");
-    } else if (!response.ok) {
-      setError("审批失败，请核对审批权限。");
+    try {
+      await action();
+    } catch {
+      // 网络中断时无法证明服务端没提交，只能提示刷新核对，不能当作失败让用户重试。
+      setError("网络中断，操作结果尚未确认，请刷新后核对。");
+    } finally {
+      setActing(false);
     }
-    await requests.refetch();
+  }
+
+  async function decide(request: ApprovalRequestView, decision: string) {
+    await runAction(async () => {
+      const token = await csrf();
+      const { response } = await api.POST(
+        "/api/approval/requests/{id}/decide",
+        {
+          params: { path: { id: request.id! } },
+          headers: { [token.headerName!]: token.token! },
+          body: { expectedVersion: request.version, decision, note: undefined },
+        },
+      );
+      if (response.status === 409) {
+        setError("审批单已变化或不能审批自己的单据。");
+      } else if (!response.ok) {
+        setError("审批失败，请核对审批权限。");
+      }
+      await requests.refetch();
+    });
   }
 
   async function executeDefer(request: ApprovalRequestView) {
@@ -127,61 +161,69 @@ export function ApprovalInbox({
       setError("延期申请缺少报名或新有效截止日，请核对审批单。");
       return;
     }
-    setError("");
-    const token = await csrf();
-    const { response } = await api.POST(
-      "/api/enrollment/enrollments/{id}/defer",
-      {
-        params: { path: { id: request.enrollmentId } },
-        headers: { [token.headerName!]: token.token! },
-        body: { approvalId: request.id, validUntil: request.requestedUntil },
-      },
-    );
-    if (response.status === 409) {
-      setError("延期申请已消耗、日期不再有效或报名版本已变化，请刷新核对。");
-    } else if (!response.ok) {
-      setError("延期执行失败，请核对报名维护权限、有效期和审批策略。");
-    }
-    await requests.refetch();
+    await runAction(async () => {
+      const token = await csrf();
+      const { response } = await api.POST(
+        "/api/enrollment/enrollments/{id}/defer",
+        {
+          params: { path: { id: request.enrollmentId! } },
+          headers: { [token.headerName!]: token.token! },
+          body: { approvalId: request.id!, validUntil: request.requestedUntil },
+        },
+      );
+      if (response.status === 409) {
+        setError("延期申请已消耗、日期不再有效或报名版本已变化，请刷新核对。");
+      } else if (!response.ok) {
+        setError("延期执行失败，请核对报名维护权限、有效期和审批策略。");
+      }
+      await requests.refetch();
+    });
   }
 
   async function withdraw(request: ApprovalRequestView) {
-    setError("");
-    const token = await csrf();
-    const { response } = await api.POST(
-      "/api/approval/requests/{id}/withdraw",
-      {
-        params: { path: { id: request.id! } },
-        headers: { [token.headerName!]: token.token! },
-        body: { expectedVersion: request.version },
-      },
-    );
-    if (response.status === 409) {
-      setError("审批单已处理或版本已变化，请刷新记录。 ");
-    } else if (!response.ok) {
-      setError("撤回失败，请确认这是本人提交的待审申请。 ");
-    }
-    await requests.refetch();
+    await runAction(async () => {
+      const token = await csrf();
+      const { response } = await api.POST(
+        "/api/approval/requests/{id}/withdraw",
+        {
+          params: { path: { id: request.id! } },
+          headers: { [token.headerName!]: token.token! },
+          body: { expectedVersion: request.version },
+        },
+      );
+      if (response.status === 409) {
+        setError("审批单已处理或版本已变化，请刷新记录。");
+      } else if (!response.ok) {
+        setError("撤回失败，请确认这是本人提交的待审申请。");
+      }
+      await requests.refetch();
+    });
   }
 
   async function expire() {
     if (!expiring) return;
-    const reason = window.prompt("请输入审批单失效原因")?.trim();
+    const reason = expireReason.trim();
     if (!reason) return;
-    setError("");
-    const token = await csrf();
-    const { response } = await api.POST("/api/approval/requests/{id}/expire", {
-      params: { path: { id: expiring.id! } },
-      headers: { [token.headerName!]: token.token! },
-      body: { expectedVersion: expiring.version, reason },
+    const target = expiring;
+    await runAction(async () => {
+      const token = await csrf();
+      const { response } = await api.POST(
+        "/api/approval/requests/{id}/expire",
+        {
+          params: { path: { id: target.id! } },
+          headers: { [token.headerName!]: token.token! },
+          body: { expectedVersion: target.version, reason },
+        },
+      );
+      setExpiring(null);
+      setExpireReason("");
+      if (response.status === 409) {
+        setError("审批单已处理或版本已变化，请刷新记录。");
+      } else if (!response.ok) {
+        setError("失效操作失败，请核对审批权限和失效原因。");
+      }
+      await requests.refetch();
     });
-    setExpiring(null);
-    if (response.status === 409) {
-      setError("审批单已处理或版本已变化，请刷新记录。");
-    } else if (!response.ok) {
-      setError("失效操作失败，请核对审批权限和失效原因。");
-    }
-    await requests.refetch();
   }
 
   if (capabilities.error)
@@ -304,7 +346,8 @@ export function ApprovalInbox({
         <Table
           rowKey="action"
           size="small"
-          dataSource={policies.data ?? []}
+          loading={policies.isPending || policies.isFetching}
+          dataSource={policies.error ? [] : (policies.data ?? [])}
           pagination={false}
           columns={[
             {
@@ -341,13 +384,38 @@ export function ApprovalInbox({
           ]}
           locale={{ emptyText: "未配置策略：当前视为免审批（生产应显式配置）" }}
         />
+        {policies.error ? (
+          <Alert
+            type="error"
+            title={policies.error.message}
+            showIcon
+            action={
+              <Button size="small" onClick={() => void policies.refetch()}>
+                重试
+              </Button>
+            }
+          />
+        ) : null}
       </Card>
       <Card title="审批记录" size="small" style={{ marginTop: 16 }}>
+        {requests.error ? (
+          <Alert
+            type="error"
+            title={requests.error.message}
+            showIcon
+            style={{ marginBottom: 12 }}
+            action={
+              <Button size="small" onClick={() => void requests.refetch()}>
+                重试
+              </Button>
+            }
+          />
+        ) : null}
         <Table
           rowKey="id"
           size="small"
-          loading={requests.isPending}
-          dataSource={requests.data ?? []}
+          loading={requests.isPending || requests.isFetching}
+          dataSource={requests.error ? [] : (requests.data ?? [])}
           pagination={false}
           columns={[
             {
@@ -390,17 +458,23 @@ export function ApprovalInbox({
                   <Button
                     size="small"
                     danger
+                    disabled={acting}
                     onClick={() => void withdraw(request)}
                   >
                     撤回
                   </Button>
                 ) : school?.canDecide && request.status === "PENDING" ? (
                   <Space>
-                    <Button size="small" onClick={() => setExpiring(request)}>
+                    <Button
+                      size="small"
+                      disabled={acting}
+                      onClick={() => setExpiring(request)}
+                    >
                       设为失效
                     </Button>
                     <Button
                       size="small"
+                      disabled={acting}
                       onClick={() => void decide(request, "APPROVED")}
                     >
                       通过
@@ -408,6 +482,7 @@ export function ApprovalInbox({
                     <Button
                       size="small"
                       danger
+                      disabled={acting}
                       onClick={() => void decide(request, "REJECTED")}
                     >
                       驳回
@@ -418,6 +493,7 @@ export function ApprovalInbox({
                   !request.usedAt ? (
                   <Button
                     size="small"
+                    disabled={acting}
                     onClick={() => void executeDefer(request)}
                   >
                     执行延期
@@ -452,14 +528,31 @@ export function ApprovalInbox({
       <Modal
         title="审批申请设为失效"
         open={!!expiring}
-        onCancel={() => setExpiring(null)}
+        onCancel={() => {
+          setExpiring(null);
+          setExpireReason("");
+        }}
         onOk={() => void expire()}
         okText="确认失效"
+        okButtonProps={{
+          danger: true,
+          loading: acting,
+          disabled: !expireReason.trim(),
+        }}
         cancelText="返回"
       >
         <Typography.Paragraph>
           此操作会关闭待审申请并保留审批人和原因记录；已审批单不能执行此操作。
         </Typography.Paragraph>
+        <Typography.Paragraph>失效原因</Typography.Paragraph>
+        <Input.TextArea
+          rows={2}
+          maxLength={200}
+          showCount
+          value={expireReason}
+          placeholder="例如：客户已取消，审批不再需要"
+          onChange={(event) => setExpireReason(event.target.value)}
+        />
       </Modal>
     </Page>
   );

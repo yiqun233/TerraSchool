@@ -70,7 +70,9 @@ export default function ProvisionWizard({
   }
 
   async function submit() {
-    const values = await form.validateFields();
+    // 校验失败时 antd 以 reject 返回错误详情；接住它，避免变成未处理的 Promise 拒绝。
+    const values = await form.validateFields().catch(() => null);
+    if (!values) return;
     const initial = password || generatePassword();
     setPassword(initial);
     setBusy(true);

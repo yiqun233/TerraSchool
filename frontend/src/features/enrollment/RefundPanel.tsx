@@ -14,7 +14,7 @@ import {
   Tag,
   Typography,
 } from "antd";
-import { api, csrf } from "../../shared/http";
+import { api, csrf, SessionExpired } from "../../shared/http";
 import type { components } from "../../shared/generated/api";
 import { newRequestId } from "../../shared/ids";
 
@@ -80,21 +80,38 @@ export function RefundPanel({
   });
 
   async function cancelRefund(refund: CashRefundView) {
+    if (cancelling) return;
     setError("");
-    const token = await csrf();
-    const { response } = await api.POST("/api/funds/refunds/{id}/cancel", {
-      params: { path: { id: refund.id! } },
-      headers: { [token.headerName!]: token.token! },
-      body: { expectedVersion: refund.version },
-    });
-    if (response.status === 409) {
-      setError("退款单状态已变化，请刷新后再操作。");
-    } else if (!response.ok) {
-      setError("取消失败，请核对现金退款权限。");
+    setCancelling(true);
+    try {
+      const token = await csrf();
+      const { response } = await api.POST("/api/funds/refunds/{id}/cancel", {
+        params: { path: { id: refund.id! } },
+        headers: { [token.headerName!]: token.token! },
+        body: { expectedVersion: refund.version },
+      });
+      if (response.status === 401) {
+        onUnauthorized();
+        return;
+      }
+      if (response.status === 409) {
+        setError("退款单状态已变化，请刷新后再操作。");
+      } else if (!response.ok) {
+        setError("取消失败，请核对现金退款权限。");
+      }
+      await refunds.refetch();
+      await balance.refetch();
+      onChanged();
+    } catch (failure) {
+      // 会话在 csrf 阶段失效时不会再进入上面的 401 分支，必须在这里分流回登录页。
+      if (failure instanceof SessionExpired) {
+        onUnauthorized();
+        return;
+      }
+      setError("网络中断，取消结果尚未确认，请刷新后核对。");
+    } finally {
+      setCancelling(false);
     }
-    await refunds.refetch();
-    await balance.refetch();
-    onChanged();
   }
 
   return (

@@ -183,7 +183,13 @@ export function TeachingWorkspace({
         params: { query: { schoolId: current! } },
         signal,
       });
-      if (!response.ok || !data) return [];
+      if (response.status === 401) {
+        onUnauthorized();
+        throw new Error("登录已失效，请重新登录");
+      }
+      // 读不到课程不能当成“没有课程”：建班下拉会因此空白，用户会以为是数据缺失。
+      if (!response.ok || !data)
+        throw new Error("无法读取课程目录，请稍后重试");
       return data.curricula ?? [];
     },
   });

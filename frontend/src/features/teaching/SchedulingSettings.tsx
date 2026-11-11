@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Alert,
@@ -522,8 +522,23 @@ export function PolicyTab({
 }) {
   const [busy, setBusy] = useState(false);
   const [form] = Form.useForm();
+  // 策略是异步读回来的：initialValues 只在首次挂载生效，数据晚到会让表单停在硬编码默认值，
+  // 用户直接点保存就把“默认策略”当成现状写回服务端。
+  useEffect(() => {
+    if (!policy) return;
+    form.setFieldsValue({
+      blockTeacherUnavailable: policy.blockTeacherUnavailable ?? true,
+      blockRoomUnavailable: policy.blockRoomUnavailable ?? true,
+      minGapMinutes: policy.minGapMinutes ?? 0,
+    });
+  }, [policy, form]);
 
   async function save() {
+    // 没有读到版本号时不能提交：服务端在 expectedVersion 缺失时会跳过乐观锁。
+    if (!policy) {
+      onError("排课策略尚未加载完成，请刷新后重试。");
+      return;
+    }
     let values;
     try {
       values = await form.validateFields();
@@ -540,7 +555,7 @@ export function PolicyTab({
           blockTeacherUnavailable: values.blockTeacherUnavailable,
           blockRoomUnavailable: values.blockRoomUnavailable,
           minGapMinutes: Number(values.minGapMinutes ?? 0),
-          expectedVersion: policy?.version,
+          expectedVersion: policy.version,
         },
       });
       if (response.status === 409) {
@@ -613,7 +628,7 @@ export function PolicyTab({
             type="primary"
             onClick={() => void save()}
             loading={busy}
-            disabled={busy}
+            disabled={busy || !policy}
           >
             保存策略
           </Button>

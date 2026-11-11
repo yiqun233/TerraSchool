@@ -1,18 +1,8 @@
 import { useState } from "react";
 import { signOut, type PlatformOperator } from "./api";
 import TenantList from "./TenantList";
+import { currentEnvironment } from "../shared/env";
 import styles from "./platform.module.css";
-
-function environment() {
-  const value =
-    (import.meta.env.VITE_APP_ENV as string | undefined) ??
-    import.meta.env.MODE;
-  if (value === "production")
-    return { label: "生产环境", className: styles.envProduction };
-  if (value === "preview" || value === "staging")
-    return { label: "预览环境", className: styles.envPreview };
-  return { label: "本地开发", className: "" };
-}
 
 /** 平台端外壳：固定主题、固定导航；租户品牌不会进入这里。 */
 export default function PlatformConsole({
@@ -23,7 +13,13 @@ export default function PlatformConsole({
   onSessionLost: () => void;
 }) {
   const [leaving, setLeaving] = useState(false);
-  const env = environment();
+  const env = currentEnvironment();
+  const envClass =
+    env.tone === "production"
+      ? styles.envProduction
+      : env.tone === "preview"
+        ? styles.envPreview
+        : "";
 
   async function leave() {
     setLeaving(true);
@@ -111,9 +107,7 @@ export default function PlatformConsole({
             平台运营 / <b>租户管理</b>
           </div>
           <div className={styles.topActions}>
-            <span className={`${styles.env} ${env.className}`}>
-              {env.label}
-            </span>
+            <span className={`${styles.env} ${envClass}`}>{env.label}</span>
             <button
               type="button"
               className={styles.textAction}

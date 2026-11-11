@@ -262,14 +262,29 @@ export function validateCourseLines(
   selected: { hours?: string; price?: string } | undefined,
 ): string | null {
   if (!selected || lines.length === 0) return null;
-  const hours = lines.reduce(
-    (total, line) => total + Number(line.hours ?? 0),
-    0,
-  );
-  const amount = lines.reduce(
-    (total, line) => total + Number(line.amount ?? 0),
-    0,
-  );
+  const parse = (text: string | undefined) => {
+    const value = (text ?? "").trim();
+    return value === "" ? null : Number(value);
+  };
+  // 先逐行解析：留空或非法值不能当 0 参与合计，否则 "NaN" 会一路流进提交体。
+  const numbers = lines.map((line) => ({
+    hours: parse(line.hours),
+    amount: parse(line.amount),
+  }));
+  if (
+    numbers.some(
+      (item) =>
+        item.hours === null ||
+        item.amount === null ||
+        !Number.isFinite(item.hours) ||
+        !Number.isFinite(item.amount) ||
+        item.hours < 0 ||
+        item.amount < 0,
+    )
+  )
+    return "每行明细都要填写课时与费用";
+  const hours = numbers.reduce((total, item) => total + item.hours!, 0);
+  const amount = numbers.reduce((total, item) => total + item.amount!, 0);
   if (Math.abs(hours - Number(selected.hours ?? 0)) > 0.001)
     return `课程课时合计 ${hours} 与价格版本 ${selected.hours} 不一致`;
   if (Math.abs(amount - Number(selected.price ?? 0)) > 0.005)
@@ -623,8 +638,9 @@ export function EnrollmentCreator({
           courses: split
             ? lines.map((line) => ({
                 curriculumId: line.curriculumId!,
-                hours: Number(line.hours).toFixed(2),
-                amount: Number(line.amount).toFixed(2),
+                // 直接透传十进制文本：再走一遍 Number/toFixed 会二次舍入（1.005 → "1.00"）。
+                hours: line.hours!.trim(),
+                amount: line.amount!.trim(),
               }))
             : undefined,
         },

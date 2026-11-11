@@ -235,15 +235,6 @@ export function ProductCatalogWorkspace({
                   <StatusTag tone="neutral">停用</StatusTag>
                 ),
             },
-            {
-              title: "操作",
-              render: (_: unknown, group: ProductGroup) =>
-                school?.maintainable ? (
-                  <Button size="small" onClick={() => setEditingGroup(group)}>
-                    编辑
-                  </Button>
-                ) : null,
-            },
           ]}
           locale={{ emptyText: "该学校还没有课程" }}
         />
@@ -272,6 +263,16 @@ export function ProductCatalogWorkspace({
                 ) : (
                   <StatusTag tone="neutral">停用</StatusTag>
                 ),
+            },
+            {
+              // 编辑入口属于产品组本身：之前它挂在课程表上，点“编辑”会用课程 id 去改产品组。
+              title: "操作",
+              render: (_: unknown, group: ProductGroup) =>
+                school?.maintainable ? (
+                  <Button size="small" onClick={() => setEditingGroup(group)}>
+                    编辑
+                  </Button>
+                ) : null,
             },
           ]}
           locale={{ emptyText: "该学校还没有产品组" }}

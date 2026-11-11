@@ -7,18 +7,8 @@ import { useTenantBranding } from "../shared/theme/TenantBrandingProvider";
 import { LoadingBlock } from "../shared/ui/Page";
 import { findNav, TENANT_GROUPS, visibleNavigation } from "./navigation";
 import { endSession, signOut, useSession } from "./session";
+import { currentEnvironment } from "../shared/env";
 import styles from "./app.module.css";
-
-function environment() {
-  const value =
-    (import.meta.env.VITE_APP_ENV as string | undefined) ??
-    import.meta.env.MODE;
-  if (value === "production")
-    return { label: "生产环境", className: styles.envProduction };
-  if (value === "preview" || value === "staging")
-    return { label: "预览环境", className: styles.envPreview };
-  return { label: "本地开发", className: "" };
-}
 
 /**
  * 租户端外壳：只负责身份、导航、顶栏与内容区。
@@ -35,7 +25,13 @@ export function AppShell() {
   const [navOpen, setNavOpen] = useState(false);
   const [passwordOpen, setPasswordOpen] = useState(false);
   const [leaving, setLeaving] = useState(false);
-  const env = environment();
+  const env = currentEnvironment();
+  const envClass =
+    env.tone === "production"
+      ? styles.envProduction
+      : env.tone === "preview"
+        ? styles.envPreview
+        : "";
   const current = findNav(location.pathname);
   const displayName = branding.displayName || session.tenantName;
   const markText =
@@ -192,10 +188,7 @@ export function AppShell() {
             )}
           </div>
           <div className={styles.topActions}>
-            <span
-              className={`${styles.env} ${env.className}`}
-              title="当前运行环境"
-            >
+            <span className={`${styles.env} ${envClass}`} title="当前运行环境">
               {env.label}
             </span>
             <Tooltip title="帮助将在后续版本开放">

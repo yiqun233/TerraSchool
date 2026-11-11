@@ -854,6 +854,8 @@ export function CustomerWorkspace({
             setSchoolId(value);
             setPage(0);
             setChannelPage(0);
+            // 公海分页也要归零：它的 queryKey 含 page，不重置会去请求新学校的第 N 页。
+            setPoolPage(0);
             setChannelId(undefined);
             setPhoneDetail(null);
             setFollowupTarget(null);

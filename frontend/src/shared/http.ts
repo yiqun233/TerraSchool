@@ -42,6 +42,24 @@ export async function logout() {
     throw new Error("退出失败，请重试");
 }
 
+/**
+ * 触发一次浏览器下载。
+ *
+ * 锚点必须先进入文档再点击，且不能在点击后立刻 revoke：Safari 与部分 Firefox
+ * 版本此时还没读完 blob，会得到 0 字节或被中断的文件。延迟释放对结果没有副作用。
+ */
+export function saveBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.rel = "noopener";
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 /** 下载 CSV：走浏览器下载，服务端已按权限处理并写审计。 */
 export async function downloadCsv(
   path: string,
@@ -63,13 +81,7 @@ export async function downloadCsv(
     );
     return false;
   }
-  const blob = await response.blob();
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  link.click();
-  URL.revokeObjectURL(url);
+  saveBlob(await response.blob(), filename);
   return true;
 }
 

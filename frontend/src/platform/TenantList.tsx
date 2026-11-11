@@ -297,6 +297,12 @@ export default function TenantList({
       setBranding(value);
       setBrandingName(value.displayName ?? "");
       setBrandingSeed(value.seed);
+      // 保存会生成新版本；历史列表不刷新就会停在旧版本，和“当前版本”对不上。
+      void fetchBrandingHistory(tenantId)
+        .then((versions) => {
+          if (request === brandingRequest.current) setHistory(versions);
+        })
+        .catch(() => undefined);
       message.success("品牌已保存并立即生效");
     } catch (failure) {
       if (request !== brandingRequest.current) return;

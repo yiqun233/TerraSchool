@@ -75,12 +75,13 @@ export function CustomerRecyclePolicyEditor({
     setSaving(true);
     setError("");
     try {
-      const headers = await csrf();
+      // csrf() 返回的是令牌对象，不是请求头；必须按服务端下发的头名取值后再发。
+      const token = await csrf();
       const { data, response } = await api.PUT(
         "/api/admissions/customers/recycle-policy",
         {
           params: { query: { schoolId } },
-          headers,
+          headers: { [token.headerName!]: token.token! },
           body: {
             requestId: pending.current.requestId,
             expectedVersion: policy.data.version,

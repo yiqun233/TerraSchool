@@ -125,6 +125,14 @@ export function ChannelAddress({
       {details.error ? (
         <Alert type="error" title={details.error.message} showIcon />
       ) : null}
+      {denied ? (
+        <Alert
+          type="warning"
+          title="没有维护渠道地址的权限"
+          description="需要渠道维护权限才能修改地址；可联系机构管理员开通，或先关闭本窗口。"
+          showIcon
+        />
+      ) : null}
       {notice ? <Alert type="info" title={notice} showIcon /> : null}
       {!denied && !details.error && !details.isFetching && details.data ? (
         <Input
