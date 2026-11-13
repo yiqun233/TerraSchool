@@ -95,6 +95,18 @@ public class AuditedAuthorizationManagement
         FailureAudit.Action.ROLE_TEMPLATE_CREATE, null, () -> templates.createRole(input));
   }
 
+  public List<RoleTemplateManagement.StartingTemplate> startingTemplates() {
+    return templates.startingTemplates();
+  }
+
+  public RoleTemplateManagement.RoleTemplate generateFromTemplate(
+      RoleTemplateManagement.GenerateFromTemplate input) {
+    return invoke(
+        FailureAudit.Action.ROLE_TEMPLATE_CREATE,
+        null,
+        () -> templates.generateFromTemplate(input));
+  }
+
   public RoleTemplateManagement.RoleTemplate replaceRole(
       UUID id, RoleTemplateManagement.RoleChange input) {
     return invoke(

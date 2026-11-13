@@ -21,6 +21,11 @@ class RoleTemplateHttp {
     return roles.listRoles(search, includeInactive);
   }
 
+  @GetMapping("/starting")
+  List<StartingTemplate> starting() {
+    return roles.startingTemplates();
+  }
+
   @GetMapping("/{id}")
   RoleTemplate get(@PathVariable UUID id) {
     return roles.getRole(id);
@@ -30,6 +35,12 @@ class RoleTemplateHttp {
   @ResponseStatus(org.springframework.http.HttpStatus.CREATED)
   RoleTemplate create(@RequestBody CreateRole input) {
     return roles.createRole(input);
+  }
+
+  @PostMapping(value = "/from-template", consumes = "application/json")
+  @ResponseStatus(org.springframework.http.HttpStatus.CREATED)
+  RoleTemplate fromTemplate(@RequestBody GenerateFromTemplate input) {
+    return roles.generateFromTemplate(input);
   }
 
   @PostMapping(value = "/{id}/replace", consumes = "application/json")

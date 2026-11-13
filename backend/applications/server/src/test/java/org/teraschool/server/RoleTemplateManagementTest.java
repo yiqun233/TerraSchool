@@ -106,6 +106,104 @@ class RoleTemplateManagementTest {
         .hasMessage("ROLE_CODE_EXISTS");
   }
 
+  /** 预设模板是页面“从模板生成”的服务端来源，必须与已确认的岗位矩阵逐项一致。 */
+  @Test
+  void startingTemplatesMatchTheConfirmedMatrix() {
+    var templates = roles.startingTemplates();
+    assertThat(templates)
+        .extracting(StartingTemplate::code)
+        .containsExactly(
+            "START_ORG_ADMIN",
+            "START_FRONT_DESK",
+            "START_FINANCE",
+            "START_MARKETING",
+            "START_CONSULTANT",
+            "START_CONSULTANT_LEAD",
+            "START_LEARNING_ADVISOR",
+            "START_ACADEMIC",
+            "START_TEACHER",
+            "START_HR");
+    assertThat(templates)
+        .extracting(StartingTemplate::actionCount)
+        .containsExactly(48, 10, 13, 10, 11, 19, 9, 15, 2, 7);
+    for (var template : templates) {
+      assertThat(template.actions())
+          .as(template.code())
+          .doesNotHaveDuplicates()
+          .allMatch(PermissionCatalog.CODES::contains)
+          .doesNotContain("AUTHORIZATION_MANAGE");
+      assertThat(template.actionCount()).isEqualTo(template.actions().size());
+      assertThat(template.name()).isNotBlank();
+      assertThat(template.purpose()).isNotBlank();
+    }
+  }
+
+  @Test
+  void generateFromTemplateCreatesOrdinaryEditableRoleAndIsIdempotent() throws Exception {
+    var template =
+        roles.startingTemplates().stream()
+            .filter(item -> item.code().equals("START_FINANCE"))
+            .findFirst()
+            .orElseThrow();
+    var request = UUID.randomUUID();
+    var generated =
+        roles.generateFromTemplate(new GenerateFromTemplate(request, "START_FINANCE", null, null));
+    assertThat(generated.code()).isEqualTo("START_FINANCE");
+    assertThat(generated.name()).isEqualTo("财务");
+    assertThat(generated.version()).isZero();
+    assertThat(generated.active()).isTrue();
+    assertThat(generated.actions())
+        .extracting(RoleAction::action)
+        .containsExactlyInAnyOrderElementsOf(template.actions());
+    assertThat(generated.assignedAccounts()).isZero();
+    assertThat(
+            f.count("select count(*) from identity.account_role where role_id=?", generated.id()))
+        .isZero();
+    assertThat(
+            f.count(
+                "select count(*) from audit.role_template_event where role_id=? and action='ROLE_TEMPLATE_CREATE'",
+                generated.id()))
+        .isEqualTo(1);
+
+    // 同请求重放返回同一角色，不重复创建。
+    assertThat(
+            roles.generateFromTemplate(
+                new GenerateFromTemplate(request, "START_FINANCE", null, null)))
+        .isEqualTo(generated);
+
+    // 生成后就是普通角色，可继续编辑动作。
+    var changed =
+        roles.replaceRole(
+            generated.id(), new RoleChange(0L, "财务（调整）", true, List.of(allow("PERIOD_READ"))));
+    assertThat(changed.version()).isEqualTo(1);
+    assertThat(changed.actions()).extracting(RoleAction::action).containsExactly("PERIOD_READ");
+  }
+
+  @Test
+  void generateFromTemplateUsesEditedDefaultsAndRejectsConflicts() {
+    var edited =
+        roles.generateFromTemplate(
+            new GenerateFromTemplate(UUID.randomUUID(), "START_HR", "人力二组", "HR_TEAM_2"));
+    assertThat(edited.code()).isEqualTo("HR_TEAM_2");
+    assertThat(edited.name()).isEqualTo("人力二组");
+    assertThat(edited.actions()).hasSize(7);
+
+    assertThatThrownBy(
+            () ->
+                roles.generateFromTemplate(
+                    new GenerateFromTemplate(UUID.randomUUID(), "NOT_A_TEMPLATE", null, null)))
+        .isInstanceOf(IllegalArgumentException.class);
+
+    var existing = create("START_ACADEMIC", allow("ORGANIZATION_READ"));
+    assertThatThrownBy(
+            () ->
+                roles.generateFromTemplate(
+                    new GenerateFromTemplate(UUID.randomUUID(), "START_ACADEMIC", null, null)))
+        .isInstanceOf(AuthorizationConflict.class)
+        .hasMessage("ROLE_CODE_EXISTS");
+    assertThat(roles.getRole(existing.id()).actions()).hasSize(1);
+  }
+
   @Test
   void sharedDefinitionAndMembershipInvalidateBothKindsOfEditors() throws Exception {
     var original = create("SHARED", allow("ORGANIZATION_READ"));

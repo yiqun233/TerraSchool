@@ -168,51 +168,90 @@ public class RoleTemplates {
   }
 
   public RoleTemplate createRole(CreateRole input) {
+    return authorization.managed(actor -> create(actor, input));
+  }
+
+  public List<StartingTemplate> startingTemplates() {
+    return authorization.managed(
+        actor ->
+            StartingRoleTemplates.TEMPLATES.stream()
+                .map(
+                    template ->
+                        new StartingTemplate(
+                            template.code(),
+                            template.name(),
+                            template.purpose(),
+                            template.actions().size(),
+                            template.actions()))
+                .toList());
+  }
+
+  /**
+   * 从预设模板生成角色。
+   *
+   * <p>模板只提供初始动作；生成后就是普通角色，不再与模板绑定，也不随后续模板调整同步。 不记录来源模板代码：创建账本与审计只保留实际生成的角色快照。
+   */
+  public RoleTemplate generateFromTemplate(GenerateFromTemplate input) {
     return authorization.managed(
         actor -> {
-          if (input == null || input.requestId() == null || input.code() == null)
-            throw new IllegalArgumentException("需要创建身份与代码");
-          String code = input.code().strip().toUpperCase(Locale.ROOT), name = name(input.name());
-          if (!code.matches("[A-Z][A-Z0-9_]{2,79}"))
-            throw new IllegalArgumentException("代码需为3到80位大写字母/数字/下划线，字母开头");
-          var actions = actions(input.actions());
-          String canonical =
-              json.writeValueAsString(Map.of("code", code, "name", name, "actions", actions));
-          var previous =
-              sql.fetchOne(
-                  "select role_id,input_json,created_role from identity.role_creation_request where tenant_id=? and actor_id=? and request_id=?",
-                  actor.tenantId(),
-                  actor.accountId(),
-                  input.requestId());
-          if (previous != null) {
-            boundary(previous.get("role_id", UUID.class), actor);
-            if (!json.readTree(canonical)
-                .equals(json.readTree(previous.get("input_json").toString())))
-              throw new AuthorizationConflict("ROLE_REQUEST_MISMATCH");
-            return json.readValue(previous.get("created_role").toString(), RoleTemplate.class);
-          }
-          if (sql.fetchOne("select id from identity.permission_role where code=?", code) != null)
-            throw new AuthorizationConflict("ROLE_CODE_EXISTS");
-          UUID id =
-              sql.fetchOne(
-                      "insert into identity.permission_role(tenant_id,code,name) values (?,?,?) returning id",
-                      actor.tenantId(),
-                      code,
-                      name)
-                  .get("id", UUID.class);
-          writeActions(actor.tenantId(), id, actions);
-          var result = load(id);
-          sql.execute(
-              "insert into identity.role_creation_request(tenant_id,actor_id,request_id,role_id,input_json,created_role) values (?,?,?,?,?::jsonb,?::jsonb)",
-              actor.tenantId(),
-              actor.accountId(),
-              input.requestId(),
-              id,
-              canonical,
-              json.writeValueAsString(result));
-          audit(actor, "ROLE_TEMPLATE_CREATE", null, result, 0);
-          return result;
+          if (input == null || input.requestId() == null || input.templateCode() == null)
+            throw new IllegalArgumentException("需要创建身份和模板");
+          var template =
+              StartingRoleTemplates.find(input.templateCode())
+                  .orElseThrow(() -> new IllegalArgumentException("模板不存在"));
+          var code =
+              input.code() == null || input.code().isBlank() ? template.code() : input.code();
+          var name =
+              input.name() == null || input.name().isBlank() ? template.name() : input.name();
+          var actions =
+              template.actions().stream().map(action -> new RoleAction(action, "ALLOW")).toList();
+          return create(actor, new CreateRole(input.requestId(), code, name, actions));
         });
+  }
+
+  /** 创建角色的公共实现；调用方负责在同一事务内重新检查操作者。 */
+  private RoleTemplate create(CurrentPermissions actor, CreateRole input) {
+    if (input == null || input.requestId() == null || input.code() == null)
+      throw new IllegalArgumentException("需要创建身份与代码");
+    String code = input.code().strip().toUpperCase(Locale.ROOT), name = name(input.name());
+    if (!code.matches("[A-Z][A-Z0-9_]{2,79}"))
+      throw new IllegalArgumentException("代码需为3到80位大写字母/数字/下划线，字母开头");
+    var actions = actions(input.actions());
+    String canonical =
+        json.writeValueAsString(Map.of("code", code, "name", name, "actions", actions));
+    var previous =
+        sql.fetchOne(
+            "select role_id,input_json,created_role from identity.role_creation_request where tenant_id=? and actor_id=? and request_id=?",
+            actor.tenantId(),
+            actor.accountId(),
+            input.requestId());
+    if (previous != null) {
+      boundary(previous.get("role_id", UUID.class), actor);
+      if (!json.readTree(canonical).equals(json.readTree(previous.get("input_json").toString())))
+        throw new AuthorizationConflict("ROLE_REQUEST_MISMATCH");
+      return json.readValue(previous.get("created_role").toString(), RoleTemplate.class);
+    }
+    if (sql.fetchOne("select id from identity.permission_role where code=?", code) != null)
+      throw new AuthorizationConflict("ROLE_CODE_EXISTS");
+    UUID id =
+        sql.fetchOne(
+                "insert into identity.permission_role(tenant_id,code,name) values (?,?,?) returning id",
+                actor.tenantId(),
+                code,
+                name)
+            .get("id", UUID.class);
+    writeActions(actor.tenantId(), id, actions);
+    var result = load(id);
+    sql.execute(
+        "insert into identity.role_creation_request(tenant_id,actor_id,request_id,role_id,input_json,created_role) values (?,?,?,?,?::jsonb,?::jsonb)",
+        actor.tenantId(),
+        actor.accountId(),
+        input.requestId(),
+        id,
+        canonical,
+        json.writeValueAsString(result));
+    audit(actor, "ROLE_TEMPLATE_CREATE", null, result, 0);
+    return result;
   }
 
   public RoleTemplate replaceRole(UUID id, RoleChange input) {
