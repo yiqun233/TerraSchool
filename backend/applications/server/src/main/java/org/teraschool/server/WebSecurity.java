@@ -19,6 +19,14 @@ class WebSecurity {
           "/api/session/permissions",
           "/api/session/logout");
 
+  /**
+   * 会话已撤销后仍然必须可用的入口：登录页自己要取 CSRF、提交登录与退出。
+   *
+   * <p>改密、重置与停用只递增凭据版本、不销毁 HTTP 会话，浏览器仍带着旧 Cookie；若这里也回 401，登录页的第一个请求（取 CSRF）就会被挡下。
+   */
+  private static final java.util.Set<String> SESSION_ENTRY_ALLOWED =
+      java.util.Set.of("/api/session/csrf", "/api/session/login", "/api/session/logout");
+
   private final RejectedRequestAudit audit;
   private final org.teraschool.identity.api.CurrentActor actors;
 
@@ -70,6 +78,7 @@ class WebSecurity {
                     && !(authentication
                         instanceof
                         org.springframework.security.authentication.AnonymousAuthenticationToken)) {
+                  var sessionEntry = SESSION_ENTRY_ALLOWED.contains(request.getRequestURI());
                   try {
                     var permissions = actors.permissions();
                     // 首次登录或平台重置后必须先改密：只放行会话自身接口，其余一律拒绝。
@@ -79,11 +88,16 @@ class WebSecurity {
                       return;
                     }
                   } catch (org.springframework.security.access.AccessDeniedException invalid) {
-                    problem(request, response, 401, "AUTHENTICATION_REQUIRED");
-                    var session = request.getSession(false);
-                    if (session != null) session.invalidate();
-                    org.springframework.security.core.context.SecurityContextHolder.clearContext();
-                    return;
+                    // 会话被撤销：业务接口立刻 401 并销毁会话；登录页自己的入口放行，
+                    // 否则改完密码的第一次登录必然被“会话已撤销”打回一次（2026-11-13 反馈）。
+                    if (!sessionEntry) {
+                      problem(request, response, 401, "AUTHENTICATION_REQUIRED");
+                      var session = request.getSession(false);
+                      if (session != null) session.invalidate();
+                      org.springframework.security.core.context.SecurityContextHolder
+                          .clearContext();
+                      return;
+                    }
                   }
                 }
                 chain.doFilter(request, response);

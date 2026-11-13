@@ -224,6 +224,33 @@ class TenantProvisioningTest {
     assertThat(get(again, "/api/organization/units").statusCode()).isEqualTo(200);
   }
 
+  /**
+   * 改密后同一个浏览器（同一份 Cookie）必须一次登录成功。
+   *
+   * <p>2026-11-13 反馈：改密后回登录页，第一次输新密码失败、刷新才正常。改密只递增凭据版本、不销毁 HTTP 会话，登录页第一个请求（取 CSRF）撞在旧会话上被 401 打回。
+   */
+  @Test
+  void sameBrowserLogsInImmediatelyAfterPasswordChange() throws Exception {
+    var platform = platformClient();
+    var name = "同端改密-" + UUID.randomUUID().toString().substring(0, 6);
+    var admin = "same-" + UUID.randomUUID().toString().substring(0, 8);
+    assertThat(provision(platform, UUID.randomUUID(), name, admin).statusCode()).isEqualTo(201);
+
+    var tenant = client();
+    login(tenant, admin, ADMIN_PASSWORD);
+    var newPassword = "Changed-" + UUID.randomUUID().toString().substring(0, 10);
+    changePassword(tenant, ADMIN_PASSWORD, newPassword);
+
+    // 浏览器不会因为改密就换掉 Cookie：下一个请求仍然带着那个旧会话。
+    var csrf = get(tenant, "/api/session/csrf");
+    assertThat(csrf.statusCode())
+        .as("改密后取 CSRF 不能被旧会话的撤销判定打回 401，否则第一次登录必然失败一次：%s", csrf.body())
+        .isEqualTo(200);
+
+    login(tenant, admin, newPassword);
+    assertThat(get(tenant, "/api/session/context").statusCode()).isEqualTo(200);
+  }
+
   @Test
   void platformResetForcesChangeAgainAndInvalidatesOldPassword() throws Exception {
     var platform = platformClient();
