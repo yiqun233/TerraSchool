@@ -75,6 +75,18 @@ it("登录落点按能力选择，没有业务权限时去说明页", () => {
   expect(startPath(permissions(["STUDENT_READ"]))).toBe("/students");
   // 只有组织权限（例如刚建完学校的机构管理员）时先去组织目录，不落到学员档案。
   expect(startPath(permissions([]))).toBe("/organization");
+  // 租户管理员即使已开通全部动作，没有学校时也先去建校。
+  expect(
+    startPath({
+      ...permissions(["STUDENT_READ"]),
+      tenantAdmin: true,
+      readableSchoolIds: [],
+    }),
+  ).toBe("/organization");
+  // 有了学校就可以落到学员档案。
+  expect(
+    startPath({ ...permissions(["STUDENT_READ"]), tenantAdmin: true }),
+  ).toBe("/students");
   expect(startPath({ ...permissions([]), canReadOrganizations: false })).toBe(
     "/start",
   );

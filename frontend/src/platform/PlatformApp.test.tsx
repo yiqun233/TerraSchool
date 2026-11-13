@@ -40,12 +40,14 @@ const tenants = [
     name: "启明教育",
     active: true,
     created_at: "2026-11-07T10:20:00",
+    admin_logins: "qiming-admin",
   },
   {
     id: "0190a2b3-0000-7000-8000-000000000002",
     name: "明德学堂",
     active: false,
     created_at: "2026-11-06T09:00:00",
+    admin_logins: "mingde-admin（停用）、mingde-ops",
   },
 ];
 
@@ -71,7 +73,7 @@ describe("平台运营端", () => {
     expect(screen.queryByText("租户管理")).toBeNull();
   });
 
-  it("登录成功后展示租户名称、状态与开通时间", async () => {
+  it("登录成功后展示租户名称、管理员账号、状态与开通时间", async () => {
     let signedIn = false;
     installFetch((url) => {
       if (url.endsWith("/api/platform/session/me"))
@@ -107,7 +109,9 @@ describe("平台运营端", () => {
       .getByText("明德学堂")
       .closest("tr") as HTMLElement;
     expect(activeRow.textContent).toContain("正常");
+    expect(activeRow.textContent).toContain("qiming-admin");
     expect(stoppedRow.textContent).toContain("停用");
+    expect(stoppedRow.textContent).toContain("mingde-admin（停用）、mingde-ops");
     expect(screen.getByText("2026-11-07 10:20")).toBeTruthy();
     // 平台只读视图不出现业务数据列。
     expect(screen.queryByText("学员")).toBeNull();

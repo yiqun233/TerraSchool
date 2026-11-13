@@ -10,13 +10,14 @@ final class PermissionRules {
   /** 目录只在这里登记一次；界面与授权校验都从 {@link PermissionCatalog} 派生。 */
   static final Set<String> ACTIONS = PermissionCatalog.CODES;
 
-  /** 租户管理员默认开通的动作；与 calculate 的四个布尔保持一致。 */
-  static final Set<String> TENANT_ADMIN_ACTIONS =
-      Set.of(
-          "ORGANIZATION_READ",
-          "ORGANIZATION_MAINTAIN",
-          "AUTHORIZATION_MANAGE",
-          "TENANT_BRANDING_WRITE");
+  /**
+   * 租户管理员的动作集合：目录全量。
+   *
+   * <p>不写死清单：目录新增动作时，租户管理员必须自动拥有，否则每次加功能都要回头补授权。
+   */
+  static Set<String> tenantAdminActions() {
+    return PermissionCatalog.CODES;
+  }
 
   static final String EXPANDED =
       """
@@ -76,14 +77,22 @@ final class PermissionRules {
     return result;
   }
 
+  /**
+   * 计算一个账号的有效权限。
+   *
+   * @param tenantSchoolIds 本租户当前全部学校；只有租户管理员会用到，非管理员调用方可传空集合
+   */
   static CurrentPermissions calculate(
       UUID account,
       UUID tenant,
       boolean active,
       List<Entry> rules,
       boolean tenantAdmin,
-      boolean passwordChangeRequired) {
+      boolean passwordChangeRequired,
+      Collection<UUID> tenantSchoolIds) {
     var decisions = active ? decisions(rules) : decisions(List.of());
+    // 停用账号即便带租户管理员标记也不再放权；标记本身仍保留，便于恢复后立即生效。
+    var admin = active && tenantAdmin;
     var read = decisions.get("ORGANIZATION_READ");
     var maintain = decisions.get("ORGANIZATION_MAINTAIN");
     var manage = decisions.get("AUTHORIZATION_MANAGE");
@@ -91,26 +100,34 @@ final class PermissionRules {
     var readable = read.schools();
     var editable = maintain.schools();
     editable.retainAll(readable);
-    // 功能资格只表示“这个动作开了”，学校范围仍由显式学校授权决定；
+    var manageable = manage.schools();
+    // 租户管理员覆盖本租户全部学校（含以后新建的），不依赖建校时写入的账户规则行；
+    // 显式 DENY 也不回收他的范围，“租户内权限最大”是标记本身的定义。
+    if (admin) {
+      readable = new LinkedHashSet<>(tenantSchoolIds);
+      editable = new LinkedHashSet<>(tenantSchoolIds);
+      manageable = new LinkedHashSet<>(tenantSchoolIds);
+    }
+    // 功能资格只表示“这个动作开了”，非管理员的学校范围仍由显式学校授权决定；
     // “覆盖全部学校”由 SchoolProvisioner 结合 tenantAdmin 单独判断。
     var granted = new LinkedHashSet<String>();
     decisions.forEach(
         (action, decision) -> {
           if (decision.enabled()) granted.add(action);
         });
-    if (tenantAdmin) granted.addAll(TENANT_ADMIN_ACTIONS);
+    if (admin) granted.addAll(tenantAdminActions());
     return new CurrentPermissions(
         account,
         tenant,
-        read.enabled() || tenantAdmin,
-        (read.enabled() && maintain.enabled()) || tenantAdmin,
+        read.enabled() || admin,
+        (read.enabled() && maintain.enabled()) || admin,
         readable,
         editable,
-        manage.enabled() || tenantAdmin,
-        manage.schools(),
-        tenantAdmin,
+        manage.enabled() || admin,
+        manageable,
+        admin,
         passwordChangeRequired,
-        branding.enabled() || tenantAdmin,
+        branding.enabled() || admin,
         granted);
   }
 
@@ -119,15 +136,21 @@ final class PermissionRules {
    *
    * <p>与 {@link #calculate} 共用同一决策过程，不另写一套合并规则；只返回功能已开启的动作。
    */
-  static List<ActionGrant> grants(List<Entry> rules, boolean tenantAdmin) {
+  static List<ActionGrant> grants(
+      List<Entry> rules, boolean tenantAdmin, Collection<UUID> tenantSchoolIds) {
     var decisions = decisions(rules);
     var result = new ArrayList<ActionGrant>();
     for (var action : PermissionCatalog.ACTIONS) {
       var decision = decisions.get(action.code());
-      boolean enabled =
-          decision.enabled() || (tenantAdmin && TENANT_ADMIN_ACTIONS.contains(action.code()));
+      boolean enabled = decision.enabled() || tenantAdmin;
       if (!enabled) continue;
-      var schools = decision.schools();
+      // 租户管理员：按学校动作覆盖全部学校；租户级动作不随学校，仍标“仅功能”。
+      Set<UUID> schools =
+          tenantAdmin
+              ? (action.scope() == PermissionCatalog.Scope.SCHOOL
+                  ? new LinkedHashSet<>(tenantSchoolIds)
+                  : Set.of())
+              : decision.schools();
       result.add(new ActionGrant(action.code(), schools.isEmpty(), schools));
     }
     return List.copyOf(result);
@@ -139,7 +162,12 @@ final class PermissionRules {
    * <p>敏感字段范围只有与查看范围相交才生效，避免出现“能看敏感字段但不能看这条档案”的矛盾授权。
    */
   static org.teraschool.identity.api.ResourceScope scope(
-      UUID account, UUID tenant, List<Entry> rules, String kind) {
+      UUID account,
+      UUID tenant,
+      List<Entry> rules,
+      String kind,
+      boolean tenantAdmin,
+      Collection<UUID> tenantSchoolIds) {
     if (!Set.of(
             "EMPLOYEE",
             "TEACHER",
@@ -156,6 +184,10 @@ final class PermissionRules {
             "CHANNEL",
             "CUSTOMER")
         .contains(Objects.toString(kind, ""))) throw new IllegalArgumentException("无效资源类型");
+    if (tenantAdmin) {
+      var all = new LinkedHashSet<>(tenantSchoolIds);
+      return new org.teraschool.identity.api.ResourceScope(account, tenant, all, all, all);
+    }
     var read = new Decision();
     var maintain = new Decision();
     var sensitive = new Decision();
@@ -181,7 +213,16 @@ final class PermissionRules {
    * <p>用于“发布定价”这类不能与普通维护合并的动作：调用方必须持有该动作，范围与查看范围无关。
    */
   static org.teraschool.identity.api.Actor action(
-      UUID account, UUID tenant, List<Entry> rules, String action) {
+      UUID account,
+      UUID tenant,
+      List<Entry> rules,
+      String action,
+      boolean tenantAdmin,
+      Collection<UUID> tenantSchoolIds) {
+    // 租户管理员不需要逐动作规则；未知动作仍然拒绝，避免把目录外的字符串当成授权。
+    if (tenantAdmin && PermissionCatalog.CODES.contains(action))
+      return new org.teraschool.identity.api.Actor(
+          account, tenant, new LinkedHashSet<>(tenantSchoolIds));
     var decision = new Decision();
     for (var rule : rules) if (action.equals(rule.action())) decision.accept(rule);
     if (!decision.enabled())
@@ -190,7 +231,13 @@ final class PermissionRules {
   }
 
   static org.teraschool.identity.api.Actor resource(
-      UUID account, UUID tenant, List<Entry> rules, String kind, boolean write) {
+      UUID account,
+      UUID tenant,
+      List<Entry> rules,
+      String kind,
+      boolean write,
+      boolean tenantAdmin,
+      Collection<UUID> tenantSchoolIds) {
     if (!Set.of(
             "EMPLOYEE",
             "TEACHER",
@@ -207,6 +254,9 @@ final class PermissionRules {
             "CHANNEL",
             "CUSTOMER")
         .contains(Objects.toString(kind, ""))) throw new IllegalArgumentException("无效资源类型");
+    if (tenantAdmin)
+      return new org.teraschool.identity.api.Actor(
+          account, tenant, new LinkedHashSet<>(tenantSchoolIds));
     var read = new Decision();
     var maintain = new Decision();
     for (var rule : rules) {

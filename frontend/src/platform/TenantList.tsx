@@ -377,6 +377,17 @@ export default function TenantList({
       ),
     },
     {
+      title: "管理员账号",
+      dataIndex: "admin_logins",
+      width: 180,
+      render: (value: string | null) =>
+        value ? (
+          <span className={styles.adminLogin}>{value}</span>
+        ) : (
+          <span className={styles.orgId}>—</span>
+        ),
+    },
+    {
       title: "开通时间",
       dataIndex: "created_at",
       width: 180,
@@ -424,7 +435,7 @@ export default function TenantList({
         <div>
           <h1 className={styles.title}>租户管理</h1>
           <p className={styles.sub}>
-            只显示租户名称、状态与开通时间，不展示任何业务数据。
+            显示租户名称、管理员登录名、状态与开通时间，不展示任何业务数据。
           </p>
         </div>
         <div className={styles.headActions}>

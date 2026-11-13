@@ -193,7 +193,7 @@ function MineTab({
         />
         <span className={styles.meta}>
           {permissions?.tenantAdmin
-            ? "租户管理员：组织、授权与品牌动作默认开通；业务学校范围仍按学校授权计算。"
+            ? "租户管理员：本租户全部动作与全部学校范围始终开通，含以后新增的功能。"
             : "按动作分别计算学校范围；功能级允许不产生学校范围。"}
         </span>
       </div>

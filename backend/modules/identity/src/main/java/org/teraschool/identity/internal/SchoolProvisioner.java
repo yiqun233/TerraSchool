@@ -72,6 +72,8 @@ public class SchoolProvisioner implements SchoolProvisioning {
           // 但委派管理员不能借建校升权：不是租户管理员时只铺“他本来就有”的动作，
           // 避免顺手拿到自己没有的退款付款、锁月解锁等敏感动作。
           var own = before.effective();
+          // 租户管理员的动作与学校范围由 PermissionRules 动态全量计算（含以后新建的学校），
+          // 这里仍写一份显式规则便于审计查看，但不构成他的权限边界。
           var provisioned =
               own.tenantAdmin()
                   ? PermissionCatalog.SCHOOL_PROVISION_ACTIONS

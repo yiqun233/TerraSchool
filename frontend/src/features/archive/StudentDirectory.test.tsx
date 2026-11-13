@@ -205,7 +205,8 @@ it("通过持久导出任务展示进度并在完成后下载", { timeout: 20000
   const user = userEvent.setup({ pointerEventsCheck: 0 });
   renderPage(<StudentDirectory onUnauthorized={vi.fn()} />);
 
-  await user.click(await screen.findByRole("button", { name: "导出" }));
+  // 按钮 aria-label 带导出学校名（导出（测试学校）），用前缀匹配可见文案「导出」。
+  await user.click(await screen.findByRole("button", { name: /^导出/ }));
   await user.click(await screen.findByText("导出 CSV"));
   expect(
     await screen.findByText(
@@ -223,7 +224,7 @@ it("通过持久导出任务展示进度并在完成后下载", { timeout: 20000
     "/api/exports",
     expect.objectContaining({ method: "POST" }),
   );
-  await user.click(screen.getByRole("button", { name: "导出" }));
+  await user.click(screen.getByRole("button", { name: /^导出/ }));
   await user.click(await screen.findByText("导出 PDF"));
   expect(await screen.findByText("PDF 导出任务：完成，共 4 条")).toBeTruthy();
   const createBodies = fetchMock.mock.calls

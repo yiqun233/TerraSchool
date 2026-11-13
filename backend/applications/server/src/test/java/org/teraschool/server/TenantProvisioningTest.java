@@ -12,6 +12,7 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.security.crypto.factory.PasswordEncoderFactories;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.teraschool.identity.api.PermissionCatalog;
 
 /**
  * 租户开通：一次平台操作产出可登录的租户与管理员，且不建学校（DEC-024）。
@@ -151,6 +152,13 @@ class TenantProvisioningTest {
 
     var fresh = client();
     login(fresh, admin, newPassword);
+    // 租户管理员不需要等建校：目录里的全部动作从一开始就开通，以后新增的动作也自动包含。
+    var beforeSchool = json.readTree(get(fresh, "/api/session/permissions").body());
+    var initialGranted = new java.util.ArrayList<String>();
+    beforeSchool.get("grantedActions").forEach(node -> initialGranted.add(node.asText()));
+    assertThat(initialGranted).containsExactlyInAnyOrderElementsOf(PermissionCatalog.CODES);
+    assertThat(beforeSchool.get("readableSchoolIds")).isEmpty();
+
     var csrf = json.readTree(get(fresh, "/api/session/csrf").body());
     var payload =
         json.createObjectNode()
@@ -172,21 +180,24 @@ class TenantProvisioningTest {
                 admin))
         .isEqualTo(1);
 
-    // 建校后必须按新学校铺开机构管理员动作：否则学员、报名、教务、财务一进去就 403
-    // （本地测试反馈第 2/6/8 条）。
     var permissions = json.readTree(get(fresh, "/api/session/permissions").body());
     var granted = new java.util.ArrayList<String>();
     permissions.get("grantedActions").forEach(node -> granted.add(node.asText()));
     assertThat(granted)
-        .as("建校后创建者的动作铺开情况")
-        .contains(
-            "STUDENT_READ",
-            "STUDENT_MAINTAIN",
-            "ENROLLMENT_READ",
-            "TEACHING_READ",
-            "PERIOD_READ",
-            "FUNDS_READ");
+        .as("建校不应让管理员的动作集合缩水")
+        .containsExactlyInAnyOrderElementsOf(PermissionCatalog.CODES);
     assertThat(permissions.get("readableSchoolIds")).hasSize(1);
+
+    // 学校不是租户管理员自己建的也要覆盖：范围按“本租户当前全部学校”现算，不是建校快照。
+    var tenantId = tenantIdOf(admin);
+    var second = UUID.randomUUID();
+    EngineeringTest.update(
+        "insert into organization.unit(id,tenant_id,school_id,kind,name) values (?,?,?,'SCHOOL','客户二校')",
+        second,
+        tenantId,
+        second);
+    var afterSecond = json.readTree(get(fresh, "/api/session/permissions").body());
+    assertThat(afterSecond.get("readableSchoolIds")).hasSize(2);
   }
 
   @Test
@@ -272,6 +283,14 @@ class TenantProvisioningTest {
     var list = get(platform, "/api/platform/tenants?page=0&size=50");
     assertThat(list.statusCode()).isEqualTo(200);
     assertThat(list.body()).contains(name);
+    var listed =
+        java.util.stream.StreamSupport.stream(
+                json.readTree(list.body()).get("items").spliterator(), false)
+            .filter(node -> tenantId.toString().equals(node.path("id").asText()))
+            .findFirst()
+            .orElseThrow();
+    // 平台列表要能直接看到该租户的登录账号，不必再点开详情或调管理员接口。
+    assertThat(listed.path("admin_logins").asText()).isEqualTo(admin);
     assertThat(json.readTree(list.body()).get("summary").get("total").asLong())
         .isGreaterThanOrEqualTo(1);
 

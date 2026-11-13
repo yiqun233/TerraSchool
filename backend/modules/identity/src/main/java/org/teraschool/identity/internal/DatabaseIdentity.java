@@ -9,17 +9,22 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.*;
 import org.springframework.stereotype.Service;
 import org.teraschool.identity.api.*;
+import org.teraschool.platform.api.TenantTransactions;
 
 /** 认证基础设施只读独立账号表；会话不缓存权威租户状态、权限或范围。 */
 @Service
 public class DatabaseIdentity implements UserDetailsService, CurrentActor {
   private final JdbcTemplate jdbc;
   private final org.jooq.DSLContext sql;
+  private final TenantTransactions tx;
 
   public DatabaseIdentity(
-      @Qualifier("identityDataSource") DataSource source, org.jooq.DSLContext sql) {
+      @Qualifier("identityDataSource") DataSource source,
+      org.jooq.DSLContext sql,
+      TenantTransactions tx) {
     jdbc = new JdbcTemplate(source);
     this.sql = sql;
+    this.tx = tx;
   }
 
   @Override
@@ -42,7 +47,28 @@ public class DatabaseIdentity implements UserDetailsService, CurrentActor {
       UUID tenant,
       java.util.List<PermissionRules.Entry> rules,
       boolean tenantAdmin,
-      boolean passwordChangeRequired) {}
+      boolean passwordChangeRequired,
+      java.util.Set<UUID> tenantSchoolIds) {}
+
+  /** 租户管理员要覆盖“全部学校（含以后新建的）”，每次取权限时现查，不缓存学校快照。 */
+  private java.util.Set<UUID> tenantSchoolIds(UUID tenant) {
+    return tx.execute(
+        tenant,
+        () ->
+            new java.util.LinkedHashSet<>(
+                sql.fetch(
+                        "select id from organization.unit where tenant_id=? and kind='SCHOOL' order by id",
+                        tenant)
+                    .map(r -> r.get("id", UUID.class))));
+  }
+
+  private java.util.Set<UUID> tenantSchoolIdsInTransaction(UUID tenant) {
+    return new java.util.LinkedHashSet<>(
+        sql.fetch(
+                "select id from organization.unit where tenant_id=? and kind='SCHOOL' order by id",
+                tenant)
+            .map(r -> r.get("id", UUID.class)));
+  }
 
   private Snapshot snapshot() {
     var principal = SessionPrincipal.current();
@@ -64,12 +90,15 @@ public class DatabaseIdentity implements UserDetailsService, CurrentActor {
     if (rows.isEmpty()) throw new AccessDeniedException("账号或机构不可用");
     if (!Long.valueOf(principal.version()).equals(rows.getFirst()[1]))
       throw new AccessDeniedException("会话已撤销");
+    var tenant = (UUID) rows.getFirst()[0];
+    var tenantAdmin = (Boolean) rows.getFirst()[3];
     return new Snapshot(
         account,
-        (UUID) rows.getFirst()[0],
+        tenant,
         rows.stream().map(r -> (PermissionRules.Entry) r[2]).toList(),
-        (Boolean) rows.getFirst()[3],
-        (Boolean) rows.getFirst()[4]);
+        tenantAdmin,
+        (Boolean) rows.getFirst()[4],
+        tenantAdmin ? tenantSchoolIds(tenant) : java.util.Set.of());
   }
 
   @Override
@@ -81,13 +110,14 @@ public class DatabaseIdentity implements UserDetailsService, CurrentActor {
         true,
         value.rules(),
         value.tenantAdmin(),
-        value.passwordChangeRequired());
+        value.passwordChangeRequired(),
+        value.tenantSchoolIds());
   }
 
   @Override
   public java.util.List<ActionGrant> actionGrants() {
     var value = snapshot();
-    return PermissionRules.grants(value.rules(), value.tenantAdmin());
+    return PermissionRules.grants(value.rules(), value.tenantAdmin(), value.tenantSchoolIds());
   }
 
   @Override
@@ -114,38 +144,74 @@ public class DatabaseIdentity implements UserDetailsService, CurrentActor {
   public Actor requireResource(String kind, boolean maintenance) {
     var value = snapshot();
     return PermissionRules.resource(
-        value.account(), value.tenant(), value.rules(), kind, maintenance);
+        value.account(),
+        value.tenant(),
+        value.rules(),
+        kind,
+        maintenance,
+        value.tenantAdmin(),
+        value.tenantSchoolIds());
   }
 
   @Override
   public Actor requireResourceInTransaction(String kind, boolean maintenance) {
     var value = transactionSnapshot();
     return PermissionRules.resource(
-        value.account(), value.tenant(), value.rules(), kind, maintenance);
+        value.account(),
+        value.tenant(),
+        value.rules(),
+        kind,
+        maintenance,
+        value.tenantAdmin(),
+        value.tenantSchoolIds());
   }
 
   @Override
   public ResourceScope requireResourceScope(String kind) {
     var value = snapshot();
-    return PermissionRules.scope(value.account(), value.tenant(), value.rules(), kind);
+    return PermissionRules.scope(
+        value.account(),
+        value.tenant(),
+        value.rules(),
+        kind,
+        value.tenantAdmin(),
+        value.tenantSchoolIds());
   }
 
   @Override
   public Actor requireAction(String action) {
     var value = snapshot();
-    return PermissionRules.action(value.account(), value.tenant(), value.rules(), action);
+    return PermissionRules.action(
+        value.account(),
+        value.tenant(),
+        value.rules(),
+        action,
+        value.tenantAdmin(),
+        value.tenantSchoolIds());
   }
 
   @Override
   public Actor requireActionInTransaction(String action) {
     var value = transactionSnapshot();
-    return PermissionRules.action(value.account(), value.tenant(), value.rules(), action);
+    return PermissionRules.action(
+        value.account(),
+        value.tenant(),
+        value.rules(),
+        action,
+        value.tenantAdmin(),
+        value.tenantSchoolIds());
   }
 
   @Override
   public ResourceScope requireResourceScopeInTransaction(String kind) {
     var value = transactionSnapshot();
-    return PermissionRules.scope(value.account(), value.tenant(), value.rules(), kind);
+    return PermissionRules.scope(
+        value.account(),
+        value.tenant(),
+        value.rules(),
+        kind,
+        value.tenantAdmin(),
+        value.tenantSchoolIds());
   }
 
   private Snapshot transactionSnapshot() {
@@ -157,17 +223,20 @@ public class DatabaseIdentity implements UserDetailsService, CurrentActor {
     if (!Long.valueOf(principal.version())
         .equals(rows.getFirst().get("credential_version", Long.class)))
       throw new AccessDeniedException("会话已撤销");
+    var tenant = rows.getFirst().get("tenant_id", UUID.class);
+    var tenantAdmin = rows.getFirst().get("tenant_admin", Boolean.class);
     return new Snapshot(
         principal.account(),
-        rows.getFirst().get("tenant_id", UUID.class),
+        tenant,
         rows.map(
             r ->
                 new PermissionRules.Entry(
                     r.get("action", String.class),
                     r.get("school_id", UUID.class),
                     r.get("effect", String.class))),
-        rows.getFirst().get("tenant_admin", Boolean.class),
-        rows.getFirst().get("password_change_required", Boolean.class));
+        tenantAdmin,
+        rows.getFirst().get("password_change_required", Boolean.class),
+        tenantAdmin ? tenantSchoolIdsInTransaction(tenant) : java.util.Set.of());
   }
 
   @Override
@@ -186,7 +255,8 @@ public class DatabaseIdentity implements UserDetailsService, CurrentActor {
             true,
             value.rules(),
             value.tenantAdmin(),
-            value.passwordChangeRequired());
+            value.passwordChangeRequired(),
+            value.tenantSchoolIds());
     if (!p.canReadOrganizations()) throw new AccessDeniedException("无组织查询权限");
     return new Actor(p.accountId(), p.tenantId(), p.maintainableSchoolIds());
   }

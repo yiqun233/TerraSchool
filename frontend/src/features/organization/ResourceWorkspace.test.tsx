@@ -155,7 +155,7 @@ it("教师关联员工支持搜索首批20项以外的员工", async () => {
       />
     </QueryClientProvider>,
   );
-  await user.type(screen.getByLabelText("关联员工（可选）"), "远端员工");
+  await user.type(screen.getByLabelText("对应员工（可选）"), "远端员工");
   await user.click(await screen.findByText("远端员工"));
   await user.click(screen.getByRole("button", { name: /保\s*存/ }));
   await waitFor(() => expect(post).toHaveBeenCalledTimes(1));

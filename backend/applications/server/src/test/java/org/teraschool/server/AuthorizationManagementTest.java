@@ -168,17 +168,18 @@ class AuthorizationManagementTest {
   }
 
   @Test
-  void tenantAdminWithoutSchoolsCanListAccountsInsteadOfSqlError() throws Exception {
-    // 平台开通只产出“机构 + 管理员”，不建学校：新机构管理员的管理范围为空。
-    // 此时账号列表与可选学校必须正常返回，不能把空集合拼成 in () 触发语法错误（500）。
+  void tenantAdminCoversAllSchoolsWithoutExplicitRules() throws Exception {
+    // 租户管理员不需要逐学校规则：学校范围由标记动态给出（含以后新建的学校）。
     var fresh = user(tenant);
     update("update identity.account set tenant_admin=true where id=?", fresh);
     as(fresh);
-    assertThat(service.schools("")).isEmpty();
+    assertThat(service.schools("")).extracting(Option::id).containsExactlyInAnyOrder(a, b);
     assertThat(service.accounts(""))
         .extracting(Option::id)
-        .contains(fresh)
-        .doesNotContain(root, target);
+        .contains(fresh, root, target)
+        .doesNotContain(foreignUser);
+    // 没有任何 account_permission 行也能管理其他账号的授权。
+    assertThat(service.get(root).effective().manageableSchoolIds()).containsExactlyInAnyOrder(a, b);
   }
 
   @Test

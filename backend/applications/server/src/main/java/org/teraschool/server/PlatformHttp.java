@@ -97,7 +97,7 @@ class PlatformHttp {
     }
   }
 
-  /** 租户列表：只有名称、状态与开通时间，不含任何业务数据。 */
+  /** 租户列表：名称、管理员登录名、状态与开通时间，不含任何业务数据。 */
   @GetMapping("/api/platform/tenants")
   ResponseEntity<?> tenants(
       @RequestParam(defaultValue = "0") int page,

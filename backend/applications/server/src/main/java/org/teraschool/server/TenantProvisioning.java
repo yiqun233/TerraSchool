@@ -181,10 +181,10 @@ class TenantProvisioning {
     if (cleanKeyword.length() > 100) throw new IllegalArgumentException("关键字过长");
     var where = new StringBuilder(" where 1=1");
     var args = new ArrayList<Object>();
-    if ("ACTIVE".equals(cleanStatus)) where.append(" and active");
-    else if ("SUSPENDED".equals(cleanStatus)) where.append(" and not active");
+    if ("ACTIVE".equals(cleanStatus)) where.append(" and t.active");
+    else if ("SUSPENDED".equals(cleanStatus)) where.append(" and not t.active");
     if (!cleanKeyword.isEmpty()) {
-      where.append(" and name ilike ?");
+      where.append(" and t.name ilike ?");
       args.add("%" + cleanKeyword + "%");
     }
     return new TenantFilter(where.toString(), args);
@@ -212,19 +212,31 @@ class TenantProvisioning {
   long countTenants(String status, String keyword) {
     var value = filter(status, keyword);
     return db.queryForObject(
-        "select count(*) from identity.tenant" + value.where(), Long.class, value.args().toArray());
+        "select count(*) from identity.tenant t" + value.where(),
+        Long.class,
+        value.args().toArray());
   }
 
-  /** 平台只读租户基本信息：名称、状态与开通时间，不含任何业务数据。 */
+  /**
+   * 平台只读租户基本信息：名称、状态、开通时间与管理员登录名。
+   *
+   * <p>登录名来自受控函数 {@code platform.tenant_administrators}，平台角色仍读不到账号表；
+   * 多个管理员用顿号连接，停用的标注出来，便于运营核对交付给客户的账号。
+   */
   List<Map<String, Object>> tenants(int page, int size, String status, String keyword) {
     var value = filter(status, keyword);
     var args = new ArrayList<>(value.args());
     args.add(size);
     args.add(page * size);
     return db.queryForList(
-        "select id, name, active, created_at from identity.tenant"
+        "select t.id, t.name, t.active, t.created_at,"
+            + " (select string_agg("
+            + "   case when a.active then a.login else a.login || '（停用）' end,"
+            + "   '、' order by a.login)"
+            + "  from platform.tenant_administrators(t.id) a) as admin_logins"
+            + " from identity.tenant t"
             + value.where()
-            + " order by created_at desc, id limit ? offset ?",
+            + " order by t.created_at desc, t.id limit ? offset ?",
         args.toArray());
   }
 

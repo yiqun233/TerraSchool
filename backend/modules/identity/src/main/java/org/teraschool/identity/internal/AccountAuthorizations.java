@@ -31,9 +31,11 @@ public class AccountAuthorizations {
     if (!Objects.equals(
         rows.getFirst().get("credential_version", Long.class),
         SessionPrincipal.current().version())) throw new AccessDeniedException("会话已撤销");
+    var tenant = rows.getFirst().get("tenant_id", UUID.class);
+    var tenantAdmin = rows.getFirst().get("tenant_admin", Boolean.class);
     return PermissionRules.calculate(
         account,
-        rows.getFirst().get("tenant_id", UUID.class),
+        tenant,
         true,
         rows.map(
             r ->
@@ -41,8 +43,18 @@ public class AccountAuthorizations {
                     r.get("action", String.class),
                     r.get("school_id", UUID.class),
                     r.get("effect", String.class))),
-        rows.getFirst().get("tenant_admin", Boolean.class),
-        rows.getFirst().get("password_change_required", Boolean.class));
+        tenantAdmin,
+        rows.getFirst().get("password_change_required", Boolean.class),
+        tenantAdmin ? tenantSchoolIds(tenant) : Set.of());
+  }
+
+  /** 租户管理员覆盖全部学校；在租户事务内现查，不依赖建校时写入的规则行。 */
+  private Set<UUID> tenantSchoolIds(UUID tenant) {
+    return new LinkedHashSet<>(
+        sql.fetch(
+                "select id from organization.unit where tenant_id=? and kind='SCHOOL' order by id",
+                tenant)
+            .map(r -> r.get("id", UUID.class)));
   }
 
   <T> T managed(Function<CurrentPermissions, T> work) {
@@ -196,20 +208,24 @@ public class AccountAuthorizations {
                             r.get("id", UUID.class),
                             r.get("name", String.class),
                             r.get("version", Long.class)));
+    var tenantAdmin = row.get("tenant_admin", Boolean.class);
+    var active = row.get("active", Boolean.class);
+    var tenant = row.get("tenant_id", UUID.class);
     return new AccountAuthorization(
         id,
         row.get("login", String.class),
-        row.get("active", Boolean.class),
+        active,
         row.get("authorization_version", Long.class),
         rules,
         assignments,
         PermissionRules.calculate(
             id,
-            row.get("tenant_id", UUID.class),
-            row.get("active", Boolean.class),
+            tenant,
+            active,
             expanded,
-            row.get("tenant_admin", Boolean.class),
-            row.get("password_change_required", Boolean.class)),
+            tenantAdmin,
+            row.get("password_change_required", Boolean.class),
+            active && tenantAdmin ? tenantSchoolIds(tenant) : Set.of()),
         schoolLabels,
         roleLabels);
   }
@@ -269,6 +285,7 @@ public class AccountAuthorizations {
 
   boolean hasFullAdministrator() {
     // 用数据库集合运算检查所有学校仍被至少一位可用管理员覆盖，不逐账号循环查询。
+    // 租户管理员按标记就覆盖全部学校（含零学校），不受规则行影响；其余账号仍按规则聚合。
     return sql.fetchOne(
             """
       with rules as (
@@ -281,7 +298,10 @@ public class AccountAuthorizations {
         join identity.tenant t on t.id=a.tenant_id and t.active
         where p.action='AUTHORIZATION_MANAGE' and p.effect='ALLOW' and p.school_id is not null
         and not exists(select 1 from rules d where d.account_id=p.account_id and d.action=p.action and d.effect='DENY' and (d.school_id is null or d.school_id=p.school_id))
-      ) select exists(select 1 from effective group by account_id
+      ) select exists(
+        select 1 from identity.account a join identity.tenant t on t.id=a.tenant_id and t.active
+         where a.active and a.tenant_admin
+      ) or exists(select 1 from effective group by account_id
         having count(distinct school_id)=(select count(*) from organization.unit where kind='SCHOOL')) as present
       """)
         .get("present", Boolean.class);

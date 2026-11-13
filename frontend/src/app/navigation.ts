@@ -208,8 +208,16 @@ export function visibleNavigation(
  * <p>只按“这个账号真能打开哪个页面”判断，不拿学校范围当业务能力的替身：有学校范围
  * 只说明能看组织，并不代表能看学员档案。曾经按可读学校非空就落到学员档案，导致刚建完
  * 学校的机构管理员一登录就吃 403（2026-11-10 反馈）。
+ *
+ * <p>租户管理员还没有学校时仍先落到组织目录：全体动作虽然已开通，但业务页此时没有
+ * 任何数据范围，直接进去只会看到空列表，先建校才是下一步。
  */
 export function startPath(permissions: CurrentPermissions | null): string {
+  if (
+    permissions?.tenantAdmin &&
+    (permissions.readableSchoolIds?.length ?? 0) === 0
+  )
+    return "/organization";
   if (granted(permissions, "STUDENT_READ")) return "/students";
   if (permissions?.canReadOrganizations) return "/organization";
   return "/start";

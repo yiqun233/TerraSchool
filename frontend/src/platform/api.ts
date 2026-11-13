@@ -16,6 +16,8 @@ export interface TenantRow {
   active: boolean;
   /** 服务端返回 snake_case 的开通时间 */
   created_at: string;
+  /** 该租户管理员的登录名；多个用顿号连接，可能带“（停用）”标记 */
+  admin_logins: string | null;
 }
 
 /** 登录名或口令错误：与“会话过期”区分，避免把用户踢回登录页时给出错误提示。 */
@@ -133,7 +135,7 @@ export interface TenantSummary {
   thisMonth: number;
 }
 
-/** 租户列表：只有名称、状态与开通时间，不含业务数据（DEC-024）。 */
+/** 租户列表：名称、管理员登录名、状态与开通时间，不含业务数据（DEC-024）。 */
 export async function fetchTenants(
   page: number,
   size = 20,
