@@ -13,3 +13,5 @@ Dockerfile* text eol=lf
 *.cmd text eol=crlf
 *.ps1 text eol=crlf
 *.md text eol=lf
+# Git 钩子由 sh 执行，必须保持 LF，否则 Windows 检出后 hook 直接报语法错误。
+.githooks/* text eol=lf

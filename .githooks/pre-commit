@@ -1,0 +1,40 @@
+#!/bin/sh
+# 改了受总览约束的文档（根 README/AGENT、doc 下的 Markdown 或生成器本身）时，
+# 自动重新生成 doc/04-执行计划/开发总览.html 并加入本次提交。
+# 目的：避免 CI 的 documentation job 因「开发总览已过期」失败。
+# 启用：在仓库根目录执行一次 git config core.hooksPath .githooks
+set -eu
+
+cd "$(git rev-parse --show-toplevel)"
+
+# -c core.quotepath=false：中文路径否则输出成 "\346\211..." 转义串，下面的路径匹配会失效。
+staged=$(git -c core.quotepath=false diff --cached --name-only --diff-filter=ACMRD)
+
+# 只在这些路径变化时介入；其余提交原样放行。
+if ! printf '%s\n' "$staged" | grep -Eq '^(README\.md$|AGENT\.md$|doc/.*\.md$|tools/progress/)'; then
+  exit 0
+fi
+
+# Windows 上 python3.exe 可能是应用商店的占位程序（执行即失败），所以先验证解释器真能运行再采用。
+py=""
+for candidate in python python3 py; do
+  if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c 'import sys' >/dev/null 2>&1; then
+    py=$candidate
+    break
+  fi
+done
+if [ -z "$py" ]; then
+  echo "pre-commit: 找不到可用的 python，无法重新生成开发总览。请安装 Python 3.11+ 后重试。" >&2
+  exit 1
+fi
+
+# 生成失败（缺依赖、编号/链接校验不通过）时直接阻断提交，把问题留在本地。
+"$py" -X utf8 tools/progress/build.py
+
+overview="doc/04-执行计划/开发总览.html"
+if git diff --quiet -- "$overview"; then
+  echo "pre-commit: 开发总览已是最新，无需更新。"
+else
+  git add -- "$overview"
+  echo "pre-commit: 已重新生成并暂存 $overview"
+fi
