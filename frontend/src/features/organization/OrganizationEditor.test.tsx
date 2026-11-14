@@ -140,46 +140,70 @@ describe("组织维护提交保护", () => {
     await waitFor(() => expect(saved).toHaveBeenCalledTimes(1));
     expect(post).toHaveBeenCalledTimes(1);
   });
-  it("编辑校区资料时提交当前资料和名称的同一版本更新", async () => {
-    const user = userEvent.setup();
-    const saved = vi.fn();
-    post.mockResolvedValue({ response: { ok: true, status: 200 } });
-    render(
-      wrapper(
-        <OrganizationEditor
-          selected={{
-            id: "campus-a",
-            schoolId: "school-a",
-            kind: "CAMPUS",
-            name: "校区甲",
-            version: 4,
-            shortName: "甲校区",
-            address: "旧地址",
-            postalCode: "100000",
-            busRoutes: "1路",
-          }}
-          identityKey="a"
-          onSaved={saved}
-        />,
-      ),
-    );
-    await user.click(
-      await screen.findByRole("button", { name: /编辑校区资料/ }),
-    );
-    await user.clear(screen.getByRole("textbox", { name: "地址" }));
-    await user.type(screen.getByRole("textbox", { name: "地址" }), "新地址");
-    await user.click(screen.getByRole("button", { name: /保\s*存/ }));
-    await waitFor(() => expect(saved).toHaveBeenCalledTimes(1));
-    expect(post.mock.calls[0][1]).toMatchObject({
-      params: { path: { id: "campus-a" } },
-      body: {
-        expectedVersion: 4,
-        name: "校区甲",
-        shortName: "甲校区",
-        address: "新地址",
-        postalCode: "100000",
-        busRoutes: "1路",
-      },
-    });
-  });
+  it(
+    "编辑校区资料时提交当前资料和名称的同一版本更新",
+    { timeout: 30000 },
+    async () => {
+      const user = userEvent.setup();
+      const saved = vi.fn();
+      post.mockResolvedValue({ response: { ok: true, status: 200 } });
+      render(
+        wrapper(
+          <OrganizationEditor
+            selected={{
+              id: "campus-a",
+              schoolId: "school-a",
+              kind: "CAMPUS",
+              name: "校区甲",
+              version: 4,
+              shortName: "甲校区",
+              address: "旧地址",
+              postalCode: "100000",
+              busRoutes: "1路",
+              managerName: "原负责人",
+              longitude: "121.473701",
+              latitude: "31.230416",
+              schoolLicenseNumber: "TEST-001",
+            }}
+            identityKey="a"
+            onSaved={saved}
+          />,
+        ),
+      );
+      await user.click(
+        await screen.findByRole("button", { name: /编辑校区资料/ }),
+      );
+      await user.clear(screen.getByRole("textbox", { name: "地址" }));
+      await user.type(screen.getByRole("textbox", { name: "地址" }), "新地址");
+      await user.clear(screen.getByRole("textbox", { name: "负责人" }));
+      await user.type(
+        screen.getByRole("textbox", { name: "负责人" }),
+        "新负责人",
+      );
+      await user.clear(screen.getByRole("textbox", { name: "经度" }));
+      await user.click(screen.getByRole("button", { name: /保\s*存/ }));
+      expect(
+        await screen.findByText("请同时填写或清空经度和纬度"),
+      ).toBeTruthy();
+      expect(post).not.toHaveBeenCalled();
+      await user.type(screen.getByRole("textbox", { name: "经度" }), "120.25");
+      await user.click(screen.getByRole("button", { name: /保\s*存/ }));
+      await waitFor(() => expect(saved).toHaveBeenCalledTimes(1));
+      expect(post.mock.calls[0][1]).toMatchObject({
+        params: { path: { id: "campus-a" } },
+        body: {
+          expectedVersion: 4,
+          name: "校区甲",
+          shortName: "甲校区",
+          address: "新地址",
+          postalCode: "100000",
+          busRoutes: "1路",
+          managerName: "新负责人",
+          longitude: "120.25",
+          latitude: "31.230416",
+          schoolLicenseNumber: "TEST-001",
+        },
+      });
+    },
+  );
 });

@@ -15,7 +15,25 @@ type Draft = {
   address: string;
   postalCode: string;
   busRoutes: string;
+  managerName: string;
+  longitude: string;
+  latitude: string;
+  schoolLicenseNumber: string;
 };
+
+function coordinateRule(limit: number) {
+  return {
+    validator: async (_rule: unknown, value: string | undefined) => {
+      const text = value?.trim();
+      if (
+        text &&
+        (!/^[+-]?\d{1,3}(?:\.\d{1,8})?$/.test(text) ||
+          Math.abs(Number(text)) > limit)
+      )
+        throw new Error(`请输入 -${limit} 到 ${limit} 的坐标，最多 8 位小数`);
+    },
+  };
+}
 
 function traceReference(response: Response) {
   const trace = response.headers?.get("X-Trace-Id");
@@ -92,11 +110,22 @@ export function OrganizationEditor({
       address: selected?.address ?? "",
       postalCode: selected?.postalCode ?? "",
       busRoutes: selected?.busRoutes ?? "",
+      managerName: selected?.managerName ?? "",
+      longitude: selected?.longitude ?? "",
+      latitude: selected?.latitude ?? "",
+      schoolLicenseNumber: selected?.schoolLicenseNumber ?? "",
     });
     setOpen(true);
   }
   async function save(values: Draft) {
     if (inFlight.current) return;
+    if (
+      selected?.kind === "CAMPUS" &&
+      Boolean(values.longitude?.trim()) !== Boolean(values.latitude?.trim())
+    ) {
+      setError("请同时填写或清空经度和纬度");
+      return;
+    }
     inFlight.current = true;
     setBusy(true);
     setError("");
@@ -118,6 +147,10 @@ export function OrganizationEditor({
                   address: values.address,
                   postalCode: values.postalCode,
                   busRoutes: values.busRoutes,
+                  managerName: values.managerName,
+                  longitude: values.longitude,
+                  latitude: values.latitude,
+                  schoolLicenseNumber: values.schoolLicenseNumber,
                 }
               : {}),
           },
@@ -126,8 +159,8 @@ export function OrganizationEditor({
         if (!result.response.ok)
           throw new Error(
             result.response.status === 409
-              ? "版本已变更，请关闭窗口并刷新后核对名称"
-              : "改名被拒绝，请核对权限和名称",
+              ? "版本已变更，请关闭窗口并刷新后核对资料"
+              : "保存被拒绝，请核对权限和输入",
           );
       } else {
         pending.current ??= {
@@ -265,6 +298,34 @@ export function OrganizationEditor({
               </Form.Item>
               <Form.Item name="address" label="地址" rules={[{ max: 200 }]}>
                 <Input maxLength={200} />
+              </Form.Item>
+              <Form.Item
+                name="managerName"
+                label="负责人"
+                rules={[{ max: 100 }]}
+              >
+                <Input maxLength={100} />
+              </Form.Item>
+              <Form.Item
+                name="longitude"
+                label="经度"
+                rules={[coordinateRule(180)]}
+              >
+                <Input inputMode="decimal" />
+              </Form.Item>
+              <Form.Item
+                name="latitude"
+                label="纬度"
+                rules={[coordinateRule(90)]}
+              >
+                <Input inputMode="decimal" />
+              </Form.Item>
+              <Form.Item
+                name="schoolLicenseNumber"
+                label="办学许可证编号"
+                rules={[{ max: 50 }]}
+              >
+                <Input maxLength={50} />
               </Form.Item>
               <Form.Item name="postalCode" label="邮编" rules={[{ max: 50 }]}>
                 <Input maxLength={50} />

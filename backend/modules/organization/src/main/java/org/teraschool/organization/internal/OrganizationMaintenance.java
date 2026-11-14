@@ -2,20 +2,24 @@ package org.teraschool.organization.internal;
 
 import static org.teraschool.organization.internal.generated.tables.Unit.UNIT;
 
+import java.math.BigDecimal;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import org.jooq.DSLContext;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.teraschool.identity.api.Actor;
 import org.teraschool.identity.api.CurrentActor;
 import org.teraschool.organization.api.*;
+import org.teraschool.organization.internal.generated.tables.records.UnitRecord;
 import org.teraschool.platform.api.TenantTransactions;
 
 /** 完整用例拥有事务和审计边界，HTTP 或第二入口均不能跳过授权。 */
 @Service
 public class OrganizationMaintenance {
+  private static final Pattern COORDINATE = Pattern.compile("[+-]?\\d{1,3}(?:\\.\\d{1,8})?");
   private final CurrentActor actors;
   private final TenantTransactions tx;
   private final DSLContext sql;
@@ -124,25 +128,26 @@ public class OrganizationMaintenance {
               command.shortName() != null
                   || command.address() != null
                   || command.postalCode() != null
-                  || command.busRoutes() != null;
+                  || command.busRoutes() != null
+                  || command.managerName() != null
+                  || command.longitude() != null
+                  || command.latitude() != null
+                  || command.schoolLicenseNumber() != null;
           if (campusProfileSupplied && !"CAMPUS".equals(current.getKind()))
             throw new OrganizationConflict("CAMPUS_PROFILE_NOT_EDITABLE");
-          String shortName =
-              campusProfileSupplied
-                  ? profileValue(command.shortName(), current.getShortName(), 20, "简称")
-                  : current.getShortName();
-          String address =
-              campusProfileSupplied
-                  ? profileValue(command.address(), current.getAddress(), 200, "地址")
-                  : current.getAddress();
-          String postalCode =
-              campusProfileSupplied
-                  ? profileValue(command.postalCode(), current.getPostalCode(), 50, "邮编")
-                  : current.getPostalCode();
-          String busRoutes =
-              campusProfileSupplied
-                  ? profileValue(command.busRoutes(), current.getBusRoutes(), 300, "公交线路")
-                  : current.getBusRoutes();
+          String shortName = profileValue(command.shortName(), current.getShortName(), 20, "简称");
+          String address = profileValue(command.address(), current.getAddress(), 200, "地址");
+          String postalCode = profileValue(command.postalCode(), current.getPostalCode(), 50, "邮编");
+          String busRoutes = profileValue(command.busRoutes(), current.getBusRoutes(), 300, "公交线路");
+          String managerName =
+              profileValue(command.managerName(), current.getManagerName(), 100, "负责人");
+          String license =
+              profileValue(
+                  command.schoolLicenseNumber(), current.getSchoolLicenseNumber(), 50, "办学许可证编号");
+          var longitude = coordinate(command.longitude(), current.getLongitude(), 180, "经度");
+          var latitude = coordinate(command.latitude(), current.getLatitude(), 90, "纬度");
+          if ((longitude == null) != (latitude == null))
+            throw new IllegalArgumentException("请同时填写或清空经度和纬度");
           var changed =
               sql.update(UNIT)
                   .set(UNIT.NAME, name)
@@ -150,6 +155,10 @@ public class OrganizationMaintenance {
                   .set(UNIT.ADDRESS, address)
                   .set(UNIT.POSTAL_CODE, postalCode)
                   .set(UNIT.BUS_ROUTES, busRoutes)
+                  .set(UNIT.MANAGER_NAME, managerName)
+                  .set(UNIT.LONGITUDE, longitude)
+                  .set(UNIT.LATITUDE, latitude)
+                  .set(UNIT.SCHOOL_LICENSE_NUMBER, license)
                   .set(UNIT.VERSION, UNIT.VERSION.plus(1L))
                   .where(UNIT.ID.eq(id).and(UNIT.VERSION.eq(command.expectedVersion())))
                   .returning()
@@ -164,12 +173,8 @@ public class OrganizationMaintenance {
                 current.getSchoolId(),
                 current.getName(),
                 name,
-                campusProfileJson(
-                    current.getShortName(),
-                    current.getAddress(),
-                    current.getPostalCode(),
-                    current.getBusRoutes()),
-                campusProfileJson(shortName, address, postalCode, busRoutes));
+                campusProfileJson(current),
+                campusProfileJson(changed));
           } else {
             audit(
                 actor,
@@ -200,16 +205,36 @@ public class OrganizationMaintenance {
     return value.isEmpty() ? null : value;
   }
 
-  private static String campusProfileJson(
-      String shortName, String address, String postalCode, String busRoutes) {
+  private static BigDecimal coordinate(
+      String incoming, BigDecimal current, int limit, String label) {
+    if (incoming == null) return current;
+    String value = incoming.strip();
+    if (value.isEmpty()) return null;
+    if (!COORDINATE.matcher(value).matches())
+      throw new IllegalArgumentException(label + "最多支持8位小数");
+    var result = new BigDecimal(value);
+    if (result.abs().compareTo(BigDecimal.valueOf(limit)) > 0)
+      throw new IllegalArgumentException(label + "须在 -" + limit + " 到 " + limit + " 之间");
+    return result;
+  }
+
+  private static String campusProfileJson(UnitRecord row) {
     return "{\"shortName\":"
-        + json(shortName)
+        + json(row.getShortName())
         + ",\"address\":"
-        + json(address)
+        + json(row.getAddress())
         + ",\"postalCode\":"
-        + json(postalCode)
+        + json(row.getPostalCode())
         + ",\"busRoutes\":"
-        + json(busRoutes)
+        + json(row.getBusRoutes())
+        + ",\"managerName\":"
+        + json(row.getManagerName())
+        + ",\"longitude\":"
+        + json(decimalText(row.getLongitude()))
+        + ",\"latitude\":"
+        + json(decimalText(row.getLatitude()))
+        + ",\"schoolLicenseNumber\":"
+        + json(row.getSchoolLicenseNumber())
         + "}";
   }
 
@@ -236,8 +261,7 @@ public class OrganizationMaintenance {
     audit.append(actor.tenantId(), actor.accountId(), action, resource, school, before, after);
   }
 
-  private OrganizationUnit view(
-      org.teraschool.organization.internal.generated.tables.records.UnitRecord row) {
+  static OrganizationUnit view(UnitRecord row) {
     return new OrganizationUnit(
         row.getId(),
         row.getSchoolId(),
@@ -248,6 +272,14 @@ public class OrganizationMaintenance {
         row.getShortName(),
         row.getAddress(),
         row.getPostalCode(),
-        row.getBusRoutes());
+        row.getBusRoutes(),
+        row.getManagerName(),
+        decimalText(row.getLongitude()),
+        decimalText(row.getLatitude()),
+        row.getSchoolLicenseNumber());
+  }
+
+  private static String decimalText(BigDecimal value) {
+    return value == null ? null : value.toPlainString();
   }
 }

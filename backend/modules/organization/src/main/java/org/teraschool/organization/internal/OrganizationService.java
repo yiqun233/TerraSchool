@@ -40,25 +40,12 @@ public class OrganizationService implements OrganizationQueries {
           var condition = school.in(actor.schools());
           long total = sql.fetchCount(table, condition);
           var rows =
-              sql.select()
-                  .from(table)
+              sql.selectFrom(table)
                   .where(condition)
                   .orderBy(UNIT.ID)
                   .limit(size)
                   .offset(page * size)
-                  .fetch(
-                      r ->
-                          new OrganizationUnit(
-                              r.get("id", java.util.UUID.class),
-                              r.get("school_id", java.util.UUID.class),
-                              r.get("kind", String.class),
-                              r.get("name", String.class),
-                              r.get("version", Long.class),
-                              r.get("active", Boolean.class),
-                              r.get("short_name", String.class),
-                              r.get("address", String.class),
-                              r.get("postal_code", String.class),
-                              r.get("bus_routes", String.class)));
+                  .fetch(OrganizationMaintenance::view);
           return new OrganizationPage(rows, page, size, total);
         });
   }

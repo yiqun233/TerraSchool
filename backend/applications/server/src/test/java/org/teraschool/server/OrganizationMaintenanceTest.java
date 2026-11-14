@@ -146,12 +146,26 @@ class OrganizationMaintenanceTest {
             () ->
                 commands.rename(
                     campus.id(),
-                    new RenameOrganizationUnit(0L, "合成校区", "合成", "新地址", "200000", "2路、8路")));
+                    new RenameOrganizationUnit(
+                        0L,
+                        "合成校区",
+                        "合成",
+                        "新地址",
+                        "200000",
+                        "2路、8路",
+                        "校区负责人",
+                        "121.473701",
+                        "31.230416",
+                        "TEST-001")));
     assertThat(updated.version()).isEqualTo(1);
     assertThat(updated.shortName()).isEqualTo("合成");
     assertThat(updated.address()).isEqualTo("新地址");
     assertThat(updated.postalCode()).isEqualTo("200000");
     assertThat(updated.busRoutes()).isEqualTo("2路、8路");
+    assertThat(updated.managerName()).isEqualTo("校区负责人");
+    assertThat(updated.longitude()).isEqualTo("121.473701");
+    assertThat(updated.latitude()).isEqualTo("31.230416");
+    assertThat(updated.schoolLicenseNumber()).isEqualTo("TEST-001");
     assertThat(
             asActor(() -> queries.list(0, 100)).items().stream()
                 .filter(unit -> unit.id().equals(campus.id()))
@@ -172,10 +186,13 @@ class OrganizationMaintenanceTest {
       }
     }
     assertThat(detailBefore)
-        .isEqualTo("{\"shortName\":null,\"address\":null,\"postalCode\":null,\"busRoutes\":null}");
+        .isEqualTo(
+            "{\"shortName\":null,\"address\":null,\"postalCode\":null,\"busRoutes\":null,"
+                + "\"managerName\":null,\"longitude\":null,\"latitude\":null,\"schoolLicenseNumber\":null}");
     assertThat(detailAfter)
         .isEqualTo(
-            "{\"shortName\":\"合成\",\"address\":\"新地址\",\"postalCode\":\"200000\",\"busRoutes\":\"2路、8路\"}");
+            "{\"shortName\":\"合成\",\"address\":\"新地址\",\"postalCode\":\"200000\",\"busRoutes\":\"2路、8路\","
+                + "\"managerName\":\"校区负责人\",\"longitude\":\"121.473701\",\"latitude\":\"31.230416\",\"schoolLicenseNumber\":\"TEST-001\"}");
     assertThatThrownBy(
             () ->
                 asActor(
@@ -185,6 +202,40 @@ class OrganizationMaintenanceTest {
                             new RenameOrganizationUnit(0L, "过期", "新简称", null, null, null))))
         .isInstanceOf(OrganizationConflict.class)
         .hasMessage("VERSION_CONFLICT");
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    () ->
+                        commands.rename(
+                            campus.id(),
+                            new RenameOrganizationUnit(
+                                1L, "合成校区", null, null, null, null, null, "181", null, null))))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(
+            () ->
+                asActor(
+                    () ->
+                        commands.rename(
+                            campus.id(),
+                            new RenameOrganizationUnit(
+                                1L, "合成校区", null, null, null, null, null, "", null, null))))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("请同时填写或清空经度和纬度");
+    var renamed =
+        asActor(() -> commands.rename(campus.id(), new RenameOrganizationUnit(1L, "校区新名")));
+    assertThat(renamed.longitude()).isEqualTo(updated.longitude());
+    assertThat(renamed.managerName()).isEqualTo(updated.managerName());
+    var cleared =
+        asActor(
+            () ->
+                commands.rename(
+                    campus.id(),
+                    new RenameOrganizationUnit(
+                        2L, "校区新名", null, null, null, null, "", "", "", "")));
+    assertThat(cleared.managerName()).isNull();
+    assertThat(cleared.longitude()).isNull();
+    assertThat(cleared.latitude()).isNull();
+    assertThat(cleared.schoolLicenseNumber()).isNull();
   }
 
   @Test
@@ -500,7 +551,16 @@ class OrganizationMaintenanceTest {
     assertThat(openApi.statusCode()).isEqualTo(200);
     Files.writeString(Path.of("target/openapi.json"), openApi.body());
     var schema = json.readTree(openApi.body()).path("components").path("schemas");
-    for (var field : List.of("shortName", "address", "postalCode", "busRoutes")) {
+    for (var field :
+        List.of(
+            "shortName",
+            "address",
+            "postalCode",
+            "busRoutes",
+            "managerName",
+            "longitude",
+            "latitude",
+            "schoolLicenseNumber")) {
       assertThat(schema.path("OrganizationUnit").path("properties").has(field)).isTrue();
       assertThat(schema.path("RenameOrganizationUnit").path("properties").has(field)).isTrue();
     }
