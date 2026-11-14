@@ -386,3 +386,129 @@ export async function fetchTenantDetail(id: string): Promise<TenantDetail> {
     throw new RequestFailed(response.status, "加载租户详情失败");
   return (await response.json()) as TenantDetail;
 }
+
+/** 一条开通记录：成功行有 tenantId，失败行只有参数与错误码。 */
+export interface ProvisioningRecord {
+  created_at: string;
+  finished_at: string | null;
+  status: "ACTIVE" | "FAILED";
+  error_code: string | null;
+  tenant_id: string | null;
+  tenant_name: string | null;
+  admin_login: string | null;
+  operator_login: string;
+  operator_name: string;
+}
+
+/** 一条平台审计事件；目标租户与变更摘要可能为空（如平台登录）。 */
+export interface AuditEventRow {
+  happened_at: string;
+  action: string;
+  tenant_id: string | null;
+  tenant_name: string | null;
+  changed_fields: string;
+  trace_id: string;
+  operator_login: string;
+  operator_name: string;
+}
+
+export interface PlatformOverview {
+  tenants: TenantSummary;
+  schools: number;
+  accounts: number;
+  recentProvisioning: ProvisioningRecord[];
+  recentAudit: AuditEventRow[];
+}
+
+/** 总览：只有平台可见的计数与最近记录；缺少动作时对应摘要为空数组，不是报错。 */
+export async function fetchOverview(): Promise<PlatformOverview> {
+  const response = await fetch("/api/platform/overview", {
+    credentials: "same-origin",
+  });
+  if (response.status === 401)
+    throw new SessionExpired("登录已失效，请重新登录");
+  if (response.status === 403) throw new AccessDenied("缺少 TENANT_READ 权限");
+  if (!response.ok) throw new RequestFailed(response.status, "加载总览失败");
+  const data = (await response.json()) as Partial<PlatformOverview>;
+  return {
+    tenants: {
+      total: data.tenants?.total ?? 0,
+      active: data.tenants?.active ?? 0,
+      suspended: data.tenants?.suspended ?? 0,
+      thisMonth: data.tenants?.thisMonth ?? 0,
+    },
+    schools: data.schools ?? 0,
+    accounts: data.accounts ?? 0,
+    recentProvisioning: data.recentProvisioning ?? [],
+    recentAudit: data.recentAudit ?? [],
+  };
+}
+
+/** 开通记录：按状态与机构名/登录名筛选；成功与失败都在同一列表里。 */
+export async function fetchProvisioningRequests(
+  page: number,
+  size = 20,
+  status = "",
+  keyword = "",
+): Promise<{ items: ProvisioningRecord[]; total: number }> {
+  const params = new URLSearchParams({
+    page: String(page),
+    size: String(size),
+  });
+  if (status) params.set("status", status);
+  if (keyword) params.set("keyword", keyword);
+  const response = await fetch(
+    `/api/platform/provisioning-requests?${params}`,
+    { credentials: "same-origin" },
+  );
+  if (response.status === 401)
+    throw new SessionExpired("登录已失效，请重新登录");
+  if (response.status === 403)
+    throw new AccessDenied("缺少 PROVISIONING_READ 权限");
+  if (!response.ok)
+    throw new RequestFailed(response.status, "加载开通记录失败");
+  const data = (await response.json()) as {
+    items?: ProvisioningRecord[];
+    total?: number;
+  };
+  return { items: data.items ?? [], total: data.total ?? 0 };
+}
+
+export interface AuditFilters {
+  action?: string;
+  tenantId?: string;
+  operator?: string;
+  from?: string;
+  to?: string;
+}
+
+/** 审计日志：只读平台自身操作轨迹，不含业务数据。 */
+export async function fetchAuditEvents(
+  page: number,
+  size = 20,
+  filters: AuditFilters = {},
+): Promise<{ items: AuditEventRow[]; total: number }> {
+  const params = new URLSearchParams({
+    page: String(page),
+    size: String(size),
+  });
+  if (filters.action) params.set("action", filters.action);
+  if (filters.tenantId) params.set("tenantId", filters.tenantId);
+  if (filters.operator) params.set("operator", filters.operator);
+  if (filters.from) params.set("from", filters.from);
+  if (filters.to) params.set("to", filters.to);
+  const response = await fetch(`/api/platform/audit-events?${params}`, {
+    credentials: "same-origin",
+  });
+  if (response.status === 401)
+    throw new SessionExpired("登录已失效，请重新登录");
+  if (response.status === 403)
+    throw new AccessDenied("缺少 PLATFORM_AUDIT_READ 权限");
+  if (!response.ok)
+    throw new RequestFailed(response.status, "加载审计日志失败");
+  const data = (await response.json()) as {
+    items?: AuditEventRow[];
+    total?: number;
+  };
+  return { items: data.items ?? [], total: data.total ?? 0 };
+}

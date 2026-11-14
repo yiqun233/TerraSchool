@@ -430,4 +430,165 @@ describe("平台运营端", () => {
     expect(screen.getByText("当前版本 5")).toBeTruthy();
     expect(screen.queryByText("当前版本 9")).toBeNull();
   });
+
+  it("总览只展示平台计数与最近记录，不出现业务字段", async () => {
+    installFetch((url) => {
+      if (url.endsWith("/api/platform/session/me"))
+        return jsonResponse(200, operator);
+      if (url.endsWith("/api/platform/overview"))
+        return jsonResponse(200, {
+          tenants: { total: 3, active: 2, suspended: 1, thisMonth: 1 },
+          schools: 4,
+          accounts: 9,
+          recentProvisioning: [
+            {
+              created_at: "2026-11-14T10:20:00+08:00",
+              finished_at: "2026-11-14T10:20:05+08:00",
+              status: "ACTIVE",
+              error_code: null,
+              tenant_id: "0190a2b3-0000-7000-8000-000000000001",
+              tenant_name: "启明教育",
+              admin_login: "qiming-admin",
+              operator_login: "ops.zhou",
+              operator_name: "周明",
+            },
+          ],
+          recentAudit: [
+            {
+              happened_at: "2026-11-14T10:30:00+08:00",
+              action: "TENANT_SUSPENDED",
+              tenant_id: "0190a2b3-0000-7000-8000-000000000002",
+              tenant_name: "明德学堂",
+              changed_fields: "active=true->false",
+              trace_id: "0190a2b3-0000-7000-8000-0000000000ff",
+              operator_login: "ops.zhou",
+              operator_name: "周明",
+            },
+          ],
+        });
+      if (url.includes("/api/platform/tenants"))
+        return jsonResponse(200, { items: tenants, page: 0 });
+      return undefined;
+    });
+
+    const user = userEvent.setup();
+    render(<PlatformApp />);
+    await user.click(await screen.findByRole("button", { name: "总览" }));
+
+    expect(await screen.findByText("学校总数")).toBeTruthy();
+    expect(screen.getByText("学校总数").parentElement?.textContent).toContain(
+      "4",
+    );
+    expect(screen.getByText("账号总数").parentElement?.textContent).toContain(
+      "9",
+    );
+    expect(await screen.findByText("启明教育")).toBeTruthy();
+    expect(screen.getByText("停用租户")).toBeTruthy();
+    // 平台总览不出现任何业务对象列。
+    expect(screen.queryByText("学员")).toBeNull();
+    expect(screen.queryByText("金额")).toBeNull();
+  });
+
+  it("开通记录同时展示成功与失败，失败给出可读原因", async () => {
+    installFetch((url) => {
+      if (url.endsWith("/api/platform/session/me"))
+        return jsonResponse(200, operator);
+      if (url.includes("/api/platform/provisioning-requests"))
+        return jsonResponse(200, {
+          total: 2,
+          items: [
+            {
+              created_at: "2026-11-14T10:20:00+08:00",
+              finished_at: "2026-11-14T10:20:05+08:00",
+              status: "ACTIVE",
+              error_code: null,
+              tenant_id: "0190a2b3-0000-7000-8000-000000000001",
+              tenant_name: "启明教育",
+              admin_login: "qiming-admin",
+              operator_login: "ops.zhou",
+              operator_name: "周明",
+            },
+            {
+              created_at: "2026-11-14T09:00:00+08:00",
+              finished_at: "2026-11-14T09:00:01+08:00",
+              status: "FAILED",
+              error_code: "ADMIN_LOGIN_TAKEN",
+              tenant_id: null,
+              tenant_name: "失败机构",
+              admin_login: "taken-admin",
+              operator_login: "ops.zhou",
+              operator_name: "周明",
+            },
+          ],
+        });
+      return undefined;
+    });
+
+    const user = userEvent.setup();
+    render(<PlatformApp />);
+    await user.click(await screen.findByRole("button", { name: "开通记录" }));
+
+    expect(await screen.findByText("失败机构")).toBeTruthy();
+    expect(screen.getByText(/失败 · 管理员登录名已被占用/)).toBeTruthy();
+    // “成功”同时是筛选标签与结果标签，这里锁定在成功那一行内断言。
+    const succeededRow = screen
+      .getByText("启明教育")
+      .closest("tr") as HTMLElement;
+    expect(within(succeededRow).getByText("成功")).toBeTruthy();
+    expect(screen.getByText(/共 2 条/)).toBeTruthy();
+  });
+
+  it("审计日志展示动作中文名、操作者与目标租户", async () => {
+    installFetch((url) => {
+      if (url.endsWith("/api/platform/session/me"))
+        return jsonResponse(200, operator);
+      if (url.includes("/api/platform/audit-events"))
+        return jsonResponse(200, {
+          total: 1,
+          items: [
+            {
+              happened_at: "2026-11-14T11:00:00+08:00",
+              action: "TENANT_ADMIN_PASSWORD_RESET",
+              tenant_id: "0190a2b3-0000-7000-8000-000000000001",
+              tenant_name: "启明教育",
+              changed_fields: "login=qiming-admin",
+              trace_id: "0190a2b3-0000-7000-8000-0000000000aa",
+              operator_login: "ops.zhou",
+              operator_name: "周明",
+            },
+          ],
+        });
+      if (url.includes("/api/platform/tenants"))
+        return jsonResponse(200, { items: tenants, page: 0 });
+      return undefined;
+    });
+
+    const user = userEvent.setup();
+    render(<PlatformApp />);
+    await user.click(await screen.findByRole("button", { name: "审计日志" }));
+
+    expect(await screen.findByText("重置管理员密码")).toBeTruthy();
+    expect(screen.getByText("启明教育")).toBeTruthy();
+    expect(screen.getByText("login=qiming-admin")).toBeTruthy();
+    expect(screen.getByText(/共 1 条/)).toBeTruthy();
+  });
+
+  it("没有审计权限时说明缺 PLATFORM_AUDIT_READ", async () => {
+    installFetch((url) => {
+      if (url.endsWith("/api/platform/session/me"))
+        return jsonResponse(200, operator);
+      if (url.includes("/api/platform/audit-events"))
+        return jsonResponse(403, {});
+      if (url.includes("/api/platform/tenants"))
+        return jsonResponse(200, { items: tenants, page: 0 });
+      return undefined;
+    });
+
+    const user = userEvent.setup();
+    render(<PlatformApp />);
+    await user.click(await screen.findByRole("button", { name: "审计日志" }));
+
+    expect(await screen.findByText("没有查看审计日志的权限")).toBeTruthy();
+    expect(screen.getByText(/PLATFORM_AUDIT_READ/)).toBeTruthy();
+  });
 });

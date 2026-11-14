@@ -12,12 +12,17 @@ import org.springframework.web.bind.annotation.*;
 class PlatformHttp {
   private final PlatformIdentity identity;
   private final TenantProvisioning provisioning;
+  private final PlatformObservability observability;
   private final BrandingService branding;
 
   PlatformHttp(
-      PlatformIdentity identity, TenantProvisioning provisioning, BrandingService branding) {
+      PlatformIdentity identity,
+      TenantProvisioning provisioning,
+      PlatformObservability observability,
+      BrandingService branding) {
     this.identity = identity;
     this.provisioning = provisioning;
+    this.observability = observability;
     this.branding = branding;
   }
 
@@ -82,7 +87,7 @@ class PlatformHttp {
     var operator = operator(authentication);
     try {
       var provisioned = provisioning.provision(operator, request);
-      identity.audit(operator.id(), "TENANT_PROVISION", "");
+      // 开通审计由 platform.provision_tenant 在同一事务内写入（含 tenant_id），此处不再重复记一条。
       return ResponseEntity.status(201)
           .body(
               Map.of(
@@ -128,6 +133,104 @@ class PlatformHttp {
                   "thisMonth", counts.thisMonth())));
     } catch (IllegalArgumentException invalid) {
       return ResponseEntity.badRequest().build();
+    }
+  }
+
+  /** 总览：租户状态计数、学校/账号规模与最近记录；是否带开通与审计摘要由动作决定。 */
+  @GetMapping("/api/platform/overview")
+  ResponseEntity<?> overview(
+      org.springframework.security.core.Authentication authentication,
+      HttpServletResponse response) {
+    var operator = operator(authentication);
+    if (!operator.actions().contains("TENANT_READ")) return ResponseEntity.status(403).build();
+    try {
+      return ResponseEntity.ok(
+          observability.overview(
+              operator.actions().contains("PROVISIONING_READ"),
+              operator.actions().contains("PLATFORM_AUDIT_READ")));
+    } catch (IllegalArgumentException invalid) {
+      return problem(response, 400, "INVALID_REQUEST", invalid.getMessage());
+    }
+  }
+
+  /** 开通记录：成功与失败都列出，失败带稳定错误码；分页与筛选在 SQL 层完成。 */
+  @GetMapping("/api/platform/provisioning-requests")
+  ResponseEntity<?> provisioningRequests(
+      @RequestParam(defaultValue = "0") int page,
+      @RequestParam(defaultValue = "20") int size,
+      @RequestParam(defaultValue = "") String status,
+      @RequestParam(defaultValue = "") String keyword,
+      org.springframework.security.core.Authentication authentication,
+      HttpServletResponse response) {
+    var operator = operator(authentication);
+    if (!operator.actions().contains("PROVISIONING_READ"))
+      return ResponseEntity.status(403).build();
+    if (page < 0 || size < 1 || size > PlatformObservability.MAX_PAGE_SIZE)
+      return ResponseEntity.badRequest().build();
+    try {
+      return ResponseEntity.ok(
+          Map.of(
+              "items",
+              observability.provisioningRequests(page, size, status, keyword),
+              "page",
+              page,
+              "size",
+              size,
+              "total",
+              observability.countProvisioningRequests(status, keyword)));
+    } catch (IllegalArgumentException invalid) {
+      return problem(response, 400, "INVALID_FILTER", invalid.getMessage());
+    }
+  }
+
+  /**
+   * 审计日志：平台自身操作轨迹（开通、停用、重置密码、品牌、登录）。
+   *
+   * <p>时间参数是 UTC 或带偏移的 ISO-8601 时刻；只按时间比较，不做时区猜测。
+   */
+  @GetMapping("/api/platform/audit-events")
+  ResponseEntity<?> auditEvents(
+      @RequestParam(defaultValue = "0") int page,
+      @RequestParam(defaultValue = "20") int size,
+      @RequestParam(defaultValue = "") String action,
+      @RequestParam(defaultValue = "") String tenantId,
+      @RequestParam(defaultValue = "") String operator,
+      @RequestParam(defaultValue = "") String from,
+      @RequestParam(defaultValue = "") String to,
+      org.springframework.security.core.Authentication authentication,
+      HttpServletResponse response) {
+    var current = operator(authentication);
+    if (!current.actions().contains("PLATFORM_AUDIT_READ"))
+      return ResponseEntity.status(403).build();
+    if (page < 0 || size < 1 || size > PlatformObservability.MAX_PAGE_SIZE)
+      return ResponseEntity.badRequest().build();
+    try {
+      var tenant = tenantId.isBlank() ? null : UUID.fromString(tenantId.strip());
+      var start = parseInstant(from, "开始时间");
+      var end = parseInstant(to, "结束时间");
+      return ResponseEntity.ok(
+          Map.of(
+              "items",
+              observability.auditEvents(page, size, action, tenant, operator, start, end),
+              "page",
+              page,
+              "size",
+              size,
+              "total",
+              observability.countAuditEvents(action, tenant, operator, start, end)));
+    } catch (IllegalArgumentException invalid) {
+      // 非法 UUID、时间格式与倒置区间都归为可读的 400，不带 SQL 或堆栈细节。
+      return problem(response, 400, "INVALID_FILTER", invalid.getMessage());
+    }
+  }
+
+  /** 解析 ISO-8601 时刻；空串表示不限制。 */
+  private static java.time.OffsetDateTime parseInstant(String value, String field) {
+    if (value == null || value.isBlank()) return null;
+    try {
+      return java.time.OffsetDateTime.parse(value.strip());
+    } catch (java.time.format.DateTimeParseException invalid) {
+      throw new IllegalArgumentException(field + "需为 ISO-8601 带时区时刻");
     }
   }
 

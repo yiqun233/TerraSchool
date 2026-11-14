@@ -672,6 +672,69 @@ button.orgName:focus-visible {
   cursor: not-allowed;
 }
 
+/* ---------- 可点击导航项 ---------- */
+/* .navItem 原本是给 span 用的展示样式，这里补上按钮重置，保证键盘可达且不改变外观。 */
+.navAction {
+  border: 0;
+  background: none;
+  width: 100%;
+  font: inherit;
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.navAction:hover {
+  background: var(--ts-bg);
+}
+
+.navAction[aria-current="page"]:hover {
+  background: var(--ts-brand-soft);
+}
+
+/* ---------- 总览：规模与分区标题 ---------- */
+.scaleGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.scaleCell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px;
+  min-width: 0;
+}
+
+.scaleCell + .scaleCell {
+  border-left: 1px solid var(--line);
+}
+
+.scaleLabel {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+.scaleValue {
+  font-size: 18px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.sectionHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.sectionTitle {
+  font-size: 13.5px;
+  font-weight: 600;
+  margin: 0;
+}
+
 /* ---------- 窄屏 ---------- */
 /* 平台运营在 1024 以下把侧栏收成顶部条；表格允许横向滚动而不是压缩列宽。 */
 @media (max-width: 1024px) {

@@ -31,20 +31,12 @@ import {
 } from "./api";
 import type { TenantBranding } from "../shared/theme/brand";
 import { StatStrip } from "../shared/ui/Page";
+import { formatTime } from "./format";
 import styles from "./platform.module.css";
 
 const PAGE_SIZE = 20;
 
 type Phase = "loading" | "ready" | "denied" | "failed";
-
-function formatTime(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  const pad = (part: number) => String(part).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(
-    date.getDate(),
-  )} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
 
 /** 租户列表：只读信息 + 停用/恢复；不含业务数据（DEC-024）。 */
 export default function TenantList({

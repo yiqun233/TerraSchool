@@ -126,20 +126,24 @@ class TenantProvisioning {
    * <p>函数体内失败会整体回滚，失败原因只能由调用方在事务外补记；同一 requestId 重试时 函数会清掉这条失败记录再继续，所以这里用 upsert 而不是普通插入。
    */
   void recordFailure(PlatformIdentity.Operator operator, Request request, String code) {
+    var name = request.name() == null ? "" : request.name().strip();
+    var login = request.adminLogin() == null ? "" : request.adminLogin().strip();
+    // 机构名与登录名一并落库：失败行没有 tenant_id，开通记录页要靠这两列说明“谁失败了”。
     db.update(
         "insert into platform.provisioning_request"
-            + "(operator_id,request_id,fingerprint,status,error_code,finished_at)"
-            + " values (?,?,?,'FAILED',?,now())"
+            + "(operator_id,request_id,fingerprint,status,error_code,"
+            + " tenant_name,admin_login,finished_at)"
+            + " values (?,?,?,'FAILED',?,?,?,now())"
             + " on conflict (operator_id,request_id) do update"
             + " set status='FAILED', error_code=excluded.error_code, finished_at=now(),"
-            + " tenant_id=null, account_id=null",
+            + " tenant_id=null, account_id=null,"
+            + " tenant_name=excluded.tenant_name, admin_login=excluded.admin_login",
         operator.id(),
         request.requestId(),
-        fingerprint(
-            operator.id(),
-            request.name() == null ? "" : request.name().strip(),
-            request.adminLogin() == null ? "" : request.adminLogin().strip()),
-        code);
+        fingerprint(operator.id(), name, login),
+        code,
+        name.isEmpty() ? null : name,
+        login.isEmpty() ? null : login);
   }
 
   /** 列出某租户的租户管理员：登录名与状态。 */
