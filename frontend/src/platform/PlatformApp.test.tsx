@@ -111,7 +111,9 @@ describe("平台运营端", () => {
     expect(activeRow.textContent).toContain("正常");
     expect(activeRow.textContent).toContain("qiming-admin");
     expect(stoppedRow.textContent).toContain("停用");
-    expect(stoppedRow.textContent).toContain("mingde-admin（停用）、mingde-ops");
+    expect(stoppedRow.textContent).toContain(
+      "mingde-admin（停用）、mingde-ops",
+    );
     expect(screen.getByText("2026-11-07 10:20")).toBeTruthy();
     // 平台只读视图不出现业务数据列。
     expect(screen.queryByText("学员")).toBeNull();
