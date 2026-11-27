@@ -53,10 +53,25 @@ class ProductHttp {
     return queries.priceVersions(productId);
   }
 
-  /** 指定业务日期可售的价格快照；报名用它冻结商品与规则。 */
+  /** 指定业务日期可售的价格快照；campusId 非空时按校区可售范围过滤。 */
   @GetMapping("/api/product/sellable")
-  List<SellablePrice> sellable(@RequestParam UUID schoolId, @RequestParam String on) {
-    return queries.sellable(schoolId, on);
+  List<SellablePrice> sellable(
+      @RequestParam UUID schoolId,
+      @RequestParam String on,
+      @RequestParam(required = false) UUID campusId) {
+    return queries.sellable(schoolId, on, campusId);
+  }
+
+  /** 产品的可售校区；空列表表示全校区可售。 */
+  @GetMapping("/api/product/products/{id}/campuses")
+  List<UUID> productCampuses(@PathVariable UUID id) {
+    return queries.productCampuses(id);
+  }
+
+  /** 覆盖产品可售校区；空列表表示全校区可售。 */
+  @PostMapping(value = "/api/product/products/{id}/campuses", consumes = "application/json")
+  CourseProduct setProductCampuses(@PathVariable UUID id, @RequestBody SetProductCampuses command) {
+    return commands.setProductCampuses(id, command);
   }
 
   @PostMapping(value = "/api/product/curricula", consumes = "application/json")

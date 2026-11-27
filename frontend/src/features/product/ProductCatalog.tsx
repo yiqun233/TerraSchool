@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Alert,
@@ -68,6 +68,7 @@ export function ProductCatalogWorkspace({
   const [creatingProduct, setCreatingProduct] = useState(false);
   const [draftingFor, setDraftingFor] = useState<CourseProduct | null>(null);
   const [historyFor, setHistoryFor] = useState<CourseProduct | null>(null);
+  const [campusFor, setCampusFor] = useState<CourseProduct | null>(null);
   const [error, setError] = useState("");
 
   const capabilities = useQuery({
@@ -309,6 +310,17 @@ export function ProductCatalogWorkspace({
                 ),
             },
             {
+              title: "可售校区",
+              render: (_: unknown, product: CourseProduct) =>
+                school?.maintainable ? (
+                  <Button size="small" onClick={() => setCampusFor(product)}>
+                    可售校区
+                  </Button>
+                ) : (
+                  "全部校区"
+                ),
+            },
+            {
               title: "结算模式",
               dataIndex: "settlementMode",
               render: (mode: number) => MODE_LABEL[mode] ?? mode,
@@ -418,6 +430,17 @@ export function ProductCatalogWorkspace({
             void catalog.refetch();
           }}
           onUnauthorized={onUnauthorized}
+        />
+      ) : null}
+      {campusFor && current ? (
+        <CampusScopeEditor
+          product={campusFor}
+          schoolId={current}
+          onClose={() => setCampusFor(null)}
+          onSaved={() => {
+            setCampusFor(null);
+            void catalog.refetch();
+          }}
         />
       ) : null}
     </Page>
@@ -1130,5 +1153,114 @@ export function PriceHistory({
         locale={{ emptyText: "该产品还没有价格版本" }}
       />
     </Drawer>
+  );
+}
+
+/** 产品可售校区：空选表示该校所有校区均可售。 */
+function CampusScopeEditor({
+  product,
+  schoolId,
+  onClose,
+  onSaved,
+}: {
+  product: CourseProduct;
+  schoolId: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [selected, setSelected] = useState<string[]>();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const campuses = useQuery({
+    queryKey: ["campuses", schoolId],
+    queryFn: async ({ signal }) => {
+      const { data, response } = await api.GET(
+        "/api/teaching/schools/{schoolId}/campuses",
+        { params: { path: { schoolId } }, signal },
+      );
+      if (!response.ok || !data) throw new Error("无法读取校区");
+      return data;
+    },
+  });
+  const scope = useQuery({
+    queryKey: ["product-campuses", product.id],
+    enabled: !!product.id,
+    queryFn: async ({ signal }) => {
+      const { data, response } = await api.GET(
+        "/api/product/products/{id}/campuses",
+        { params: { path: { id: product.id! } }, signal },
+      );
+      if (!response.ok || !data) throw new Error("无法读取可售校区");
+      return data;
+    },
+  });
+  useEffect(() => {
+    if (scope.data) setSelected((previous) => previous ?? scope.data);
+  }, [scope.data]);
+
+  async function save() {
+    if (product.version === undefined) return;
+    setBusy(true);
+    setError("");
+    try {
+      const token = await csrf();
+      const { response } = await api.POST(
+        "/api/product/products/{id}/campuses",
+        {
+          headers: { [token.headerName!]: token.token! },
+          params: { path: { id: product.id! } },
+          body: {
+            requestId: newRequestId(),
+            expectedVersion: product.version,
+            campusIds: selected ?? [],
+          },
+        },
+      );
+      if (!response.ok) {
+        setError(
+          response.status === 409
+            ? "产品已被他人修改，请刷新后重试。"
+            : "保存失败，请核对校区归属与权限。",
+        );
+        return;
+      }
+      onSaved();
+    } catch {
+      setError("无法获取安全令牌或网络中断，请重试。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      title="可售校区"
+      open
+      onCancel={onClose}
+      mask={{ closable: !busy }}
+      onOk={() => void save()}
+      okText="保存"
+      confirmLoading={busy}
+    >
+      {error ? <Alert title={error} type="error" /> : null}
+      <Alert
+        type="info"
+        showIcon
+        title="不选任何校区表示该校所有校区均可售；只选部分校区时，其余校区报名会被拒绝。"
+      />
+      <Select
+        mode="multiple"
+        style={{ width: "100%", marginTop: 12 }}
+        placeholder="选择可售校区（留空为全部）"
+        loading={campuses.isPending || scope.isPending}
+        value={selected ?? []}
+        onChange={(value) => setSelected(value)}
+        options={(campuses.data ?? []).map((item) => ({
+          value: item.id!,
+          label: item.name,
+        }))}
+      />
+    </Modal>
   );
 }

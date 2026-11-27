@@ -140,7 +140,9 @@ class TeachingHttp {
     return queries.swapSchemes(id, query);
   }
 
-  @PostMapping(value = "/api/teaching/lessons/{id}/swap-schemes/execute", consumes = "application/json")
+  @PostMapping(
+      value = "/api/teaching/lessons/{id}/swap-schemes/execute",
+      consumes = "application/json")
   List<UUID> executeSwapScheme(@PathVariable UUID id, @RequestBody ExecuteSwapScheme command) {
     return commands.executeSwapScheme(id, command);
   }
@@ -214,7 +216,9 @@ class TeachingHttp {
     return commands.createClass(command);
   }
 
-  @PostMapping(value = "/api/teaching/enrollments/{id}/one-on-one-class", consumes = "application/json")
+  @PostMapping(
+      value = "/api/teaching/enrollments/{id}/one-on-one-class",
+      consumes = "application/json")
   @ResponseStatus(org.springframework.http.HttpStatus.CREATED)
   ClassView createOneOnOneClass(@PathVariable UUID id, @RequestBody OneOnOneClass command) {
     return commands.createOneOnOneClass(id, command);
@@ -286,7 +290,9 @@ class TeachingHttp {
     return commands.shiftLessons(id, command);
   }
 
-  @PostMapping(value = "/api/teaching/classes/{id}/lessons/copy-week", consumes = "application/json")
+  @PostMapping(
+      value = "/api/teaching/classes/{id}/lessons/copy-week",
+      consumes = "application/json")
   BatchLessonResult copyWeek(@PathVariable UUID id, @RequestBody CopyWeek command) {
     return commands.copyWeek(id, command);
   }
@@ -423,8 +429,7 @@ class TeachingHttp {
   /** 学员进度：报名 × 课程的课时消耗与课节进度。 */
   @GetMapping("/api/teaching/reports/student-progress")
   List<StudentProgressView> studentProgress(
-      @RequestParam UUID schoolId,
-      @RequestParam(required = false) String keyword) {
+      @RequestParam UUID schoolId, @RequestParam(required = false) String keyword) {
     return queries.studentProgress(schoolId, keyword);
   }
 

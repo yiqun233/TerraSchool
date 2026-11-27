@@ -11,6 +11,9 @@ public interface ProductQueries {
 
   List<PriceVersion> priceVersions(UUID productId);
 
-  /** 指定业务日期可售的价格快照，供报名冻结商品与规则。 */
-  List<SellablePrice> sellable(UUID schoolId, String on);
+  /** 指定业务日期可售的价格快照，供报名冻结商品与规则；campusId 非空时按校区过滤。 */
+  List<SellablePrice> sellable(UUID schoolId, String on, UUID campusId);
+
+  /** 产品的可售校区；空列表表示全校区可售。 */
+  List<UUID> productCampuses(UUID productId);
 }

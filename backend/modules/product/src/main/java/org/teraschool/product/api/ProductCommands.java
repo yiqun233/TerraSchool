@@ -20,6 +20,9 @@ public interface ProductCommands {
 
   CourseProduct updateProduct(UUID id, UpdateProduct command);
 
+  /** 覆盖产品的可售校区；空列表表示全校区可售。 */
+  CourseProduct setProductCampuses(UUID id, SetProductCampuses command);
+
   PriceVersion draftPriceVersion(DraftPriceVersion command);
 
   PriceVersion updatePriceVersion(UUID id, UpdatePriceVersion command);

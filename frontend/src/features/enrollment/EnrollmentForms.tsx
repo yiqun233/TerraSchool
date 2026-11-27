@@ -595,11 +595,11 @@ export function EnrollmentCreator({
   const [form] = Form.useForm();
 
   const sellable = useQuery({
-    queryKey: ["sellable", schoolId],
+    queryKey: ["sellable", schoolId, campusId ?? ""],
     queryFn: async ({ signal }) => {
       const on = new Date().toISOString().slice(0, 10);
       const { data, response } = await api.GET("/api/product/sellable", {
-        params: { query: { schoolId, on } },
+        params: { query: { schoolId, on, campusId: campusId ?? undefined } },
         signal,
       });
       if (!response.ok || !data) throw new Error("无法读取可售价格");

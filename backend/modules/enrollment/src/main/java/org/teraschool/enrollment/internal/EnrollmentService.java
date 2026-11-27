@@ -355,7 +355,7 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
                       consultantId,
                       schoolId)
                   == null) throw new IllegalArgumentException("课程顾问不属于该校或已停用");
-          requireSellable(snapshot, on);
+          requireSellable(snapshot, on, campusId);
           var fingerprint =
               fingerprint(
                   command.studentId().toString(),
@@ -1217,13 +1217,25 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
     }
   }
 
-  private void requireSellable(PriceSnapshot snapshot, LocalDate on) {
+  private void requireSellable(PriceSnapshot snapshot, LocalDate on, UUID campusId) {
     if (!"PUBLISHED".equals(snapshot.status()))
       throw new EnrollmentConflict("PRICE_VERSION_NOT_SELLABLE");
     var from = LocalDate.parse(snapshot.effectiveFrom());
     if (on.isBefore(from)) throw new EnrollmentConflict("PRICE_VERSION_NOT_SELLABLE");
     if (snapshot.effectiveTo() != null && on.isAfter(LocalDate.parse(snapshot.effectiveTo())))
       throw new EnrollmentConflict("PRICE_VERSION_NOT_SELLABLE");
+    if (campusId != null) {
+      var scoped =
+          sql.fetchOne(
+              "select 1 from product.product_campus where product_id=? limit 1",
+              snapshot.productId());
+      if (scoped != null
+          && sql.fetchOne(
+                  "select 1 from product.product_campus where product_id=? and campus_id=?",
+                  snapshot.productId(),
+                  campusId)
+              == null) throw new EnrollmentConflict("PRODUCT_NOT_SELLABLE_AT_CAMPUS");
+    }
   }
 
   private void requireReadable(ResourceScope scope, UUID schoolId) {

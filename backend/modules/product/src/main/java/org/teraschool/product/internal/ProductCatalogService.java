@@ -173,43 +173,115 @@ public class ProductCatalogService implements ProductQueries, ProductCommands {
   }
 
   @Override
-  public List<SellablePrice> sellable(UUID schoolId, String on) {
+  public List<SellablePrice> sellable(UUID schoolId, String on, UUID campusId) {
     var scope = actors.requireResourceScope("PRODUCT");
     requireReadable(scope, schoolId);
     var date = businessDate(on, "可售日期");
+    var campusFilter =
+        campusId == null
+            ? ""
+            : " and (not exists (select 1 from product.product_campus pc where pc.product_id=p.id)"
+                + " or exists (select 1 from product.product_campus pc"
+                + " where pc.product_id=p.id and pc.campus_id=?))";
     return tx.execute(
         scope.tenantId(),
-        () ->
-            sql.fetch(
-                    "select p.id as product_id,p.name as product_name,p.school_id,c.id as curriculum_id,"
-                        + "c.name as curriculum_name,pv.id as price_version_id,pv.price,pv.hours,"
-                        + "pv.service_fee,pv.settlement_mode,pv.study_days,pv.effective_from,"
-                        + "pv.effective_to from product.price_version pv"
-                        + " join product.product p on p.id=pv.product_id"
-                        + " join product.curriculum c on c.id=p.curriculum_id"
-                        + " where p.school_id=? and p.active and c.active and pv.status='PUBLISHED'"
-                        + " and pv.effective_from<=? and (pv.effective_to is null or pv.effective_to>=?)"
-                        + " order by c.name, p.name limit ?",
-                    schoolId,
-                    date,
-                    date,
-                    MAX_ROWS)
-                .map(
-                    row ->
-                        new SellablePrice(
-                            row.get("product_id", UUID.class),
-                            row.get("product_name", String.class),
-                            row.get("school_id", UUID.class),
-                            row.get("curriculum_id", UUID.class),
-                            row.get("curriculum_name", String.class),
-                            row.get("price_version_id", UUID.class),
-                            money(row.get("price", BigDecimal.class)),
-                            money(row.get("hours", BigDecimal.class)),
-                            money(row.get("service_fee", BigDecimal.class)),
-                            row.get("settlement_mode", Integer.class),
-                            row.get("study_days", Integer.class),
-                            date(row.get("effective_from", LocalDate.class)),
-                            date(row.get("effective_to", LocalDate.class)))));
+        () -> {
+          var arguments =
+              campusId == null
+                  ? new Object[] {schoolId, date, date, MAX_ROWS}
+                  : new Object[] {schoolId, date, date, campusId, MAX_ROWS};
+          return sql.fetch(
+                  "select p.id as product_id,p.name as product_name,p.school_id,c.id as curriculum_id,"
+                      + "c.name as curriculum_name,pv.id as price_version_id,pv.price,pv.hours,"
+                      + "pv.service_fee,pv.settlement_mode,pv.study_days,pv.effective_from,"
+                      + "pv.effective_to from product.price_version pv"
+                      + " join product.product p on p.id=pv.product_id"
+                      + " join product.curriculum c on c.id=p.curriculum_id"
+                      + " where p.school_id=? and p.active and c.active and pv.status='PUBLISHED'"
+                      + " and pv.effective_from<=? and (pv.effective_to is null or pv.effective_to>=?)"
+                      + campusFilter
+                      + " order by c.name, p.name limit ?",
+                  arguments)
+              .map(
+                  row ->
+                      new SellablePrice(
+                          row.get("product_id", UUID.class),
+                          row.get("product_name", String.class),
+                          row.get("school_id", UUID.class),
+                          row.get("curriculum_id", UUID.class),
+                          row.get("curriculum_name", String.class),
+                          row.get("price_version_id", UUID.class),
+                          money(row.get("price", BigDecimal.class)),
+                          money(row.get("hours", BigDecimal.class)),
+                          money(row.get("service_fee", BigDecimal.class)),
+                          row.get("settlement_mode", Integer.class),
+                          row.get("study_days", Integer.class),
+                          date(row.get("effective_from", LocalDate.class)),
+                          date(row.get("effective_to", LocalDate.class))));
+        });
+  }
+
+  @Override
+  public List<UUID> productCampuses(UUID productId) {
+    var scope = actors.requireResourceScope("PRODUCT");
+    if (productId == null) throw new IllegalArgumentException("需要产品");
+    return tx.execute(
+        scope.tenantId(),
+        () -> {
+          var product = requireProduct(scope, productId);
+          requireReadable(scope, product.get("school_id", UUID.class));
+          return sql.fetch(
+                  "select campus_id from product.product_campus where product_id=? order by created_at",
+                  productId)
+              .map(row -> row.get("campus_id", UUID.class));
+        });
+  }
+
+  @Override
+  public CourseProduct setProductCampuses(UUID id, SetProductCampuses command) {
+    if (id == null
+        || command == null
+        || command.requestId() == null
+        || command.expectedVersion() == null) throw new IllegalArgumentException("需要请求身份、产品与版本");
+    var scope = actors.requireResourceScope("PRODUCT");
+    return tx.execute(
+        scope.tenantId(),
+        () -> {
+          schools.lockTenant(scope.tenantId());
+          var verified = actors.requireResourceScopeInTransaction("PRODUCT");
+          var current = requireProduct(verified, id);
+          var schoolId = current.get("school_id", UUID.class);
+          requireMaintainable(verified, schoolId);
+          if (!schools.require(schoolId).active()) throw new AccessDeniedException("学校已停用，不能修改产品");
+          if (!current.get("version", Long.class).equals(command.expectedVersion()))
+            throw new ProductConflict("VERSION_CONFLICT");
+          var campuses = new java.util.LinkedHashSet<>(command.campusIds());
+          for (var campusId : campuses) {
+            if (campusId == null) throw new IllegalArgumentException("校区不能为空");
+            if (sql.fetchOne(
+                    "select id from organization.unit"
+                        + " where tenant_id=? and id=? and school_id=? and kind='CAMPUS'",
+                    scope.tenantId(),
+                    campusId,
+                    schoolId)
+                == null) throw new IllegalArgumentException("校区不属于该学校");
+          }
+          sql.execute("delete from product.product_campus where product_id=?", id);
+          for (var campusId : campuses) {
+            sql.execute(
+                "insert into product.product_campus(tenant_id,product_id,campus_id) values (?,?,?)",
+                scope.tenantId(),
+                id,
+                campusId);
+          }
+          if (sql.execute(
+                  "update product.product set version=version+1 where id=? and version=?",
+                  id,
+                  command.expectedVersion())
+              != 1) throw new ProductConflict("VERSION_CONFLICT");
+          audit(verified, "PRODUCT_CAMPUS_SCOPE", id, schoolId, "campus_scope");
+          return productView(id, schoolId, schools.require(schoolId).name());
+        });
   }
 
   // ---------------------------------------------------------------- 课程
