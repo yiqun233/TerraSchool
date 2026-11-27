@@ -7,4 +7,5 @@ public record SchedulePolicyView(
     boolean blockTeacherUnavailable,
     boolean blockRoomUnavailable,
     int minGapMinutes,
-    long version) {}
+    long version,
+    int minutesPerHour) {}

@@ -306,6 +306,8 @@ public class SchedulingService implements org.teraschool.teaching.api.Scheduling
               throw new AccessDeniedException("无该学校的排课权限");
             if (command == null || command.minGapMinutes() < 0 || command.minGapMinutes() > 240)
               throw new ScheduleConflict("SCHEDULE_GAP_INVALID");
+            if (command.minutesPerHour() < 15 || command.minutesPerHour() > 240)
+              throw new ScheduleConflict("MINUTES_PER_HOUR_INVALID");
             var existing =
                 sql.fetchOne(
                     "select id,version from teaching.schedule_policy where school_id=? for update",
@@ -315,23 +317,25 @@ public class SchedulingService implements org.teraschool.teaching.api.Scheduling
                 throw new ScheduleConflict("VERSION_CONFLICT");
               sql.execute(
                   "insert into teaching.schedule_policy(tenant_id,school_id,block_teacher_unavailable,"
-                      + "block_room_unavailable,min_gap_minutes) values (?,?,?,?,?)",
+                      + "block_room_unavailable,min_gap_minutes,minutes_per_hour) values (?,?,?,?,?,?)",
                   scope.tenantId(),
                   schoolId,
                   command.blockTeacherUnavailable(),
                   command.blockRoomUnavailable(),
-                  command.minGapMinutes());
+                  command.minGapMinutes(),
+                  command.minutesPerHour());
             } else {
               if (command.expectedVersion() != null
                   && !existing.get("version", Long.class).equals(command.expectedVersion()))
                 throw new ScheduleConflict("VERSION_CONFLICT");
               sql.execute(
                   "update teaching.schedule_policy set block_teacher_unavailable=?,"
-                      + "block_room_unavailable=?,min_gap_minutes=?,version=version+1,"
-                      + "updated_at=CURRENT_TIMESTAMP where id=?",
+                      + "block_room_unavailable=?,min_gap_minutes=?,minutes_per_hour=?,"
+                      + "version=version+1,updated_at=CURRENT_TIMESTAMP where id=?",
                   command.blockTeacherUnavailable(),
                   command.blockRoomUnavailable(),
                   command.minGapMinutes(),
+                  command.minutesPerHour(),
                   existing.get("id", UUID.class));
             }
             return policyView(schoolId);
@@ -513,16 +517,17 @@ public class SchedulingService implements org.teraschool.teaching.api.Scheduling
   private SchedulePolicyView policyView(UUID schoolId) {
     var row =
         sql.fetchOne(
-            "select block_teacher_unavailable,block_room_unavailable,min_gap_minutes,version"
-                + " from teaching.schedule_policy where school_id=?",
+            "select block_teacher_unavailable,block_room_unavailable,min_gap_minutes,"
+                + "minutes_per_hour,version from teaching.schedule_policy where school_id=?",
             schoolId);
-    if (row == null) return new SchedulePolicyView(schoolId, true, true, 0, 0);
+    if (row == null) return new SchedulePolicyView(schoolId, true, true, 0, 0, 60);
     return new SchedulePolicyView(
         schoolId,
         row.get("block_teacher_unavailable", Boolean.class),
         row.get("block_room_unavailable", Boolean.class),
         row.get("min_gap_minutes", Integer.class),
-        row.get("version", Long.class));
+        row.get("version", Long.class),
+        row.get("minutes_per_hour", Integer.class));
   }
 
   private ResourceBlockView blockViewOf(org.jooq.Record row) {

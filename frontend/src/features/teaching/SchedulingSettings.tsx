@@ -530,6 +530,7 @@ export function PolicyTab({
       blockTeacherUnavailable: policy.blockTeacherUnavailable ?? true,
       blockRoomUnavailable: policy.blockRoomUnavailable ?? true,
       minGapMinutes: policy.minGapMinutes ?? 0,
+      minutesPerHour: policy.minutesPerHour ?? 60,
     });
   }, [policy, form]);
 
@@ -555,6 +556,7 @@ export function PolicyTab({
           blockTeacherUnavailable: values.blockTeacherUnavailable,
           blockRoomUnavailable: values.blockRoomUnavailable,
           minGapMinutes: Number(values.minGapMinutes ?? 0),
+          minutesPerHour: Number(values.minutesPerHour ?? 60),
           expectedVersion: policy.version,
         },
       });
@@ -583,6 +585,7 @@ export function PolicyTab({
         blockTeacherUnavailable: policy?.blockTeacherUnavailable ?? true,
         blockRoomUnavailable: policy?.blockRoomUnavailable ?? true,
         minGapMinutes: policy?.minGapMinutes ?? 0,
+        minutesPerHour: policy?.minutesPerHour ?? 60,
       }}
     >
       <Form.Item
@@ -613,6 +616,19 @@ export function PolicyTab({
       >
         <InputNumber
           min={0}
+          max={240}
+          step={5}
+          style={{ width: 160 }}
+          disabled={!canMaintain || busy}
+        />
+      </Form.Item>
+      <Form.Item
+        label="每课时折算分钟数（15–240，默认 60）"
+        name="minutesPerHour"
+        tooltip="课次课时数 = 课次时长 / 该值。例如 90 分钟课次按 45 分钟/课时折算为 2 课时。只影响之后新建的课次。"
+      >
+        <InputNumber
+          min={15}
           max={240}
           step={5}
           style={{ width: 160 }}

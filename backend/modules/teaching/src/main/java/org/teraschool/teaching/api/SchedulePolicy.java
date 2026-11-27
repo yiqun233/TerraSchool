@@ -9,4 +9,15 @@ public record SchedulePolicy(
     boolean blockTeacherUnavailable,
     boolean blockRoomUnavailable,
     int minGapMinutes,
-    Long expectedVersion) {}
+    Long expectedVersion,
+    int minutesPerHour) {
+
+  /** 兼容旧调用：不传折算规则时按 60 分钟/课时。 */
+  public SchedulePolicy(
+      boolean blockTeacherUnavailable,
+      boolean blockRoomUnavailable,
+      int minGapMinutes,
+      Long expectedVersion) {
+    this(blockTeacherUnavailable, blockRoomUnavailable, minGapMinutes, expectedVersion, 60);
+  }
+}

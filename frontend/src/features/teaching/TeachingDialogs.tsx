@@ -966,7 +966,7 @@ export function LessonCreator({
           teacherName: values.teacherName || undefined,
           roomName: values.roomName || undefined,
           topic: values.topic || undefined,
-          hours: String(values.hours),
+          hours: values.hours == null ? undefined : String(values.hours),
         },
       });
       if (!response.ok) {
@@ -990,7 +990,7 @@ export function LessonCreator({
       footer={null}
     >
       {error ? <Alert title={error} type="error" /> : null}
-      <Form form={form} layout="vertical" initialValues={{ hours: 1 }}>
+      <Form form={form} layout="vertical">
         <Form.Item
           label="上课日期"
           name="lessonDate"
@@ -1024,7 +1024,7 @@ export function LessonCreator({
         <Form.Item
           label="授课课时"
           name="hours"
-          rules={[{ required: true, message: "请输入课时" }]}
+          extra="留空按学校设定的每课时分钟数自动折算"
         >
           <InputNumber
             min={0.01}
@@ -1032,6 +1032,7 @@ export function LessonCreator({
             step={0.5}
             precision={2}
             style={{ width: "100%" }}
+            placeholder="自动"
             disabled={busy}
           />
         </Form.Item>

@@ -1303,16 +1303,7 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
     var startsAt = time(command.startsAt(), "开始时间");
     var endsAt = time(command.endsAt(), "结束时间");
     if (!endsAt.isAfter(startsAt)) throw new IllegalArgumentException("结束时间必须晚于开始时间");
-    var lessonHours = positiveHours(command.hours(), "授课课时");
     var scope = actors.requireResourceScope("TEACHING");
-    var fingerprint =
-        fingerprint(
-            "LESSON",
-            command.classId().toString(),
-            date.toString(),
-            startsAt.toString(),
-            endsAt.toString(),
-            lessonHours.toPlainString());
     return tx.execute(
         scope.tenantId(),
         () -> {
@@ -1325,6 +1316,19 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
           if (!schools.require(schoolId).active()) throw new AccessDeniedException("学校已停用，不能新建课次");
           if (!"ACTIVE".equals(row.get("status", String.class)))
             throw new TeachingConflict("CLASS_NOT_ACTIVE");
+          // 未显式填写课时时，按学校折算规则由课次时长换算；显式填写则保留（用于特殊课次）。
+          var lessonHours =
+              command.hours() == null
+                  ? lessonHoursFromDuration(startsAt, endsAt, minutesPerHour(schoolId))
+                  : positiveHours(command.hours(), "授课课时");
+          var fingerprint =
+              fingerprint(
+                  "LESSON",
+                  command.classId().toString(),
+                  date.toString(),
+                  startsAt.toString(),
+                  endsAt.toString(),
+                  lessonHours.toPlainString());
           var previous = previousRequest(scope, command.requestId(), "LESSON", fingerprint);
           if (previous != null) return lessonView(requireLesson(verified, previous));
           var teacher = resource(command.teacherId(), "TEACHER", schoolId, command.teacherName());
@@ -1616,8 +1620,6 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
         command.weekdays() == null ? new HashSet<Integer>() : new HashSet<>(command.weekdays());
     if (weekdays.isEmpty() || weekdays.stream().anyMatch(day -> day == null || day < 1 || day > 7))
       throw new IllegalArgumentException("请选择周几（1=周一 … 7=周日）");
-    var minutes = java.time.Duration.between(startsAt, endsAt).toMinutes();
-    var hours = BigDecimal.valueOf(minutes).divide(BigDecimal.valueOf(60), 2, RoundingMode.HALF_UP);
     var scope = actors.requireResourceScope("TEACHING");
     return tx.execute(
         scope.tenantId(),
@@ -1637,6 +1639,7 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
                   command.classId(),
                   curriculumId)
               == null) throw new TeachingConflict("CURRICULUM_NOT_IN_CLASS");
+          var hours = lessonHoursFromDuration(startsAt, endsAt, minutesPerHour(schoolId));
           var teacher = resource(command.teacherId(), "TEACHER", schoolId, null);
           var room = resource(command.roomId(), "ROOM", schoolId, null);
           var created = new ArrayList<UUID>();
@@ -4517,6 +4520,27 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
     var hours = new BigDecimal(text).setScale(2, RoundingMode.UNNECESSARY);
     if (hours.signum() <= 0) throw new IllegalArgumentException(label + "必须大于零");
     return hours;
+  }
+
+  /** 每课时折算分钟数；未配置时按 60 分钟，保持与历史课次一致。 */
+  private int minutesPerHour(UUID schoolId) {
+    var row =
+        sql.fetchOne(
+            "select minutes_per_hour from teaching.schedule_policy where school_id=?", schoolId);
+    return row == null ? 60 : row.get("minutes_per_hour", Integer.class);
+  }
+
+  /** 课时数 = 课次时长 / 每课时分钟数，保留两位小数；至少 0.01，避免 5 分钟课次落成 0。 */
+  private BigDecimal lessonHoursFromDuration(
+      LocalTime startsAt, LocalTime endsAt, int minutesPerHour) {
+    var minutes = java.time.Duration.between(startsAt, endsAt).toMinutes();
+    var hours =
+        BigDecimal.valueOf(minutes)
+            .divide(
+                BigDecimal.valueOf(minutesPerHour <= 0 ? 60 : minutesPerHour),
+                2,
+                RoundingMode.HALF_UP);
+    return hours.signum() <= 0 ? new BigDecimal("0.01") : hours;
   }
 
   private LocalDate businessDate(String value, String label) {
