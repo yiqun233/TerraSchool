@@ -128,9 +128,14 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
                   "select e.id,e.school_id,e.student_id,e.product_id,e.price_version_id,"
                       + "e.curriculum_name,e.product_name,e.price,e.hours,e.service_fee,"
                       + "e.settlement_mode,e.status,e.version,e.created_at,e.valid_until,"
+                      + "e.campus_id,e.consultant_id,u.name as campus_name,emp.name as consultant_name,"
                       + "(select coalesce(sum(c.amount),0) from enrollment.charge c where c.enrollment_id=e.id)"
                       + " as net_amount"
-                      + " from enrollment.enrollment e where e.school_id=?"
+                      + " from enrollment.enrollment e"
+                      + " left join organization.unit u on u.tenant_id=e.tenant_id and u.id=e.campus_id"
+                      + " left join organization.employee emp"
+                      + " on emp.tenant_id=e.tenant_id and emp.id=e.consultant_id"
+                      + " where e.school_id=?"
                       + filter
                       + " order by e.created_at desc, e.id limit ? offset ?",
                   args.toArray());
@@ -205,7 +210,7 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
     if (enrollmentId == null) throw new IllegalArgumentException("需要报名");
     var row =
         sql.fetchOne(
-            "select id,school_id,student_id,valid_until,status,price,service_fee,hours,settlement_mode"
+            "select id,school_id,student_id,campus_id,valid_until,status,price,service_fee,hours,settlement_mode"
                 + " from enrollment.enrollment where id=?",
             enrollmentId);
     if (row == null) throw new AccessDeniedException("报名不存在或不可访问");
@@ -213,6 +218,7 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
         row.get("id", UUID.class),
         row.get("school_id", UUID.class),
         row.get("student_id", UUID.class),
+        row.get("campus_id", UUID.class),
         row.get("valid_until", LocalDate.class),
         row.get("status", String.class),
         netAmount(enrollmentId),
@@ -323,6 +329,32 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
             throw new AccessDeniedException("无该学校的报名登记权限");
           if (!schoolId.equals(student.schoolId())) throw new AccessDeniedException("学员档案不属于该校");
           if (!schools.require(schoolId).active()) throw new AccessDeniedException("学校已停用，不能登记报名");
+          var campusId = command.campusId();
+          if (campusId == null) {
+            var studentCampus =
+                sql.fetchOne(
+                    "select campus_id from archive.student where tenant_id=? and id=?",
+                    scope.tenantId(),
+                    command.studentId());
+            campusId = studentCampus == null ? null : studentCampus.get("campus_id", UUID.class);
+          }
+          if (campusId != null
+              && sql.fetchOne(
+                      "select id from organization.unit"
+                          + " where tenant_id=? and id=? and school_id=? and kind='CAMPUS'",
+                      scope.tenantId(),
+                      campusId,
+                      schoolId)
+                  == null) throw new IllegalArgumentException("报名校区不属于该校");
+          var consultantId = command.consultantId();
+          if (consultantId != null
+              && sql.fetchOne(
+                      "select id from organization.employee"
+                          + " where tenant_id=? and id=? and school_id=? and active",
+                      scope.tenantId(),
+                      consultantId,
+                      schoolId)
+                  == null) throw new IllegalArgumentException("课程顾问不属于该校或已停用");
           requireSellable(snapshot, on);
           var fingerprint =
               fingerprint(
@@ -334,8 +366,9 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
           var id = UUID.randomUUID();
           sql.execute(
               "insert into enrollment.enrollment(id,tenant_id,school_id,student_id,product_id,"
-                  + "price_version_id,curriculum_name,product_name,price,hours,service_fee,settlement_mode,valid_until)"
-                  + " values (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                  + "price_version_id,curriculum_name,product_name,price,hours,service_fee,"
+                  + "settlement_mode,valid_until,campus_id,consultant_id)"
+                  + " values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
               id,
               scope.tenantId(),
               schoolId,
@@ -348,7 +381,9 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
               new BigDecimal(snapshot.hours()),
               new BigDecimal(snapshot.serviceFee()),
               snapshot.settlementMode(),
-              snapshot.studyDays() == null ? null : on.plusDays(snapshot.studyDays() - 1L));
+              snapshot.studyDays() == null ? null : on.plusDays(snapshot.studyDays() - 1L),
+              campusId,
+              consultantId);
           // 应收 = 商品价格 + 服务费；服务费在价格快照里单列，不摊进课时单价。
           var receivable =
               new BigDecimal(snapshot.price()).add(new BigDecimal(snapshot.serviceFee()));
@@ -1041,6 +1076,78 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
   }
 
   @Override
+  public List<ConsultantPerformance> consultantPerformance(UUID schoolId, String from, String to) {
+    if (schoolId == null) throw new IllegalArgumentException("需要学校");
+    var start = businessDate(from);
+    var end = businessDate(to);
+    if (end.isBefore(start)) throw new IllegalArgumentException("结束日期不能早于开始日期");
+    var scope = actors.requireResourceScope("ENROLLMENT");
+    requireReadable(scope, schoolId);
+    return tx.execute(
+        scope.tenantId(),
+        () -> {
+          var verified = actors.requireResourceScopeInTransaction("ENROLLMENT");
+          requireReadable(verified, schoolId);
+          return sql.fetch(
+                  "select e.consultant_id,coalesce(emp.name,'未指定顾问') as consultant_name,"
+                      + "count(*) as enrollments,"
+                      + "coalesce(sum(e.price + e.service_fee),0) as amount,"
+                      + "coalesce(sum(e.hours),0) as hours"
+                      + " from enrollment.enrollment e"
+                      + " left join organization.employee emp"
+                      + " on emp.tenant_id=e.tenant_id and emp.id=e.consultant_id"
+                      + " where e.school_id=? and e.created_at::date between ? and ?"
+                      + " group by e.consultant_id,emp.name order by amount desc limit 200",
+                  schoolId,
+                  start,
+                  end)
+              .map(
+                  row ->
+                      new ConsultantPerformance(
+                          row.get("consultant_id", UUID.class),
+                          row.get("consultant_name", String.class),
+                          row.get("enrollments", Integer.class),
+                          money(row.get("amount", BigDecimal.class)),
+                          hours(row.get("hours", BigDecimal.class))));
+        });
+  }
+
+  @Override
+  public List<CampusOption> campuses(UUID schoolId) {
+    var scope = actors.requireResourceScope("ENROLLMENT");
+    if (schoolId == null) throw new IllegalArgumentException("需要学校");
+    requireReadable(scope, schoolId);
+    return tx.execute(
+        scope.tenantId(),
+        () ->
+            sql.fetch(
+                    "select id,name from organization.unit"
+                        + " where tenant_id=? and school_id=? and kind='CAMPUS' order by name limit 200",
+                    scope.tenantId(),
+                    schoolId)
+                .map(r -> new CampusOption(r.get("id", UUID.class), r.get("name", String.class))));
+  }
+
+  @Override
+  public List<ConsultantOption> consultants(UUID schoolId) {
+    var scope = actors.requireResourceScope("ENROLLMENT");
+    if (schoolId == null) throw new IllegalArgumentException("需要学校");
+    requireReadable(scope, schoolId);
+    return tx.execute(
+        scope.tenantId(),
+        () ->
+            sql.fetch(
+                    "select id,name from organization.employee"
+                        + " where tenant_id=? and school_id=? and active order by name limit 500",
+                    scope.tenantId(),
+                    schoolId)
+                .map(
+                    r ->
+                        new ConsultantOption(
+                            r.get("id", UUID.class), r.get("name", String.class))));
+  }
+
+  @Override
   public String exportCsv(UUID schoolId) {
     try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
       var scope = actors.requireResourceScope("ENROLLMENT");
@@ -1137,9 +1244,14 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
         sql.fetchOne(
             "select e.id,e.school_id,e.student_id,e.product_id,e.price_version_id,e.curriculum_name,"
                 + "e.product_name,e.price,e.hours,e.service_fee,e.settlement_mode,e.status,e.version,"
-                + "e.created_at,e.valid_until,"
+                + "e.created_at,e.valid_until,e.campus_id,e.consultant_id,"
+                + "u.name as campus_name,emp.name as consultant_name,"
                 + "(select coalesce(sum(c.amount),0) from enrollment.charge c where c.enrollment_id=e.id)"
-                + " as net_amount from enrollment.enrollment e where e.id=?",
+                + " as net_amount from enrollment.enrollment e"
+                + " left join organization.unit u on u.tenant_id=e.tenant_id and u.id=e.campus_id"
+                + " left join organization.employee emp"
+                + " on emp.tenant_id=e.tenant_id and emp.id=e.consultant_id"
+                + " where e.id=?",
             id);
     if (row == null) throw new AccessDeniedException("报名不存在或不可访问");
     return row;
@@ -1188,7 +1300,11 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
         row.get("valid_until", LocalDate.class) == null
             ? null
             : row.get("valid_until", LocalDate.class).toString(),
-        courseViews(row.get("id", UUID.class)));
+        courseViews(row.get("id", UUID.class)),
+        row.get("campus_id", UUID.class),
+        row.get("campus_name", String.class),
+        row.get("consultant_id", UUID.class),
+        row.get("consultant_name", String.class));
   }
 
   private List<CourseView> courseViews(UUID enrollmentId) {

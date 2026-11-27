@@ -30,6 +30,24 @@ class EnrollmentHttp {
     return queries.list(schoolId, status, page, size);
   }
 
+  @GetMapping("/api/enrollment/reports/consultant-performance")
+  java.util.List<EnrollmentQueries.ConsultantPerformance> consultantPerformance(
+      @RequestParam UUID schoolId,
+      @RequestParam(defaultValue = "") String from,
+      @RequestParam(defaultValue = "") String to) {
+    return queries.consultantPerformance(schoolId, from, to);
+  }
+
+  @GetMapping("/api/enrollment/schools/{schoolId}/campuses")
+  java.util.List<EnrollmentQueries.CampusOption> campuses(@PathVariable UUID schoolId) {
+    return queries.campuses(schoolId);
+  }
+
+  @GetMapping("/api/enrollment/schools/{schoolId}/consultants")
+  java.util.List<EnrollmentQueries.ConsultantOption> consultants(@PathVariable UUID schoolId) {
+    return queries.consultants(schoolId);
+  }
+
   @GetMapping("/api/enrollment/enrollments/{id}")
   EnrollmentView detail(@PathVariable UUID id) {
     return queries.detail(id);

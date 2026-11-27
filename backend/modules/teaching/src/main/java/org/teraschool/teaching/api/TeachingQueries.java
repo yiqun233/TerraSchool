@@ -191,6 +191,9 @@ public interface TeachingQueries {
   /** 学校在职教师，供教师模式筛选与改派选择。 */
   List<TeacherBrief> teachers(UUID schoolId);
 
+  /** 学校下的校区，用于班级归属与报名校区选择。 */
+  List<CampusBrief> campuses(UUID schoolId);
+
   /** 当前在班报名，供考勤登记选择。 */
   List<ClassMemberView> members(UUID classId);
 

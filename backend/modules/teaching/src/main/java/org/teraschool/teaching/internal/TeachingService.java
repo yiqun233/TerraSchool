@@ -794,7 +794,8 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
       throw new IllegalArgumentException("需要请求身份和学校");
     var name = text(command.name(), 100, "班级名称");
     if (name == null) throw new IllegalArgumentException("班级名称必填");
-    var capacity = command.capacity();
+    var requested = command.capacity();
+    var capacity = requested == null ? defaultCapacity(classType(command.classType())) : requested;
     if (capacity != null && (capacity < 0 || capacity > 100000))
       throw new IllegalArgumentException("班级名额上限须为 0–100000");
     var scope = actors.requireResourceScope("TEACHING");
@@ -821,11 +822,20 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
           if (!command.schoolId().equals(curriculum.schoolId()))
             throw new AccessDeniedException("课程不属于该学校");
           if (!curriculum.active()) throw new TeachingConflict("CURRICULUM_INACTIVE");
+          var campusId = command.campusId();
+          if (campusId != null
+              && sql.fetchOne(
+                      "select id from organization.unit"
+                          + " where tenant_id=? and id=? and school_id=? and kind='CAMPUS'",
+                      scope.tenantId(),
+                      campusId,
+                      command.schoolId())
+                  == null) throw new IllegalArgumentException("班级校区不属于该校");
           var id = UUID.randomUUID();
           try {
             sql.execute(
-                "insert into teaching.class(id,tenant_id,school_id,curriculum_id,name,class_type,group_training,capacity)"
-                    + " values (?,?,?,?,?,?,?,?)",
+                "insert into teaching.class(id,tenant_id,school_id,curriculum_id,name,class_type,group_training,capacity,campus_id)"
+                    + " values (?,?,?,?,?,?,?,?,?)",
                 id,
                 scope.tenantId(),
                 command.schoolId(),
@@ -833,13 +843,125 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
                 name,
                 classType(command.classType()),
                 command.groupTraining(),
-                capacity);
+                capacity,
+                campusId);
           } catch (RuntimeException error) {
             if (uniqueViolation(error)) throw new TeachingConflict("DUPLICATE_CLASS_NAME");
             throw error;
           }
           rememberRequest(scope, command.requestId(), "CLASS", id, fingerprint);
           audit(scope, "CLASS_CREATED", id, command.schoolId(), "");
+          return classView(requireClass(verified, id), school.name());
+        });
+  }
+
+  @Override
+  public ClassView createOneOnOneClass(UUID enrollmentId, OneOnOneClass command) {
+    try (var trace = RequestTrace.open(RequestTrace.Source.APPLICATION)) {
+      return createOneOnOneClassWithTrace(enrollmentId, command);
+    }
+  }
+
+  private ClassView createOneOnOneClassWithTrace(UUID enrollmentId, OneOnOneClass command) {
+    if (enrollmentId == null || command == null || command.requestId() == null)
+      throw new IllegalArgumentException("需要报名和请求身份");
+    var scope = actors.requireResourceScope("TEACHING");
+    return tx.execute(
+        scope.tenantId(),
+        () -> {
+          schools.lockTenant(scope.tenantId());
+          var verified = actors.requireResourceScopeInTransaction("TEACHING");
+          var enrollment = enrollments.require(enrollmentId);
+          if (!verified.maintainableSchoolIds().contains(enrollment.schoolId()))
+            throw new AccessDeniedException("无班级维护权限");
+          if (!"ACTIVE".equals(enrollment.status()))
+            throw new TeachingConflict("ENROLLMENT_NOT_ACTIVE");
+          if (enrollment.courses().isEmpty())
+            throw new TeachingConflict("ENROLLMENT_HAS_NO_COURSE");
+          var school = schools.require(enrollment.schoolId());
+          var previous =
+              previousRequest(
+                  scope,
+                  command.requestId(),
+                  "CLASS",
+                  fingerprint("ONE_ON_ONE_CLASS", enrollmentId.toString()));
+          if (previous != null) return classView(requireClass(verified, previous), school.name());
+          var existing =
+              sql.fetchOne(
+                  "select c.id from teaching.class c"
+                      + " join teaching.enrollment_class ec on ec.class_id=c.id"
+                      + " where ec.enrollment_id=? and ec.active and c.class_type='ONE_ON_ONE'"
+                      + " limit 1",
+                  enrollmentId);
+          if (existing != null)
+            return classView(requireClass(verified, existing.get("id", UUID.class)), school.name());
+          var course = enrollment.courses().getFirst();
+          var curriculum = curricula.require(course.curriculumId());
+          var studentName =
+              sql.fetchOne("select name from archive.student where id=?", enrollment.studentId())
+                  .get("name", String.class);
+          var name = text(studentName + " · " + curriculum.name() + "（一对一）", 100, "班级名称");
+          if (sql.fetchOne(
+                  "select 1 from teaching.class where tenant_id=? and school_id=? and name=?",
+                  scope.tenantId(),
+                  enrollment.schoolId(),
+                  name)
+              != null)
+            name = text(name + " " + enrollmentId.toString().substring(0, 6), 100, "班级名称");
+          var beginsOn =
+              command.beginsOn() == null
+                  ? LocalDate.now()
+                  : businessDate(command.beginsOn(), "开班日期");
+          var endsOn =
+              command.endsOn() == null
+                  ? enrollment.validUntil()
+                  : businessDate(command.endsOn(), "结班日期");
+          if (endsOn != null && endsOn.isBefore(beginsOn))
+            throw new IllegalArgumentException("结班日期不能早于开班日期");
+          var id = UUID.randomUUID();
+          try {
+            sql.execute(
+                "insert into teaching.class"
+                    + " (id,tenant_id,school_id,curriculum_id,name,class_type,group_training,capacity,campus_id,begins_on,ends_on)"
+                    + " values (?,?,?,?,?,'ONE_ON_ONE',?,1,?,?,?)",
+                id,
+                scope.tenantId(),
+                enrollment.schoolId(),
+                curriculum.id(),
+                name,
+                false,
+                enrollment.campusId(),
+                beginsOn,
+                endsOn);
+          } catch (RuntimeException error) {
+            if (uniqueViolation(error)) throw new TeachingConflict("DUPLICATE_CLASS_NAME");
+            throw error;
+          }
+          sql.execute(
+              "insert into teaching.class_curriculum"
+                  + " (id,tenant_id,class_id,curriculum_id,hours,price) values (?,?,?,?,?,?)",
+              UUID.randomUUID(),
+              scope.tenantId(),
+              id,
+              curriculum.id(),
+              course.hours(),
+              course.amount());
+          sql.execute(
+              "insert into teaching.enrollment_class(tenant_id,enrollment_id,class_id,joined_on,active)"
+                  + " values (?,?,?,?,true)",
+              scope.tenantId(),
+              enrollmentId,
+              id,
+              beginsOn);
+          if (enrollment.settlementMode() == 0) enrollments.resolveSettlementMode(enrollmentId, 1);
+          rememberRequest(
+              scope,
+              command.requestId(),
+              "CLASS",
+              id,
+              fingerprint("ONE_ON_ONE_CLASS", enrollmentId.toString()));
+          audit(verified, "CLASS_CREATED", id, enrollment.schoolId(), "one-on-one");
+          audit(verified, "CLASS_MEMBER_ADDED", id, enrollment.schoolId(), enrollmentId.toString());
           return classView(requireClass(verified, id), school.name());
         });
   }
@@ -894,6 +1016,11 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
               throw new AccessDeniedException("报名与目标班级须属于同一学校");
             if (!"ACTIVE".equals(target.get("status", String.class)))
               throw new TeachingConflict("CLASS_NOT_ACTIVE");
+            var classCampus = target.get("campus_id", UUID.class);
+            if (classCampus != null
+                && enrollment.campusId() != null
+                && !classCampus.equals(enrollment.campusId()))
+              throw new TeachingConflict("CAMPUS_MISMATCH");
             var curriculumId = target.get("curriculum_id", UUID.class);
             if (enrollment.courses().stream()
                 .noneMatch(course -> curriculumId.equals(course.curriculumId())))
@@ -903,7 +1030,11 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
           if (enrollment.settlementMode() == 0) {
             var resolvedModes =
                 classes.stream()
-                    .map(target -> "VIP".equals(target.get("class_type", String.class)) ? 1 : 2)
+                    .map(
+                        target -> {
+                          var type = target.get("class_type", String.class);
+                          return "VIP".equals(type) || "ONE_ON_ONE".equals(type) ? 1 : 2;
+                        })
                     .collect(java.util.stream.Collectors.toSet());
             if (resolvedModes.size() != 1)
               throw new TeachingConflict("AUTO_SETTLEMENT_MODE_CLASS_TYPE_MISMATCH");
@@ -2057,6 +2188,23 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
   }
 
   @Override
+  public List<CampusBrief> campuses(UUID schoolId) {
+    var scope = actors.requireResourceScope("TEACHING");
+    if (schoolId == null) throw new IllegalArgumentException("需要学校");
+    return tx.execute(
+        scope.tenantId(),
+        () -> {
+          requireReadable(scope, schoolId);
+          return sql.fetch(
+                  "select id,name from organization.unit"
+                      + " where tenant_id=? and school_id=? and kind='CAMPUS' order by name limit 200",
+                  scope.tenantId(),
+                  schoolId)
+              .map(r -> new CampusBrief(r.get("id", UUID.class), r.get("name", String.class)));
+        });
+  }
+
+  @Override
   public List<RevenueRow> revenue(UUID schoolId, String from, String to) {
     var scope = actors.requireResourceScope("TEACHING");
     if (schoolId == null) throw new IllegalArgumentException("需要学校");
@@ -2090,8 +2238,7 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
                           r.get("curriculum_name", String.class),
                           r.get("lessons", Integer.class),
                           r.get("hours", BigDecimal.class),
-                          r.get("amount", BigDecimal.class)))
-;
+                          r.get("amount", BigDecimal.class)));
         });
   }
 
@@ -2131,8 +2278,7 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
                           r.get("student_name", String.class),
                           r.get("curriculum_name", String.class),
                           r.get("hours", BigDecimal.class),
-                          r.get("amount", BigDecimal.class)))
-;
+                          r.get("amount", BigDecimal.class)));
         });
   }
 
@@ -2158,8 +2304,7 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
                           r.get("title", String.class),
                           r.get("body", String.class),
                           String.valueOf(r.get("created_at", java.time.OffsetDateTime.class)),
-                          r.get("read_at", java.time.OffsetDateTime.class) != null))
-;
+                          r.get("read_at", java.time.OffsetDateTime.class) != null));
         });
   }
 
@@ -2172,7 +2317,8 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
         () -> {
           var changed =
               sql.execute(
-                  "update teaching.notification set read_at=coalesce(read_at,now()) where id=?", id);
+                  "update teaching.notification set read_at=coalesce(read_at,now()) where id=?",
+                  id);
           if (changed != 1) throw new TeachingConflict("NOTIFICATION_NOT_FOUND");
           return null;
         });
@@ -2184,12 +2330,12 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
       if (teacherId == null
           || command == null
           || command.requestId() == null
-          || command.newTeacherId() == null)
-        throw new IllegalArgumentException("需要教师、新教师和请求身份");
+          || command.newTeacherId() == null) throw new IllegalArgumentException("需要教师、新教师和请求身份");
       var begin = businessDate(command.from(), "开始日期");
       var end = businessDate(command.to(), "结束日期");
       if (end.isBefore(begin)) throw new IllegalArgumentException("结束日期不能早于开始日期");
-      if (ChronoUnit.DAYS.between(begin, end) > 31) throw new IllegalArgumentException("一次最多改派 31 天");
+      if (ChronoUnit.DAYS.between(begin, end) > 31)
+        throw new IllegalArgumentException("一次最多改派 31 天");
       var actor = actors.requireAction("TEACHING_MAINTAIN");
       return tx.execute(
           actor.tenantId(),
@@ -2197,8 +2343,7 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
             schools.lockTenant(actor.tenantId());
             var verified = actors.requireActionInTransaction("TEACHING_MAINTAIN");
             var school =
-                sql.fetchOne(
-                        "select school_id from organization.teacher where id=?", teacherId)
+                sql.fetchOne("select school_id from organization.teacher where id=?", teacherId)
                     .get("school_id", UUID.class);
             if (!verified.schools().contains(school))
               throw new AccessDeniedException("无该学校的教务维护权限");
@@ -2267,7 +2412,8 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
     }
   }
 
-  private void auditLessonsReassigned(Actor actor, UUID lessonId, UUID schoolId, String teacherName) {
+  private void auditLessonsReassigned(
+      Actor actor, UUID lessonId, UUID schoolId, String teacherName) {
     audit(actor, "LESSONS_REASSIGNED", lessonId, schoolId, "teacher=" + teacherName);
   }
 
@@ -3244,6 +3390,24 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
         excludeLessonId == null
             ? UUID.fromString("00000000-0000-0000-0000-000000000000")
             : excludeLessonId;
+    if (roomId != null) {
+      var room =
+          sql.fetchOne(
+              "select capacity from organization.room where id=? and school_id=?",
+              roomId,
+              schoolId);
+      var members =
+          sql.fetchOne(
+                  "select count(*) as total from teaching.enrollment_class"
+                      + " where class_id=? and active",
+                  classId)
+              .get("total", Integer.class);
+      if (room != null
+          && room.get("capacity", Integer.class) != null
+          && members != null
+          && members > room.get("capacity", Integer.class))
+        throw new TeachingConflict("ROOM_SEAT_NOT_ENOUGH");
+    }
     if (sql.fetchExists(
         sql.selectOne()
             .from("teaching.lesson")
@@ -3933,7 +4097,18 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
     if (enrollment.settlementMode() != 0) return;
     var row = sql.fetchOne("select class_type from teaching.class where id=?", classId);
     var type = row == null ? "NORMAL" : row.get("class_type", String.class);
-    enrollments.resolveSettlementMode(enrollment.id(), "VIP".equals(type) ? 1 : 2);
+    enrollments.resolveSettlementMode(
+        enrollment.id(), "VIP".equals(type) || "ONE_ON_ONE".equals(type) ? 1 : 2);
+  }
+
+  /** 旧系统的班型自带名额：一对一 1 人、一对四 4 人、一对八 8 人。 */
+  private Integer defaultCapacity(String classType) {
+    return switch (classType) {
+      case "ONE_ON_ONE" -> 1;
+      case "ONE_TO_FOUR" -> 4;
+      case "ONE_TO_EIGHT" -> 8;
+      default -> null;
+    };
   }
 
   private String classType(String value) {
@@ -3941,8 +4116,10 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
         value == null || value.isBlank()
             ? "NORMAL"
             : value.strip().toUpperCase(java.util.Locale.ROOT);
-    if (!java.util.Set.of("VIP", "LARGE", "NORMAL").contains(text))
-      throw new IllegalArgumentException("班型须为 VIP / LARGE / NORMAL");
+    if (!java.util.Set.of("VIP", "LARGE", "NORMAL", "ONE_ON_ONE", "ONE_TO_FOUR", "ONE_TO_EIGHT")
+        .contains(text))
+      throw new IllegalArgumentException(
+          "班型须为 VIP / LARGE / NORMAL / ONE_ON_ONE / ONE_TO_FOUR / ONE_TO_EIGHT");
     return text;
   }
 

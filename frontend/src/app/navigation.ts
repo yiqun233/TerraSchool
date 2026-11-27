@@ -114,6 +114,14 @@ export const TENANT_NAV: NavItem[] = [
     visible: (permissions) => granted(permissions, "TEACHING_READ"),
   },
   {
+    path: "/performance",
+    label: "销售业绩",
+    group: "财务",
+    enabled: true,
+    title: "销售业绩",
+    visible: (permissions) => granted(permissions, "ENROLLMENT_READ"),
+  },
+  {
     path: "/approval",
     label: "审批",
     group: "教务",

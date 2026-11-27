@@ -26,7 +26,11 @@ public record EnrollmentView(
     long version,
     String createdAt,
     String validUntil,
-    List<CourseView> courses) {
+    List<CourseView> courses,
+    UUID campusId,
+    String campusName,
+    UUID consultantId,
+    String consultantName) {
   public EnrollmentView {
     courses = courses == null ? List.of() : List.copyOf(courses);
   }

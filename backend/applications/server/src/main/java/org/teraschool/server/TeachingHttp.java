@@ -214,6 +214,12 @@ class TeachingHttp {
     return commands.createClass(command);
   }
 
+  @PostMapping(value = "/api/teaching/enrollments/{id}/one-on-one-class", consumes = "application/json")
+  @ResponseStatus(org.springframework.http.HttpStatus.CREATED)
+  ClassView createOneOnOneClass(@PathVariable UUID id, @RequestBody OneOnOneClass command) {
+    return commands.createOneOnOneClass(id, command);
+  }
+
   @PostMapping(value = "/api/teaching/classes/{id}/capacity", consumes = "application/json")
   ClassView updateClassCapacity(@PathVariable UUID id, @RequestBody UpdateClassCapacity command) {
     return commands.updateClassCapacity(id, command);
@@ -389,6 +395,12 @@ class TeachingHttp {
   @GetMapping("/api/teaching/schools/{schoolId}/teachers")
   List<TeacherBrief> teachers(@PathVariable UUID schoolId) {
     return queries.teachers(schoolId);
+  }
+
+  /** 学校下的校区。 */
+  @GetMapping("/api/teaching/schools/{schoolId}/campuses")
+  List<CampusBrief> campuses(@PathVariable UUID schoolId) {
+    return queries.campuses(schoolId);
   }
 
   /** 全校冲突中心：日期段内按类型筛选。 */

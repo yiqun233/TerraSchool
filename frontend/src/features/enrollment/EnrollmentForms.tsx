@@ -209,6 +209,52 @@ export function PrepaymentCreator({
 }
 
 /** 审核：单独权限、单独动作，携带读取时的版本。 */
+export function OneOnOneClassButton({
+  enrollment,
+  onDone,
+  onError,
+}: {
+  enrollment: EnrollmentView;
+  onDone: () => void;
+  onError: (message: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  async function run() {
+    setBusy(true);
+    try {
+      const token = await csrf();
+      const { response } = await api.POST(
+        "/api/teaching/enrollments/{id}/one-on-one-class",
+        {
+          params: { path: { id: enrollment.id! } },
+          headers: { [token.headerName!]: token.token! },
+          body: { requestId: newRequestId() },
+        },
+      );
+      if (!response.ok) {
+        onError(
+          response.status === 409
+            ? "该报名不能自动建班：需已生效、有课程，且当前不在其他班级。"
+            : "一对一建班失败，请稍后重试。",
+        );
+        return;
+      }
+      onDone();
+    } catch {
+      onError("无法获取安全令牌或网络中断，请重试。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Button size="small" onClick={() => void run()} loading={busy}>
+      建一对一班
+    </Button>
+  );
+}
+
 export function ApproveButton({
   enrollment,
   onDone,
@@ -541,6 +587,8 @@ export function EnrollmentCreator({
   const [students, setStudents] = useState<StudentSummary[]>([]);
   const [studentId, setStudentId] = useState<string>();
   const [priceVersionId, setPriceVersionId] = useState<string>();
+  const [campusId, setCampusId] = useState<string>();
+  const [consultantId, setConsultantId] = useState<string>();
   const [lines, setLines] = useState<
     { curriculumId?: string; hours?: string; amount?: string }[]
   >([]);
@@ -568,6 +616,30 @@ export function EnrollmentCreator({
       });
       if (!response.ok || !data) return [];
       return data.curricula ?? [];
+    },
+  });
+
+  const campuses = useQuery({
+    queryKey: ["enrollment-campuses", schoolId],
+    queryFn: async ({ signal }) => {
+      const { data, response } = await api.GET(
+        "/api/enrollment/schools/{schoolId}/campuses",
+        { params: { path: { schoolId } }, signal },
+      );
+      if (!response.ok || !data) return [];
+      return data;
+    },
+  });
+
+  const consultants = useQuery({
+    queryKey: ["enrollment-consultants", schoolId],
+    queryFn: async ({ signal }) => {
+      const { data, response } = await api.GET(
+        "/api/enrollment/schools/{schoolId}/consultants",
+        { params: { path: { schoolId } }, signal },
+      );
+      if (!response.ok || !data) return [];
+      return data;
     },
   });
 
@@ -635,6 +707,8 @@ export function EnrollmentCreator({
           studentId,
           priceVersionId: values.priceVersionId,
           enrolledOn: values.enrolledOn,
+          campusId: campusId ?? undefined,
+          consultantId: consultantId ?? undefined,
           courses: split
             ? lines.map((line) => ({
                 curriculumId: line.curriculumId!,
@@ -793,6 +867,34 @@ export function EnrollmentCreator({
             </Space>
           </Card>
         ) : null}
+        <Form.Item label="报名校区" extra="留空时取学员档案的校区；进班后须与班级校区一致。">
+          <Select
+            allowClear
+            value={campusId}
+            onChange={(value) => setCampusId(value)}
+            placeholder="沿用学员档案校区"
+            options={(campuses.data ?? []).map((item) => ({
+              value: item.id,
+              label: item.name,
+            }))}
+            disabled={busy}
+          />
+        </Form.Item>
+        <Form.Item label="课程顾问" extra="用于销售业绩归集；留空表示未指定。">
+          <Select
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            value={consultantId}
+            onChange={(value) => setConsultantId(value)}
+            placeholder="未指定顾问"
+            options={(consultants.data ?? []).map((item) => ({
+              value: item.id,
+              label: item.name,
+            }))}
+            disabled={busy}
+          />
+        </Form.Item>
         <Form.Item
           label="报名日期"
           name="enrolledOn"

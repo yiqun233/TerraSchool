@@ -14,12 +14,23 @@ public record CreateEnrollment(
     UUID studentId,
     UUID priceVersionId,
     String enrolledOn,
-    List<CourseLine> courses) {
+    List<CourseLine> courses,
+    UUID campusId,
+    UUID consultantId) {
   public CreateEnrollment {
     courses = courses == null ? null : List.copyOf(courses);
   }
 
   public CreateEnrollment(UUID requestId, UUID studentId, UUID priceVersionId, String enrolledOn) {
-    this(requestId, studentId, priceVersionId, enrolledOn, null);
+    this(requestId, studentId, priceVersionId, enrolledOn, null, null, null);
+  }
+
+  public CreateEnrollment(
+      UUID requestId,
+      UUID studentId,
+      UUID priceVersionId,
+      String enrolledOn,
+      List<CourseLine> courses) {
+    this(requestId, studentId, priceVersionId, enrolledOn, courses, null, null);
   }
 }

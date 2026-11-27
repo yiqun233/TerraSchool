@@ -76,6 +76,13 @@ const RevenuePage = lazy(async () => {
   return { default: withUnauthorized(RevenuePage) };
 });
 
+const PerformancePage = lazy(async () => {
+  const { PerformancePage } = await import(
+    "../features/enrollment/PerformancePage"
+  );
+  return { default: withUnauthorized(PerformancePage) };
+});
+
 const ApprovalPage = lazy(async () => {
   const { ApprovalInbox } = await import("../features/approval/ApprovalInbox");
   return { default: withUnauthorized(ApprovalInbox) };
@@ -253,6 +260,7 @@ export const router = createBrowserRouter([
       { path: "timetable", element: <TimetablePage /> },
       { path: "conflicts", element: <ConflictsPage /> },
       { path: "revenue", element: <RevenuePage /> },
+      { path: "performance", element: <PerformancePage /> },
       { path: "approval", element: <ApprovalPage /> },
       { path: "finance", element: <FinancePage /> },
       { path: "migration", element: <MigrationPage /> },

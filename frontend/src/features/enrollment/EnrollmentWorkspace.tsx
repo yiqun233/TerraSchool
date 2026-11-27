@@ -18,6 +18,7 @@ import {
   EnrollmentBatchCreator,
   EnrollmentCreator,
   EnrollmentDetail,
+  OneOnOneClassButton,
   PrepaymentCreator,
 } from "./EnrollmentForms";
 import type { EnrollmentView, FundsCapabilities } from "./enrollmentShared";
@@ -284,6 +285,8 @@ export function EnrollmentWorkspace({
             })}
             columns={[
               { title: "学员", dataIndex: "studentName" },
+              { title: "校区", dataIndex: "campusName" },
+              { title: "顾问", dataIndex: "consultantName" },
               { title: "产品", dataIndex: "productName" },
               {
                 title: "冻结价格/课时",
@@ -317,6 +320,12 @@ export function EnrollmentWorkspace({
                   row.status === "PENDING_AUDIT" &&
                   capabilities.data?.canApprove ? (
                     <ApproveButton
+                      enrollment={row}
+                      onDone={() => void enrollments.refetch()}
+                      onError={setError}
+                    />
+                  ) : row.status === "ACTIVE" ? (
+                    <OneOnOneClassButton
                       enrollment={row}
                       onDone={() => void enrollments.refetch()}
                       onError={setError}

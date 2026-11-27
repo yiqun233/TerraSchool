@@ -6,6 +6,9 @@ import java.util.UUID;
 public interface TeachingCommands {
   ClassView createClass(CreateClass command);
 
+  /** 按一对一报名自动开班（容量 1、班型 ONE_ON_ONE）并把该报名进班。 */
+  ClassView createOneOnOneClass(UUID enrollmentId, OneOnOneClass command);
+
   /** 修改班级容量；不得低于当前在班人数，null 表示不限。 */
   ClassView updateClassCapacity(UUID classId, UpdateClassCapacity command);
 

@@ -781,7 +781,20 @@ export function ClassCreator({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [campusId, setCampusId] = useState<string>();
   const [form] = Form.useForm();
+
+  const campuses = useQuery({
+    queryKey: ["teaching-campuses", schoolId],
+    queryFn: async ({ signal }) => {
+      const { data, response } = await api.GET(
+        "/api/teaching/schools/{schoolId}/campuses",
+        { params: { path: { schoolId } }, signal },
+      );
+      if (!response.ok || !data) return [];
+      return data;
+    },
+  });
 
   async function save() {
     const values = await form.validateFields();
@@ -799,6 +812,7 @@ export function ClassCreator({
           classType: values.classType ?? "NORMAL",
           groupTraining: values.groupTraining ?? false,
           capacity: values.capacity ?? null,
+          campusId: campusId ?? undefined,
         },
       });
       if (!response.ok) {
@@ -836,6 +850,19 @@ export function ClassCreator({
         >
           <Input maxLength={100} disabled={busy} />
         </Form.Item>
+        <Form.Item label="所属校区" extra="留空表示校区待定；报名进班时要求与班级校区一致。">
+          <Select
+            allowClear
+            value={campusId}
+            onChange={(value) => setCampusId(value)}
+            placeholder="未指定校区"
+            options={(campuses.data ?? []).map((item) => ({
+              value: item.id,
+              label: item.name,
+            }))}
+            disabled={busy}
+          />
+        </Form.Item>
         <Form.Item
           label="团培班"
           name="groupTraining"
@@ -849,7 +876,7 @@ export function ClassCreator({
           label="班型"
           name="classType"
           initialValue="NORMAL"
-          extra="结算模式 0（自动）时：VIP 走平均价格，大班与普通班走课程匹配"
+          extra="结算模式 0（自动）时：VIP/一对一走平均价格，大班与普通班走课程匹配；一对一/一对四/一对八会带出默认名额。"
         >
           <Select
             disabled={busy}
@@ -857,6 +884,9 @@ export function ClassCreator({
               { value: "VIP", label: "VIP" },
               { value: "LARGE", label: "大班" },
               { value: "NORMAL", label: "普通班" },
+              { value: "ONE_ON_ONE", label: "一对一（容量 1）" },
+              { value: "ONE_TO_FOUR", label: "一对四（容量 4）" },
+              { value: "ONE_TO_EIGHT", label: "一对八（容量 8）" },
             ]}
           />
         </Form.Item>

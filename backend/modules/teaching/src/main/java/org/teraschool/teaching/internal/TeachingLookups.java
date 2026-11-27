@@ -36,7 +36,7 @@ class TeachingLookups {
   Record requireClass(ResourceScope scope, UUID id) {
     var row =
         sql.fetchOne(
-            "select c.id,c.school_id,c.curriculum_id,c.name,c.status,c.version,c.group_training,c.class_type,c.capacity,"
+            "select c.id,c.school_id,c.curriculum_id,c.name,c.status,c.version,c.group_training,c.class_type,c.capacity,c.campus_id,"
                 + "cur.name as curriculum_name,"
                 + "(select count(*) from teaching.enrollment_class m where m.class_id=c.id and m.active)"
                 + " as member_count from teaching.class c"

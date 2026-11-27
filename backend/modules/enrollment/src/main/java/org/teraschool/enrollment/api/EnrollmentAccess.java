@@ -23,6 +23,7 @@ public interface EnrollmentAccess {
       UUID id,
       UUID schoolId,
       UUID studentId,
+      UUID campusId,
       LocalDate validUntil,
       String status,
       BigDecimal netAmount,
