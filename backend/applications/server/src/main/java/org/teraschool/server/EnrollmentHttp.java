@@ -1,19 +1,28 @@
 package org.teraschool.server;
 
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.*;
 import org.teraschool.enrollment.api.*;
+import org.teraschool.teaching.api.OneOnOneClass;
+import org.teraschool.teaching.api.TeachingCommands;
 
 /** 报名与应收的 HTTP 适配：授权、快照、幂等与审核规则都在应用服务内。 */
 @RestController
 @RequestMapping(produces = "application/json")
 class EnrollmentHttp {
+  private static final Logger log = LoggerFactory.getLogger(EnrollmentHttp.class);
+
   private final EnrollmentQueries queries;
   private final EnrollmentCommands commands;
+  private final TeachingCommands teaching;
 
-  EnrollmentHttp(EnrollmentQueries queries, EnrollmentCommands commands) {
+  EnrollmentHttp(
+      EnrollmentQueries queries, EnrollmentCommands commands, TeachingCommands teaching) {
     this.queries = queries;
     this.commands = commands;
+    this.teaching = teaching;
   }
 
   @GetMapping("/api/enrollment/capabilities")
@@ -96,6 +105,15 @@ class EnrollmentHttp {
   /** 审核是独立动作与独立权限，不能靠修改接口设置状态。 */
   @PostMapping(value = "/api/enrollment/enrollments/{id}/approve", consumes = "application/json")
   EnrollmentView approve(@PathVariable UUID id, @RequestBody EnrollmentVersion command) {
-    return commands.approve(id, command);
+    var view = commands.approve(id, command);
+    // 一对一产品：审核通过后自动建班并进班。建班失败不阻塞审核，报名仍可在报到处一键重试。
+    if (view.oneOnOne()) {
+      try {
+        teaching.createOneOnOneClass(view.id(), new OneOnOneClass(UUID.randomUUID(), null, null));
+      } catch (RuntimeException error) {
+        log.warn("auto one-on-one class failed for enrollment {}", id, error);
+      }
+    }
+    return view;
   }
 }

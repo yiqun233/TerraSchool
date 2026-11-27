@@ -23,6 +23,9 @@ public interface ProductCommands {
   /** 覆盖产品的可售校区；空列表表示全校区可售。 */
   CourseProduct setProductCampuses(UUID id, SetProductCampuses command);
 
+  /** 覆盖产品包含的课程；第一门成为主课程，课时合计应等于已发布价格版本的课时。 */
+  CourseProduct setProductCurricula(UUID id, SetProductCurricula command);
+
   PriceVersion draftPriceVersion(DraftPriceVersion command);
 
   PriceVersion updatePriceVersion(UUID id, UpdatePriceVersion command);

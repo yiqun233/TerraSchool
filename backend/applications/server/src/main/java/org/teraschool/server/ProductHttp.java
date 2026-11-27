@@ -62,6 +62,19 @@ class ProductHttp {
     return queries.sellable(schoolId, on, campusId);
   }
 
+  /** 产品包含的课程与课时；单课程产品也返回一行。 */
+  @GetMapping("/api/product/products/{id}/curricula")
+  List<ProductCurriculum> productCurricula(@PathVariable UUID id) {
+    return queries.productCurricula(id);
+  }
+
+  /** 覆盖产品包含的课程；第一门成为主课程。 */
+  @PostMapping(value = "/api/product/products/{id}/curricula", consumes = "application/json")
+  CourseProduct setProductCurricula(
+      @PathVariable UUID id, @RequestBody SetProductCurricula command) {
+    return commands.setProductCurricula(id, command);
+  }
+
   /** 产品的可售校区；空列表表示全校区可售。 */
   @GetMapping("/api/product/products/{id}/campuses")
   List<UUID> productCampuses(@PathVariable UUID id) {

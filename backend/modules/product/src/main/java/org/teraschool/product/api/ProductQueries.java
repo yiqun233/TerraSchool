@@ -16,4 +16,7 @@ public interface ProductQueries {
 
   /** 产品的可售校区；空列表表示全校区可售。 */
   List<UUID> productCampuses(UUID productId);
+
+  /** 产品包含的课程与课时分配；单课程产品也返回一行。 */
+  List<ProductCurriculum> productCurricula(UUID productId);
 }

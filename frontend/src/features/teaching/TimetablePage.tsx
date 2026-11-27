@@ -1091,7 +1091,9 @@ export function TimetablePage({ onUnauthorized }: { onUnauthorized: () => void }
   const [batchOpen, setBatchOpen] = useState(false);
   const [bulkOpen, setBulkOpen] = useState(false);
   const [attendanceOpen, setAttendanceOpen] = useState(false);
-  const [view, setView] = useState<"class" | "teacher" | "student" | "month">(
+  const [view, setView] = useState<
+    "class" | "teacher" | "student" | "month" | "list"
+  >(
     "class",
   );
   const [monthOffset, setMonthOffset] = useState(0);
@@ -1275,6 +1277,116 @@ export function TimetablePage({ onUnauthorized }: { onUnauthorized: () => void }
   );
 
   const groupRows = grouped.data ?? [];
+
+  /** 列表视图：按日分组取本周课次，再拍平按日期+时间排序。 */
+  const listGrid = useQuery({
+    queryKey: ["timetable-list", current, isoDate(days[0])],
+    enabled: !!current && view === "list",
+    queryFn: async ({ signal }): Promise<TimetableGroupRow[]> => {
+      const { data, response } = await api.GET(
+        "/api/teaching/reports/timetable",
+        {
+          params: {
+            query: {
+              schoolId: current!,
+              from: isoDate(days[0]),
+              to: isoDate(days[6]),
+              view: "day",
+            },
+          },
+          signal,
+        },
+      );
+      if (response.status === 401) {
+        onUnauthorized();
+        throw new Error("登录已失效，请重新登录");
+      }
+      if (!response.ok || !data) throw new Error("无法读取课次列表");
+      return data;
+    },
+  });
+  const listRows = (listGrid.data ?? [])
+    .flatMap((row) => row.cells ?? [])
+    .sort((left, right) =>
+      `${left.lessonDate} ${left.startsAt}`.localeCompare(
+        `${right.lessonDate} ${right.startsAt}`,
+      ),
+    );
+
+  const listColumns: ColumnsType<TimetableCellView> = [
+    {
+      title: "日期",
+      dataIndex: "lessonDate",
+      width: 110,
+      render: (value: string) => `${value} ${WEEKDAYS[(new Date(`${value}T12:00:00`).getDay() + 6) % 7]}`,
+    },
+    {
+      title: "时间",
+      width: 130,
+      render: (_: unknown, row: TimetableCellView) =>
+        `${row.startsAt}–${row.endsAt}`,
+    },
+    {
+      title: "班级",
+      dataIndex: "className",
+      width: 180,
+      render: (_: unknown, row: TimetableCellView) => (
+        <Button
+          type="link"
+          size="small"
+          style={{ padding: 0 }}
+          onClick={() =>
+            setEditing({
+              classId: row.classId ?? "",
+              slot: {
+                lessonId: row.lessonId,
+                lessonDate: row.lessonDate,
+                startsAt: row.startsAt,
+                endsAt: row.endsAt,
+                className: row.className,
+                teacherName: row.teacherName,
+                roomName: row.roomName,
+                topic: row.topic,
+                status: row.status,
+              } as Slot,
+            })
+          }
+        >
+          {row.className}
+        </Button>
+      ),
+    },
+    { title: "课程", dataIndex: "curriculumName", width: 130 },
+    {
+      title: "课题",
+      dataIndex: "topic",
+      render: (value: string | null) => value || "—",
+    },
+    {
+      title: "教师",
+      dataIndex: "teacherName",
+      width: 110,
+      render: (value: string | null) =>
+        value ? value : <Typography.Text type="danger">缺教师</Typography.Text>,
+    },
+    {
+      title: "教室",
+      dataIndex: "roomName",
+      width: 110,
+      render: (value: string | null) =>
+        value ? value : <Typography.Text type="danger">缺教室</Typography.Text>,
+    },
+    {
+      title: "状态",
+      dataIndex: "status",
+      width: 100,
+      render: (value: string) => (
+        <Typography.Text style={{ color: STATUS_COLOR[value] ?? "#d9d9d9" }}>
+          {LESSON_STATUS[value] ?? value}
+        </Typography.Text>
+      ),
+    },
+  ];
   const groupColumns: ColumnsType<TimetableGroupRow> = [
     {
       title: view === "student" ? "学员" : "教师",
@@ -1431,6 +1543,7 @@ export function TimetablePage({ onUnauthorized }: { onUnauthorized: () => void }
     dayResults.forEach((result) => result.refetch());
     if (view === "teacher" || view === "student") void grouped.refetch();
     if (view === "month") void monthGrid.refetch();
+    if (view === "list") void listGrid.refetch();
   }
 
   /** 拖拽时按“目标日期 + 目标时段起分钟”从可行性矩阵取格子状态。 */
@@ -1692,7 +1805,7 @@ export function TimetablePage({ onUnauthorized }: { onUnauthorized: () => void }
     <Page>
       <PageHeader
         title="排课"
-        description="按班级、教师、学员或整月查看课表；点击课次可设置课程、教师、教室与备注，拖动已发布课次到绿格调课、落到其他课次上交换。"
+        description="按班级、教师、学员、整月或列表查看课表；点击课次可设置课程、教师、教室与备注，拖动已发布课次到绿格调课、落到其他课次上交换。"
         actions={
           capabilities.data?.schools && capabilities.data.schools.length > 1 ? (
             <Select
@@ -1765,6 +1878,7 @@ export function TimetablePage({ onUnauthorized }: { onUnauthorized: () => void }
               { value: "teacher", label: "按教师" },
               { value: "student", label: "按学员" },
               { value: "month", label: "按月" },
+              { value: "list", label: "列表" },
             ]}
           />
           <Button onClick={refresh} loading={loading}>
@@ -1854,6 +1968,38 @@ export function TimetablePage({ onUnauthorized }: { onUnauthorized: () => void }
               columns={groupColumns}
               pagination={false}
               scroll={{ x: 1200 }}
+              locale={{ emptyText: "没有符合条件的课次" }}
+            />
+          )}
+        </Panel>
+      ) : null}
+
+      {view === "list" ? (
+        <Panel ariaLabel="课次列表">
+          {listGrid.isLoading ? (
+            <LoadingBlock>正在读取课次列表…</LoadingBlock>
+          ) : listGrid.error ? (
+            <StateBlock
+              title="课次列表没有读取成功"
+              hint={(listGrid.error as Error).message}
+              action={
+                <Button onClick={() => void listGrid.refetch()}>重试</Button>
+              }
+            />
+          ) : listRows.length === 0 ? (
+            <StateBlock
+              title="这一周没有课次"
+              hint="切到“按班级”后可添加课次，或换一周再看。"
+            />
+          ) : (
+            <Table
+              rowKey="lessonId"
+              size="small"
+              bordered
+              dataSource={listRows}
+              columns={listColumns}
+              pagination={false}
+              scroll={{ x: 1100 }}
               locale={{ emptyText: "没有符合条件的课次" }}
             />
           )}

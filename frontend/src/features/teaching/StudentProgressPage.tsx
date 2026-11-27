@@ -157,7 +157,7 @@ export function StudentProgressPage({
       dataIndex: "nextLessonDate",
       render: (_: unknown, row) =>
         row.nextLessonDate
-          ? `${row.nextLessonDate} ${row.nextStartsAt ?? ""}`.trim()
+          ? `第 ${row.nextLessonIndex} 节 · ${row.nextLessonDate} ${row.nextStartsAt ?? ""}`.trim()
           : "—",
     },
   ];

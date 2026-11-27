@@ -2400,6 +2400,7 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
                         hours(remaining),
                         r.get("attended_lessons", Integer.class),
                         r.get("total_lessons", Integer.class),
+                        nextDate == null ? 0 : r.get("attended_lessons", Integer.class) + 1,
                         nextDate == null ? null : nextDate.toString(),
                         r.get("next_starts", String.class));
                   })

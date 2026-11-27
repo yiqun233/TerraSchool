@@ -17,4 +17,5 @@ public record PriceSnapshot(
     Integer studyDays,
     String status,
     String effectiveFrom,
-    String effectiveTo) {}
+    String effectiveTo,
+    boolean oneOnOne) {}

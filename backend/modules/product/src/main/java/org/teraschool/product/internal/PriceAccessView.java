@@ -26,7 +26,7 @@ public class PriceAccessView implements PriceAccess {
         sql.fetchOne(
             "select pv.id,pv.product_id,p.school_id,p.curriculum_id,c.name as curriculum_name,"
                 + "p.name as product_name,pv.price,pv.hours,pv.service_fee,pv.settlement_mode,"
-                + "pv.study_days,pv.status,pv.effective_from,pv.effective_to"
+                + "pv.study_days,pv.status,pv.effective_from,pv.effective_to,p.one_on_one"
                 + " from product.price_version pv"
                 + " join product.product p on p.id=pv.product_id"
                 + " join product.curriculum c on c.id=p.curriculum_id"
@@ -47,7 +47,8 @@ public class PriceAccessView implements PriceAccess {
         row.get("study_days", Integer.class),
         row.get("status", String.class),
         date(row.get("effective_from", LocalDate.class)),
-        date(row.get("effective_to", LocalDate.class)));
+        date(row.get("effective_to", LocalDate.class)),
+        Boolean.TRUE.equals(row.get("one_on_one", Boolean.class)));
   }
 
   private String money(BigDecimal value) {

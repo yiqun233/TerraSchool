@@ -10,6 +10,7 @@ import {
   Modal,
   Select,
   Space,
+  Switch,
   Table,
   Tag,
   Typography,
@@ -69,6 +70,7 @@ export function ProductCatalogWorkspace({
   const [draftingFor, setDraftingFor] = useState<CourseProduct | null>(null);
   const [historyFor, setHistoryFor] = useState<CourseProduct | null>(null);
   const [campusFor, setCampusFor] = useState<CourseProduct | null>(null);
+  const [curriculaFor, setCurriculaFor] = useState<CourseProduct | null>(null);
   const [error, setError] = useState("");
 
   const capabilities = useQuery({
@@ -310,6 +312,20 @@ export function ProductCatalogWorkspace({
                 ),
             },
             {
+              title: "课程组合",
+              render: (_: unknown, product: CourseProduct) =>
+                school?.maintainable ? (
+                  <Button size="small" onClick={() => setCurriculaFor(product)}>
+                    {(product.curricula ?? []).length > 1
+                      ? `${(product.curricula ?? []).length} 门课程`
+                      : "课程组合"}
+                  </Button>
+                ) : (
+                  (product.curricula ?? []).map((item) => item.curriculumName).join("、") ||
+                  product.curriculumName
+                ),
+            },
+            {
               title: "可售校区",
               render: (_: unknown, product: CourseProduct) =>
                 school?.maintainable ? (
@@ -439,6 +455,17 @@ export function ProductCatalogWorkspace({
           onClose={() => setCampusFor(null)}
           onSaved={() => {
             setCampusFor(null);
+            void catalog.refetch();
+          }}
+        />
+      ) : null}
+      {curriculaFor && current ? (
+        <CurriculaEditor
+          product={curriculaFor}
+          curricula={catalog.data?.curricula ?? []}
+          onClose={() => setCurriculaFor(null)}
+          onSaved={() => {
+            setCurriculaFor(null);
             void catalog.refetch();
           }}
         />
@@ -795,6 +822,7 @@ export function ProductCreator({
       curriculumId: values.curriculumId,
       name: values.name,
       settlementMode: values.settlementMode ?? 1,
+      oneOnOne: values.oneOnOne ?? false,
     };
     if (!pending.current) pending.current = body;
     setBusy(true);
@@ -866,6 +894,14 @@ export function ProductCreator({
             }))}
             disabled={busy}
           />
+        </Form.Item>
+        <Form.Item
+          label="一对一产品"
+          name="oneOnOne"
+          valuePropName="checked"
+          extra="勾选后，报名审核通过会自动建一对一班级并进班"
+        >
+          <Switch disabled={busy} />
         </Form.Item>
         <Button
           type="primary"
@@ -1261,6 +1297,149 @@ function CampusScopeEditor({
           label: item.name,
         }))}
       />
+    </Modal>
+  );
+}
+
+/** 编辑产品包含的课程与课时分配；第一门成为主课程。 */
+function CurriculaEditor({
+  product,
+  curricula,
+  onClose,
+  onSaved,
+}: {
+  product: CourseProduct;
+  curricula: Curriculum[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [rows, setRows] = useState<{ curriculumId?: string; hours: number }[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    const saved = product.curricula ?? [];
+    setRows(
+      saved.length > 0
+        ? saved.map((item) => ({
+            curriculumId: item.curriculumId,
+            hours: Number(item.hours ?? 0),
+          }))
+        : [{ curriculumId: product.curriculumId, hours: 0 }],
+    );
+  }, [product.id]);
+
+  const total = rows.reduce((sum, row) => sum + (row.hours || 0), 0);
+
+  async function save() {
+    if (product.version === undefined) return;
+    const items = rows
+      .filter((row) => row.curriculumId)
+      .map((row) => ({
+        curriculumId: row.curriculumId!,
+        hours: (row.hours || 0).toFixed(2),
+      }));
+    if (items.length === 0) {
+      setError("至少选择一门课程");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const token = await csrf();
+      const { response } = await api.POST(
+        "/api/product/products/{id}/curricula",
+        {
+          headers: { [token.headerName!]: token.token! },
+          params: { path: { id: product.id! } },
+          body: {
+            requestId: newRequestId(),
+            expectedVersion: product.version,
+            items,
+          },
+        },
+      );
+      if (!response.ok) {
+        if (response.status === 409) throw new Error("课程合计课时必须等于已发布价格版本的课时，或产品已被他人修改");
+        if (response.status === 403) throw new Error("没有该产品的维护权限");
+        throw new Error("保存课程组合失败");
+      }
+      onSaved();
+    } catch (problem) {
+      setError((problem as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      title="课程组合"
+      open
+      onCancel={onClose}
+      mask={{ closable: !busy }}
+      onOk={() => void save()}
+      okText="保存"
+      confirmLoading={busy}
+      width={640}
+    >
+      {error ? <Alert title={error} type="error" /> : null}
+      <Alert
+        type="info"
+        showIcon
+        title="一个产品可以包含多门课程（如暑期冲刺班=数学+英语+物理+化学）；价格版本的价格就是打包价。第一门课程作为主课程。"
+      />
+      <div style={{ marginTop: 12 }}>
+        {rows.map((row, index) => (
+          <Space key={index} style={{ display: "flex", marginBottom: 8 }} align="start">
+            <Select
+              style={{ width: 260 }}
+              placeholder="选择课程"
+              value={row.curriculumId}
+              onChange={(value) =>
+                setRows((previous) =>
+                  previous.map((item, itemIndex) =>
+                    itemIndex === index ? { ...item, curriculumId: value } : item,
+                  ),
+                )
+              }
+              options={curricula.map((item) => ({
+                value: item.id!,
+                label: item.name,
+              }))}
+            />
+            <InputNumber
+              min={0}
+              precision={2}
+              addonAfter="课时"
+              value={row.hours}
+              onChange={(value) =>
+                setRows((previous) =>
+                  previous.map((item, itemIndex) =>
+                    itemIndex === index ? { ...item, hours: Number(value ?? 0) } : item,
+                  ),
+                )
+              }
+            />
+            <Button
+              danger
+              size="small"
+              disabled={rows.length <= 1}
+              onClick={() => setRows((previous) => previous.filter((_, itemIndex) => itemIndex !== index))}
+            >
+              移除
+            </Button>
+          </Space>
+        ))}
+        <Space>
+          <Button onClick={() => setRows((previous) => [...previous, { hours: 0 }])}>
+            添加课程
+          </Button>
+          <Typography.Text type="secondary">
+            合计 {total.toFixed(2)} 课时；须等于已发布价格版本的课时
+          </Typography.Text>
+        </Space>
+      </div>
     </Modal>
   );
 }

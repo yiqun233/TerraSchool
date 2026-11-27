@@ -128,7 +128,7 @@ public class ProductCatalogService implements ProductQueries, ProductCommands {
                   schoolId)) published.put(row.get("product_id", UUID.class), priceView(row));
           var products =
               sql.fetch(
-                      "select p.id,p.school_id,p.curriculum_id,p.group_id,p.name,p.settlement_mode,p.active,"
+                      "select p.id,p.school_id,p.curriculum_id,p.group_id,p.name,p.settlement_mode,p.one_on_one,p.active,"
                           + "p.version,c.name as curriculum_name,g.name as group_name"
                           + " from product.product p join product.curriculum c on c.id=p.curriculum_id"
                           + " left join product.product_group g on g.id=p.group_id"
@@ -147,9 +147,11 @@ public class ProductCatalogService implements ProductQueries, ProductCommands {
                               row.get("group_name", String.class),
                               row.get("name", String.class),
                               row.get("settlement_mode", Integer.class),
+                              Boolean.TRUE.equals(row.get("one_on_one", Boolean.class)),
                               row.get("active", Boolean.class),
                               row.get("version", Long.class),
-                              published.get(row.get("id", UUID.class))));
+                              published.get(row.get("id", UUID.class)),
+                              curriculaRows(row.get("id", UUID.class))));
           return new ProductCatalog(schoolId, curricula, groups, products);
         });
   }
@@ -285,6 +287,104 @@ public class ProductCatalogService implements ProductQueries, ProductCommands {
   }
 
   // ---------------------------------------------------------------- 课程
+
+  @Override
+  public java.util.List<ProductCurriculum> productCurricula(UUID productId) {
+    var scope = actors.requireResourceScope("PRODUCT");
+    return tx.execute(
+        scope.tenantId(),
+        () -> {
+          var product = requireProduct(scope, productId);
+          var schoolId = product.get("school_id", UUID.class);
+          if (!scope.readableSchoolIds().contains(schoolId))
+            throw new AccessDeniedException("无产品读取权限");
+          return curriculaRows(productId);
+        });
+  }
+
+  private java.util.List<ProductCurriculum> curriculaRows(UUID productId) {
+    return sql.fetch(
+            "select pc.curriculum_id,c.name,pc.hours from product.product_composition pc"
+                + " join product.curriculum c on c.id=pc.curriculum_id"
+                + " where pc.product_id=? order by pc.created_at,pc.curriculum_id",
+            productId)
+        .map(
+            row ->
+                new ProductCurriculum(
+                    row.get("curriculum_id", UUID.class),
+                    row.get("name", String.class),
+                    money(row.get("hours", BigDecimal.class))));
+  }
+
+  @Override
+  public CourseProduct setProductCurricula(UUID id, SetProductCurricula command) {
+    if (id == null
+        || command == null
+        || command.requestId() == null
+        || command.expectedVersion() == null) throw new IllegalArgumentException("需要请求身份、产品与版本");
+    if (command.items().isEmpty()) throw new IllegalArgumentException("产品至少要有一门课程");
+    var scope = actors.requireResourceScope("PRODUCT");
+    return tx.execute(
+        scope.tenantId(),
+        () -> {
+          schools.lockTenant(scope.tenantId());
+          var verified = actors.requireResourceScopeInTransaction("PRODUCT");
+          var current = requireProduct(verified, id);
+          var schoolId = current.get("school_id", UUID.class);
+          requireMaintainable(verified, schoolId);
+          if (!schools.require(schoolId).active()) throw new AccessDeniedException("学校已停用，不能修改产品");
+          if (!current.get("version", Long.class).equals(command.expectedVersion()))
+            throw new ProductConflict("VERSION_CONFLICT");
+          var seen = new java.util.LinkedHashSet<UUID>();
+          var normalized = new java.util.ArrayList<ProductCurriculum>();
+          BigDecimal total = BigDecimal.ZERO;
+          for (var item : command.items()) {
+            if (item == null || item.curriculumId() == null)
+              throw new IllegalArgumentException("课程不能为空");
+            if (!seen.add(item.curriculumId())) throw new IllegalArgumentException("课程不能重复");
+            var curriculum =
+                sql.fetchOne(
+                    "select c.id,c.name from product.curriculum c"
+                        + " where c.id=? and c.school_id=?",
+                    item.curriculumId(),
+                    schoolId);
+            if (curriculum == null) throw new IllegalArgumentException("课程不属于该学校");
+            var hours =
+                item.hours() == null || item.hours().isBlank()
+                    ? BigDecimal.ZERO
+                    : new BigDecimal(item.hours());
+            if (hours.signum() < 0) throw new IllegalArgumentException("课时不能为负");
+            total = total.add(hours);
+            normalized.add(
+                new ProductCurriculum(
+                    item.curriculumId(), curriculum.get("name", String.class), money(hours)));
+          }
+          var published =
+              sql.fetchOne(
+                  "select hours from product.price_version where product_id=? and status='PUBLISHED'",
+                  id);
+          if (published != null && total.compareTo(published.get("hours", BigDecimal.class)) != 0)
+            throw new ProductConflict("CURRICULA_HOURS_MISMATCH");
+          sql.execute("delete from product.product_composition where product_id=?", id);
+          for (var line : normalized) {
+            sql.execute(
+                "insert into product.product_composition(tenant_id,product_id,curriculum_id,hours)"
+                    + " values (?,?,?,?)",
+                scope.tenantId(),
+                id,
+                line.curriculumId(),
+                new BigDecimal(line.hours()));
+          }
+          // 第一门课程作为主课程，兼容班级默认课程、可售过滤与旧视图。
+          sql.execute(
+              "update product.product set curriculum_id=?,version=version+1 where id=? and version=?",
+              normalized.get(0).curriculumId(),
+              id,
+              command.expectedVersion());
+          audit(verified, "PRODUCT_CURRICULA_UPDATED", id, schoolId, "curricula");
+          return productView(id, schoolId, schools.require(schoolId).name());
+        });
+  }
 
   @Override
   public ProductGroup createProductGroup(CreateProductGroup command) {
@@ -566,14 +666,15 @@ public class ProductCatalogService implements ProductQueries, ProductCommands {
           var id = UUID.randomUUID();
           try {
             sql.execute(
-                "insert into product.product(id,tenant_id,school_id,curriculum_id,name,settlement_mode)"
-                    + " values (?,?,?,?,?,?)",
+                "insert into product.product(id,tenant_id,school_id,curriculum_id,name,settlement_mode,one_on_one)"
+                    + " values (?,?,?,?,?,?,?)",
                 id,
                 scope.tenantId(),
                 command.schoolId(),
                 command.curriculumId(),
                 name,
-                mode);
+                mode,
+                Boolean.TRUE.equals(command.oneOnOne()));
           } catch (RuntimeException error) {
             if (uniqueViolation(error)) throw new ProductConflict("DUPLICATE_PRODUCT_NAME");
             throw error;
@@ -613,15 +714,20 @@ public class ProductCatalogService implements ProductQueries, ProductCommands {
               settlementMode(
                   command.settlementMode(), current.get("settlement_mode", Integer.class));
           var active = command.active() == null || command.active();
+          var oneOnOne =
+              command.oneOnOne() == null
+                  ? current.get("one_on_one", Boolean.class)
+                  : command.oneOnOne();
           int updated;
           try {
             updated =
                 sql.execute(
-                    "update product.product set name=?,settlement_mode=?,active=?,version=version+1"
+                    "update product.product set name=?,settlement_mode=?,active=?,one_on_one=?,version=version+1"
                         + " where id=? and version=?",
                     name,
                     mode,
                     active,
+                    oneOnOne,
                     id,
                     command.expectedVersion());
           } catch (RuntimeException error) {
@@ -634,6 +740,8 @@ public class ProductCatalogService implements ProductQueries, ProductCommands {
           if (!current.get("settlement_mode", Integer.class).equals(mode))
             changed.add("settlement_mode");
           if (!current.get("active", Boolean.class).equals(active)) changed.add("active");
+          if (!Objects.equals(current.get("one_on_one", Boolean.class), oneOnOne))
+            changed.add("one_on_one");
           audit(scope, "PRODUCT_UPDATED", id, schoolId, String.join(",", changed));
           return productView(id, schoolId, schools.require(schoolId).name());
         });
@@ -977,7 +1085,7 @@ public class ProductCatalogService implements ProductQueries, ProductCommands {
   private CourseProduct productView(UUID id, UUID schoolId, String schoolName) {
     var row =
         sql.fetchOne(
-            "select p.id,p.curriculum_id,p.group_id,p.name,p.settlement_mode,p.active,p.version,c.name as curriculum_name,g.name as group_name"
+            "select p.id,p.curriculum_id,p.group_id,p.name,p.settlement_mode,p.one_on_one,p.active,p.version,c.name as curriculum_name,g.name as group_name"
                 + " from product.product p join product.curriculum c on c.id=p.curriculum_id"
                 + " left join product.product_group g on g.id=p.group_id"
                 + " where p.id=?",
@@ -999,9 +1107,11 @@ public class ProductCatalogService implements ProductQueries, ProductCommands {
         row.get("group_name", String.class),
         row.get("name", String.class),
         row.get("settlement_mode", Integer.class),
+        Boolean.TRUE.equals(row.get("one_on_one", Boolean.class)),
         row.get("active", Boolean.class),
         row.get("version", Long.class),
-        published == null ? null : priceView(published));
+        published == null ? null : priceView(published),
+        curriculaRows(id));
   }
 
   private PriceVersion priceView(Record row) {

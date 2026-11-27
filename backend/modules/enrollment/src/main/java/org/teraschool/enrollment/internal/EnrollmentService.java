@@ -128,7 +128,7 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
                   "select e.id,e.school_id,e.student_id,e.product_id,e.price_version_id,"
                       + "e.curriculum_name,e.product_name,e.price,e.hours,e.service_fee,"
                       + "e.settlement_mode,e.status,e.version,e.created_at,e.valid_until,"
-                      + "e.campus_id,e.consultant_id,u.name as campus_name,emp.name as consultant_name,"
+                      + "e.campus_id,e.consultant_id,e.one_on_one,u.name as campus_name,emp.name as consultant_name,"
                       + "(select coalesce(sum(c.amount),0) from enrollment.charge c where c.enrollment_id=e.id)"
                       + " as net_amount"
                       + " from enrollment.enrollment e"
@@ -356,6 +356,21 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
                       schoolId)
                   == null) throw new IllegalArgumentException("课程顾问不属于该校或已停用");
           requireSellable(snapshot, on, campusId);
+          // 产品包：报名课程必须与产品组合的课程集合一致（课时与金额仍按明细合计校验）。
+          var composition =
+              sql.fetch(
+                      "select curriculum_id from product.product_composition"
+                          + " where product_id=? order by created_at,curriculum_id",
+                      snapshot.productId())
+                  .map(row -> row.get("curriculum_id", UUID.class));
+          if (composition.size() > 1) {
+            var expected = new java.util.HashSet<>(composition);
+            var actual = new java.util.HashSet<UUID>();
+            for (var line : command.courses()) {
+              if (line != null && line.curriculumId() != null) actual.add(line.curriculumId());
+            }
+            if (!expected.equals(actual)) throw new EnrollmentConflict("PRODUCT_COURSE_MISMATCH");
+          }
           var fingerprint =
               fingerprint(
                   command.studentId().toString(),
@@ -367,8 +382,8 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
           sql.execute(
               "insert into enrollment.enrollment(id,tenant_id,school_id,student_id,product_id,"
                   + "price_version_id,curriculum_name,product_name,price,hours,service_fee,"
-                  + "settlement_mode,valid_until,campus_id,consultant_id)"
-                  + " values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                  + "settlement_mode,valid_until,campus_id,consultant_id,one_on_one)"
+                  + " values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
               id,
               scope.tenantId(),
               schoolId,
@@ -383,7 +398,8 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
               snapshot.settlementMode(),
               snapshot.studyDays() == null ? null : on.plusDays(snapshot.studyDays() - 1L),
               campusId,
-              consultantId);
+              consultantId,
+              snapshot.oneOnOne());
           // 应收 = 商品价格 + 服务费；服务费在价格快照里单列，不摊进课时单价。
           var receivable =
               new BigDecimal(snapshot.price()).add(new BigDecimal(snapshot.serviceFee()));
@@ -1256,7 +1272,7 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
         sql.fetchOne(
             "select e.id,e.school_id,e.student_id,e.product_id,e.price_version_id,e.curriculum_name,"
                 + "e.product_name,e.price,e.hours,e.service_fee,e.settlement_mode,e.status,e.version,"
-                + "e.created_at,e.valid_until,e.campus_id,e.consultant_id,"
+                + "e.created_at,e.valid_until,e.campus_id,e.consultant_id,e.one_on_one,"
                 + "u.name as campus_name,emp.name as consultant_name,"
                 + "(select coalesce(sum(c.amount),0) from enrollment.charge c where c.enrollment_id=e.id)"
                 + " as net_amount from enrollment.enrollment e"
@@ -1316,7 +1332,8 @@ public class EnrollmentService implements EnrollmentQueries, EnrollmentCommands,
         row.get("campus_id", UUID.class),
         row.get("campus_name", String.class),
         row.get("consultant_id", UUID.class),
-        row.get("consultant_name", String.class));
+        row.get("consultant_name", String.class),
+        Boolean.TRUE.equals(row.get("one_on_one", Boolean.class)));
   }
 
   private List<CourseView> courseViews(UUID enrollmentId) {

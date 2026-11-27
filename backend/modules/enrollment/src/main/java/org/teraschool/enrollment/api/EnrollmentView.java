@@ -30,7 +30,8 @@ public record EnrollmentView(
     UUID campusId,
     String campusName,
     UUID consultantId,
-    String consultantName) {
+    String consultantName,
+    boolean oneOnOne) {
   public EnrollmentView {
     courses = courses == null ? List.of() : List.copyOf(courses);
   }

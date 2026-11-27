@@ -647,23 +647,56 @@ export function EnrollmentCreator({
     (item) => item.priceVersionId === priceVersionId,
   );
 
-  /** 选中价格版本后给出默认的一条课程明细（课程/课时/费用取快照），再按需要拆分。 */
-  function pickPrice(value: string) {
+  /** 选中价格版本后给出默认课程明细；产品包（多课程）按组合课时与价格预填。 */
+  async function pickPrice(value: string) {
     setPriceVersionId(value);
     const item = (sellable.data ?? []).find(
       (entry) => entry.priceVersionId === value,
     );
-    setLines(
-      item
-        ? [
-            {
-              curriculumId: item.curriculumId,
-              hours: item.hours,
-              amount: item.price,
-            },
-          ]
-        : [],
-    );
+    if (!item) {
+      setLines([]);
+      return;
+    }
+    const single = [
+      {
+        curriculumId: item.curriculumId,
+        hours: item.hours,
+        amount: item.price,
+      },
+    ];
+    setLines(single);
+    if (!item.productId) return;
+    try {
+      const { data, response } = await api.GET(
+        "/api/product/products/{id}/curricula",
+        { params: { path: { id: item.productId } } },
+      );
+      if (!response.ok || !data || data.length <= 1) return;
+      const totalHours = data.reduce(
+        (sum, course) => sum + Number(course.hours ?? 0),
+        0,
+      );
+      const price = Number(item.price ?? 0);
+      if (totalHours <= 0) return;
+      let left = Math.round(price * 100);
+      setLines(
+        data.map((course, index) => {
+          const hours = Number(course.hours ?? 0);
+          const cents =
+            index === data.length - 1
+              ? left
+              : Math.round((price * hours * 100) / totalHours);
+          left -= cents;
+          return {
+            curriculumId: course.curriculumId,
+            hours: hours.toFixed(2),
+            amount: (cents / 100).toFixed(2),
+          };
+        }),
+      );
+    } catch {
+      // 组合读取失败时保留快照的单行明细，由用户手工拆分。
+    }
   }
 
   /** 客户端先校验合计，避免把不符合快照的明细发到服务端。 */

@@ -16,5 +16,6 @@ public record StudentProgressView(
     String remainingHours,
     int attendedLessons,
     int totalLessons,
+    int nextLessonIndex,
     String nextLessonDate,
     String nextStartsAt) {}
