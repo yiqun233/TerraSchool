@@ -111,4 +111,38 @@ public class OrganizationService implements OrganizationQueries {
   public boolean isActiveStudentAssignee(java.util.UUID schoolId, java.util.UUID accountId) {
     return employeeLinks.isActiveStudentAssignee(schoolId, accountId);
   }
+
+  @Override
+  public java.util.List<CampusDistance> campusDistances(java.util.UUID campusId) {
+    var actor = actors.requireOrganizationReader();
+    if (campusId == null) throw new IllegalArgumentException("需要校区");
+    return tx.execute(
+        actor.tenantId(),
+        () -> {
+          var campus =
+              sql.fetchOne(
+                  "select school_id from organization.unit where id=? and kind='CAMPUS'", campusId);
+          if (campus == null) throw new IllegalArgumentException("校区不存在");
+          var schoolId = campus.get("school_id", java.util.UUID.class);
+          if (!actor.schools().contains(schoolId))
+            throw new org.springframework.security.access.AccessDeniedException("不在可读范围");
+          return sql.fetch(
+                  "select u.id as campus_id,u.name as campus_name,"
+                      + " coalesce((select d.minutes from organization.campus_distance d"
+                      + " where (d.from_campus_id=? and d.to_campus_id=u.id)"
+                      + " or (d.from_campus_id=u.id and d.to_campus_id=?)),0) as minutes"
+                      + " from organization.unit u"
+                      + " where u.school_id=? and u.kind='CAMPUS' and u.id<>? order by u.name",
+                  campusId,
+                  campusId,
+                  schoolId,
+                  campusId)
+              .map(
+                  row ->
+                      new CampusDistance(
+                          row.get("campus_id", java.util.UUID.class),
+                          row.get("campus_name", String.class),
+                          row.get("minutes", Integer.class)));
+        });
+  }
 }

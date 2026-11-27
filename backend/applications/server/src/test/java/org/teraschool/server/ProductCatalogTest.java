@@ -376,17 +376,17 @@ class ProductCatalogTest {
     var product = product("地理短期班", curriculum.id());
     var draft = draft(product.id(), "800", "8", "2026-02-01", "2026-02-28");
     var published = publish(draft.id(), draft.version());
-    assertThat(asActor(READER, () -> queries.sellable(SCHOOL, "2026-02-10")))
+    assertThat(asActor(READER, () -> queries.sellable(SCHOOL, "2026-02-10", null)))
         .extracting(SellablePrice::productId)
         .contains(product.id());
-    assertThat(asActor(READER, () -> queries.sellable(SCHOOL, "2026-03-10"))).isEmpty();
-    assertThatThrownBy(() -> asActor(READER, () -> queries.sellable(SCHOOL, "2026/02/10")))
+    assertThat(asActor(READER, () -> queries.sellable(SCHOOL, "2026-03-10", null))).isEmpty();
+    assertThatThrownBy(() -> asActor(READER, () -> queries.sellable(SCHOOL, "2026/02/10", null)))
         .isInstanceOf(IllegalArgumentException.class);
     asActor(
         PUBLISHER,
         () ->
             commands.retirePriceVersion(published.id(), new ExpectedVersion(published.version())));
-    assertThat(asActor(READER, () -> queries.sellable(SCHOOL, "2026-02-10"))).isEmpty();
+    assertThat(asActor(READER, () -> queries.sellable(SCHOOL, "2026-02-10", null))).isEmpty();
   }
 
   @Test

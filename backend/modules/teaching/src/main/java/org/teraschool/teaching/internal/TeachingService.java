@@ -1899,12 +1899,87 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
         });
   }
 
+  private String commuteClash(
+      UUID classCampus, List<Object[]> others, LocalTime begin, LocalTime finish) {
+    if (classCampus == null || others == null) return null;
+    for (var other : others) {
+      var campus = (UUID) other[2];
+      if (campus == null || campus.equals(classCampus)) continue;
+      int minutes = campusDistance(classCampus, campus);
+      if (minutes <= 0) continue;
+      var otherStart = (LocalTime) other[0];
+      var otherEnd = (LocalTime) other[1];
+      long gap;
+      if (!otherEnd.isAfter(begin)) {
+        gap = java.time.Duration.between(otherEnd, begin).toMinutes();
+      } else if (!finish.isAfter(otherStart)) {
+        gap = java.time.Duration.between(finish, otherStart).toMinutes();
+      } else {
+        continue;
+      }
+      if (gap < minutes) return "跨校区通勤不足（需 " + minutes + " 分钟）";
+    }
+    return null;
+  }
+
+  /** 教师跨校区通勤：同一天两节课之间的空档必须不小于两校区距离。 */
+  private void assertTeacherCommute(
+      UUID classId,
+      UUID teacherId,
+      LocalDate date,
+      LocalTime startsAt,
+      LocalTime endsAt,
+      UUID self) {
+    if (teacherId == null) return;
+    var classRow = sql.fetchOne("select campus_id from teaching.class where id=?", classId);
+    var campusId = classRow == null ? null : classRow.get("campus_id", UUID.class);
+    if (campusId == null) return;
+    for (var row :
+        sql.fetch(
+            "select l.starts_at,l.ends_at,c.campus_id from teaching.lesson l"
+                + " join teaching.class c on c.id=l.class_id"
+                + " where l.teacher_id=? and l.lesson_date=? and l.id<>?",
+            teacherId,
+            date,
+            self)) {
+      var otherCampus = row.get("campus_id", UUID.class);
+      if (otherCampus == null || otherCampus.equals(campusId)) continue;
+      int minutes = campusDistance(campusId, otherCampus);
+      if (minutes <= 0) continue;
+      var otherStart = row.get("starts_at", LocalTime.class);
+      var otherEnd = row.get("ends_at", LocalTime.class);
+      long gap;
+      if (!otherEnd.isAfter(startsAt)) {
+        gap = java.time.Duration.between(otherEnd, startsAt).toMinutes();
+      } else if (!endsAt.isAfter(otherStart)) {
+        gap = java.time.Duration.between(endsAt, otherStart).toMinutes();
+      } else {
+        continue;
+      }
+      if (gap < minutes) throw new TeachingConflict("TEACHER_DISTANCE_CLASH");
+    }
+  }
+
+  private int campusDistance(UUID from, UUID to) {
+    var row =
+        sql.fetchOne(
+            "select minutes from organization.campus_distance"
+                + " where (from_campus_id=? and to_campus_id=?)"
+                + " or (from_campus_id=? and to_campus_id=?)",
+            from,
+            to,
+            to,
+            from);
+    return row == null ? 0 : row.get("minutes", Integer.class);
+  }
+
   private static String slotConflictLabel(String code) {
     return switch (code) {
       case "TEACHER_CLASH" -> "教师已有课";
       case "ROOM_CLASH" -> "教室已被占用";
       case "TEACHER_MIN_GAP" -> "与该教师上一节课间隔不足";
       case "TEACHER_UNAVAILABLE" -> "教师该时段不可用";
+      case "TEACHER_DISTANCE_CLASH" -> "与上一节课跨校区的通勤时间不足";
       case "ROOM_UNAVAILABLE" -> "教室该时段不可用";
       default -> "时段冲突";
     };
@@ -2020,6 +2095,53 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
                   date)
               != null)
             out.add(new LessonConflict("SCHOOL_CLOSED", "该日期学校已停课", null, null, null, null));
+          if (teacherId != null) {
+            var campusRow =
+                sql.fetchOne("select campus_id from teaching.class where id=?", classId);
+            var campusId = campusRow == null ? null : campusRow.get("campus_id", UUID.class);
+            if (campusId != null) {
+              for (var other :
+                  sql.fetch(
+                      "select l.id aid,c.name aname,l.lesson_date adate,l.starts_at astart"
+                          + ",l.ends_at aend,c.campus_id acampus from teaching.lesson l"
+                          + " join teaching.class c on c.id=l.class_id"
+                          + " where l.teacher_id=? and l.lesson_date=? and l.id<>?"
+                          + " order by l.starts_at",
+                      teacherId,
+                      date,
+                      lessonId)) {
+                var otherCampus = other.get("acampus", UUID.class);
+                if (otherCampus == null || otherCampus.equals(campusId)) continue;
+                int minutes = campusDistance(campusId, otherCampus);
+                if (minutes <= 0) continue;
+                var otherStart = other.get("astart", LocalTime.class);
+                var otherEnd = other.get("aend", LocalTime.class);
+                long gap;
+                if (!otherEnd.isAfter(startsAt)) {
+                  gap = java.time.Duration.between(otherEnd, startsAt).toMinutes();
+                } else if (!endsAt.isAfter(otherStart)) {
+                  gap = java.time.Duration.between(endsAt, otherStart).toMinutes();
+                } else {
+                  continue;
+                }
+                if (gap < minutes)
+                  out.add(
+                      new LessonConflict(
+                          "TEACHER_DISTANCE_CLASH",
+                          "与另一校区课次（"
+                              + other.get("aname", String.class)
+                              + " "
+                              + otherStart
+                              + "）的空档不足通勤 "
+                              + minutes
+                              + " 分钟",
+                          other.get("aid", UUID.class),
+                          other.get("aname", String.class),
+                          other.get("adate", LocalDate.class).toString(),
+                          otherStart.toString()));
+              }
+            }
+          }
           if (teacherId != null
               && sql.fetchOne(
                       "select 1 from teaching.resource_block where teacher_id=? and block_date=?"
@@ -2658,6 +2780,31 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
                   end,
                   lessonId,
                   classId);
+          var classCampusRow =
+              sql.fetchOne("select campus_id from teaching.class where id=?", classId);
+          var classCampus =
+              classCampusRow == null ? null : classCampusRow.get("campus_id", UUID.class);
+          var teacherCampus = new HashMap<LocalDate, List<Object[]>>();
+          if (teacherId != null) {
+            for (var row :
+                sql.fetch(
+                    "select l.lesson_date,l.starts_at,l.ends_at,c.campus_id from teaching.lesson l"
+                        + " join teaching.class c on c.id=l.class_id"
+                        + " where l.teacher_id=? and l.id<>? and l.lesson_date between ? and ?",
+                    teacherId,
+                    lessonId,
+                    start,
+                    end)) {
+              teacherCampus
+                  .computeIfAbsent(row.get("lesson_date", LocalDate.class), k -> new ArrayList<>())
+                  .add(
+                      new Object[] {
+                        row.get("starts_at", LocalTime.class),
+                        row.get("ends_at", LocalTime.class),
+                        row.get("campus_id", UUID.class)
+                      });
+            }
+          }
           var today = LocalDate.now();
           var days = new ArrayList<MoveScheme.Day>();
           for (var date = start; !date.isAfter(end); date = date.plusDays(1)) {
@@ -2689,6 +2836,14 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
               } else if (overlaps(roomBusy.get(date), begin, targetFinish, 0)) {
                 status = "ROOM_CLASH";
                 reason = "该教室同一时段已被占用";
+              }
+              if ("FREE".equals(status)) {
+                var commute =
+                    commuteClash(classCampus, teacherCampus.get(date), begin, targetFinish);
+                if (commute != null) {
+                  status = "TEACHER_CLASH";
+                  reason = commute;
+                }
               }
               cells.add(
                   new MoveScheme.Cell(
@@ -3533,6 +3688,7 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
                         endsAt.plusMinutes(minGap)));
         if (gapClash) throw new TeachingConflict("TEACHER_MIN_GAP");
       }
+      assertTeacherCommute(classId, teacherId, date, startsAt, endsAt, self);
       if (blockTeacher
           && sql.fetchExists(
               sql.selectOne()

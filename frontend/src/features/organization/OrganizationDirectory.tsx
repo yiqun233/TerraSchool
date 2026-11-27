@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Button, Table } from "antd";
+import { Button, InputNumber, Modal, Table } from "antd";
 import type { components } from "../../shared/generated/api";
-import { api } from "../../shared/http";
+import { api, csrf } from "../../shared/http";
 import {
   LoadingBlock,
   Page,
@@ -27,13 +27,130 @@ const KIND_LABEL: Record<string, string> = {
 };
 
 /**
+ * 校区通勤分钟数维护：覆盖式保存到同校其他校区，0 表示未配置。
+ * 排课时教师同一天跨校区的两节课空档小于该分钟数会被判为冲突。
+ */
+function CampusDistanceEditor({
+  campus,
+  onSaved,
+}: {
+  campus: Unit;
+  onSaved: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [rows, setRows] = useState<components["schemas"]["CampusDistance"][]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const detail = useQuery({
+    queryKey: ["campus-distances", campus.id],
+    enabled: open,
+    queryFn: async () => {
+      const { data, response } = await api.GET(
+        "/api/organization/campuses/{campusId}/distances",
+        { params: { path: { campusId: campus.id! } } },
+      );
+      if (!response.ok || !data) throw new Error("读取通勤距离失败");
+      return data;
+    },
+  });
+  useEffect(() => {
+    if (detail.data)
+      setRows(detail.data.map((row) => ({ ...row, minutes: row.minutes ?? 0 })));
+  }, [detail.data]);
+  async function save() {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const token = await csrf();
+      const { response } = await api.POST(
+        "/api/organization/campuses/{campusId}/distances",
+        {
+          params: { path: { campusId: campus.id! } },
+          headers: { [token.headerName!]: token.token! },
+          body: {
+            requestId: crypto.randomUUID(),
+            items: rows.map((row) => ({
+              campusId: row.campusId!,
+              minutes: row.minutes ?? 0,
+            })),
+          },
+        },
+      );
+      if (!response.ok) {
+        setError(response.status === 403 ? "当前权限不足。" : "保存失败，请稍后重试。");
+        return;
+      }
+      setOpen(false);
+      onSaved();
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <>
+      <Button size="small" onClick={() => setOpen(true)}>
+        通勤
+      </Button>
+      <Modal
+        open={open}
+        title={`${campus.name} · 到其他校区的通勤分钟`}
+        onCancel={() => setOpen(false)}
+        onOk={() => void save()}
+        okText="保存"
+        confirmLoading={busy}
+        destroyOnHidden
+      >
+        <p style={{ color: "var(--ts-ink-4)", fontSize: 12 }}>
+          填 0 表示未配置。教师同一天在两个校区上课时，两节课的空档小于该分钟数会被判为冲突。
+        </p>
+        {error ? <p style={{ color: "#cf1322" }}>{error}</p> : null}
+        {detail.isLoading ? (
+          <LoadingBlock>正在读取…</LoadingBlock>
+        ) : (
+          <Table
+            rowKey="campusId"
+            dataSource={rows}
+            pagination={false}
+            size="small"
+            columns={[
+              { title: "校区", dataIndex: "campusName" },
+              {
+                title: "分钟",
+                dataIndex: "minutes",
+                width: 120,
+                render: (minutes: number | undefined, row) => (
+                  <InputNumber
+                    min={0}
+                    max={600}
+                    value={minutes ?? 0}
+                    onChange={(value) =>
+                      setRows((current) =>
+                        current.map((item) =>
+                          item.campusId === row.campusId
+                            ? { ...item, minutes: value ?? 0 }
+                            : item,
+                        ),
+                      )
+                    }
+                  />
+                ),
+              },
+            ]}
+          />
+        )}
+      </Modal>
+    </>
+  );
+}
+
+/**
  * 组织目录：学校是根，校区与部门直属学校。
  *
  * 零学校时不再显示空表，而是给出“先建一所学校”的三步引导；
  * 引导是否出现由可读学校为空这一事实决定，不额外存“已引导”标记。
  */
-export function OrganizationDirectory() {
-  const { session, permissions, permissionsLoading, onUnauthorized, reload } =
+export function OrganizationDirectory() {  const { session, permissions, permissionsLoading, onUnauthorized, reload } =
     useSession();
   const [page, setPage] = useState(0);
   // 引导可以跳过，但跳过只在本次访问有效：不落库、不记住，刷新后仍按事实判定。
@@ -251,11 +368,19 @@ export function OrganizationDirectory() {
                       onSaved={() => void units.refetch()}
                     />
                   ) : (
-                    <OrganizationEditor
-                      selected={unit}
-                      identityKey={session.accountId}
-                      onSaved={() => void units.refetch()}
-                    />
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      <OrganizationEditor
+                        selected={unit}
+                        identityKey={session.accountId}
+                        onSaved={() => void units.refetch()}
+                      />
+                      {unit.kind === "CAMPUS" && canManage ? (
+                        <CampusDistanceEditor
+                          campus={unit}
+                          onSaved={() => void units.refetch()}
+                        />
+                      ) : null}
+                    </div>
                   ),
               },
             ]}

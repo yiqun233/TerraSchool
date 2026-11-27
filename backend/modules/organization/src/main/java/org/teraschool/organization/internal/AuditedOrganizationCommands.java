@@ -76,6 +76,14 @@ public class AuditedOrganizationCommands
         FailureAudit.Action.PERSONNEL_EXTERNAL_UPDATE, id, () -> external.update(id, input));
   }
 
+  public java.util.List<CampusDistance> saveCampusDistances(
+      UUID campusId, SaveCampusDistances command) {
+    return invoke(
+        FailureAudit.Action.CAMPUS_DISTANCE_UPDATE,
+        campusId,
+        () -> target.saveCampusDistances(campusId, command));
+  }
+
   public java.util.List<AttachmentView> listAttachments(UUID employee) {
     return attachments.list(employee);
   }

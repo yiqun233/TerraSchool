@@ -3,6 +3,8 @@ package org.teraschool.organization.internal;
 import static org.teraschool.organization.internal.generated.tables.Unit.UNIT;
 
 import java.math.BigDecimal;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
@@ -259,6 +261,87 @@ public class OrganizationMaintenance {
   private void audit(
       Actor actor, String action, UUID resource, UUID school, String before, String after) {
     audit.append(actor.tenantId(), actor.accountId(), action, resource, school, before, after);
+  }
+
+  /** 覆盖式保存某校区到同校其他校区的通勤分钟数；行按 least/greatest 归一，双向对称。 */
+  public List<CampusDistance> saveCampusDistances(UUID campusId, SaveCampusDistances command) {
+    var actor = actors.requireOrganizationMaintainer();
+    if (campusId == null || command == null || command.requestId() == null)
+      throw new IllegalArgumentException("需要校区与请求身份");
+    return tx.execute(
+        actor.tenantId(),
+        () -> {
+          schoolGuard.lock(actor.tenantId());
+          var current = actors.requireOrganizationMaintainerInTransaction();
+          var campus =
+              sql.fetchOne(
+                  "select id,school_id from organization.unit where id=? and kind='CAMPUS'",
+                  campusId);
+          if (campus == null) throw new IllegalArgumentException("校区不存在");
+          var schoolId = campus.get("school_id", UUID.class);
+          requireSchool(current, schoolId);
+          schoolGuard.requireActive(schoolId);
+          var seen = new HashSet<UUID>();
+          for (var item : command.items()) {
+            if (item == null || item.campusId() == null || item.campusId().equals(campusId))
+              throw new IllegalArgumentException("目标校区无效");
+            if (!seen.add(item.campusId())) throw new IllegalArgumentException("目标校区重复");
+            if (sql.fetchOne(
+                    "select id from organization.unit"
+                        + " where id=? and school_id=? and kind='CAMPUS'",
+                    item.campusId(),
+                    schoolId)
+                == null) throw new IllegalArgumentException("目标校区不属于该学校");
+            var minutes = item.minutes();
+            if (minutes == null) throw new IllegalArgumentException("需要分钟数");
+            if (minutes < 0 || minutes > 600) throw new IllegalArgumentException("通勤分钟数须在 0–600");
+          }
+          sql.execute(
+              "delete from organization.campus_distance where from_campus_id=? or to_campus_id=?",
+              campusId,
+              campusId);
+          for (var item : command.items()) {
+            if (item.minutes() == 0) continue;
+            sql.execute(
+                "insert into organization.campus_distance"
+                    + "(tenant_id,from_campus_id,to_campus_id,minutes)"
+                    + " values (?,least(?,?),greatest(?,?),?)",
+                actor.tenantId(),
+                campusId,
+                item.campusId(),
+                campusId,
+                item.campusId(),
+                item.minutes());
+          }
+          audit(
+              actor,
+              "CAMPUS_DISTANCE_UPDATE",
+              campusId,
+              schoolId,
+              null,
+              "items=" + command.items().size());
+          return distanceRows(campusId, schoolId);
+        });
+  }
+
+  List<CampusDistance> distanceRows(UUID campusId, UUID schoolId) {
+    return sql.fetch(
+            "select u.id as campus_id,u.name as campus_name,"
+                + " coalesce((select d.minutes from organization.campus_distance d"
+                + " where (d.from_campus_id=? and d.to_campus_id=u.id)"
+                + " or (d.from_campus_id=u.id and d.to_campus_id=?)),0) as minutes"
+                + " from organization.unit u"
+                + " where u.school_id=? and u.kind='CAMPUS' and u.id<>? order by u.name",
+            campusId,
+            campusId,
+            schoolId,
+            campusId)
+        .map(
+            row ->
+                new CampusDistance(
+                    row.get("campus_id", UUID.class),
+                    row.get("campus_name", String.class),
+                    row.get("minutes", Integer.class)));
   }
 
   static OrganizationUnit view(UnitRecord row) {

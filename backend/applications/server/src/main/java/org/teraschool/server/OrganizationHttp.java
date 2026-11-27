@@ -85,6 +85,21 @@ class OrganizationHttp {
     return queries.list(page, size);
   }
 
+  /** 某校区到同校其他校区的通勤分钟数；未配置返回 0。 */
+  @GetMapping("/api/organization/campuses/{campusId}/distances")
+  java.util.List<CampusDistance> campusDistances(@PathVariable java.util.UUID campusId) {
+    return queries.campusDistances(campusId);
+  }
+
+  /** 覆盖式保存校区通勤分钟数；分钟 0 删除该条。 */
+  @PostMapping(
+      value = "/api/organization/campuses/{campusId}/distances",
+      consumes = "application/json")
+  java.util.List<CampusDistance> saveCampusDistances(
+      @PathVariable java.util.UUID campusId, @RequestBody SaveCampusDistances command) {
+    return commands.saveCampusDistances(campusId, command);
+  }
+
   @GetMapping("/api/organization/schools/{schoolId}/dictionaries/{dictionaryCode}/items")
   java.util.List<DataDictionaries.Item> dictionaryItems(
       @PathVariable java.util.UUID schoolId,

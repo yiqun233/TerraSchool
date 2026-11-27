@@ -13,6 +13,9 @@ public interface OrganizationQueries {
 
   java.util.List<EmployeeAssignmentOption> studentAssignmentOptions(java.util.UUID schoolId);
 
+  /** 某校区到同校其他校区的通勤分钟数；未配置的校区返回 0。 */
+  java.util.List<CampusDistance> campusDistances(java.util.UUID campusId);
+
   boolean isActiveStudentAssignee(java.util.UUID schoolId, java.util.UUID accountId);
 
   /**
