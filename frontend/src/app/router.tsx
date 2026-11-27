@@ -66,11 +66,17 @@ const TimetablePage = lazy(async () => {
   return { default: withUnauthorized(TimetablePage) };
 });
 
+const StudentProgressPage = lazy(async () => {
+  const { StudentProgressPage } = await import(
+    "../features/teaching/StudentProgressPage"
+  );
+  return { default: withUnauthorized(StudentProgressPage) };
+});
+
 const ConflictsPage = lazy(async () => {
   const { ConflictsPage } = await import("../features/teaching/ConflictsPage");
   return { default: withUnauthorized(ConflictsPage) };
 });
-
 const RevenuePage = lazy(async () => {
   const { RevenuePage } = await import("../features/teaching/RevenuePage");
   return { default: withUnauthorized(RevenuePage) };
@@ -258,6 +264,7 @@ export const router = createBrowserRouter([
       { path: "enrollment", element: <EnrollmentPage /> },
       { path: "teaching", element: <TeachingPage /> },
       { path: "timetable", element: <TimetablePage /> },
+      { path: "progress", element: <StudentProgressPage /> },
       { path: "conflicts", element: <ConflictsPage /> },
       { path: "revenue", element: <RevenuePage /> },
       { path: "performance", element: <PerformancePage /> },

@@ -420,6 +420,14 @@ class TeachingHttp {
     return queries.revenue(schoolId, from, to);
   }
 
+  /** 学员进度：报名 × 课程的课时消耗与课节进度。 */
+  @GetMapping("/api/teaching/reports/student-progress")
+  List<StudentProgressView> studentProgress(
+      @RequestParam UUID schoolId,
+      @RequestParam(required = false) String keyword) {
+    return queries.studentProgress(schoolId, keyword);
+  }
+
   /** 收入下钻第二层。 */
   @GetMapping("/api/teaching/reports/revenue/details")
   List<RevenueDetail> revenueDetails(

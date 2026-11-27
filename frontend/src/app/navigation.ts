@@ -98,6 +98,14 @@ export const TENANT_NAV: NavItem[] = [
     visible: (permissions) => granted(permissions, "TEACHING_READ"),
   },
   {
+    path: "/progress",
+    label: "学员进度",
+    group: "教务",
+    enabled: true,
+    title: "学员进度",
+    visible: (permissions) => granted(permissions, "TEACHING_READ"),
+  },
+  {
     path: "/conflicts",
     label: "冲突中心",
     group: "教务",

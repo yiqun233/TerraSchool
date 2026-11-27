@@ -194,6 +194,9 @@ public interface TeachingQueries {
   /** 学校下的校区，用于班级归属与报名校区选择。 */
   List<CampusBrief> campuses(UUID schoolId);
 
+  /** 学员进度：按报名 × 课程列出已消费课时、剩余课时与课节进度。 */
+  List<StudentProgressView> studentProgress(UUID schoolId, String keyword);
+
   /** 当前在班报名，供考勤登记选择。 */
   List<ClassMemberView> members(UUID classId);
 

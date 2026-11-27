@@ -2205,6 +2205,84 @@ public class TeachingService implements TeachingQueries, TeachingCommands, Consu
   }
 
   @Override
+  public List<StudentProgressView> studentProgress(UUID schoolId, String keyword) {
+    var scope = actors.requireResourceScope("TEACHING");
+    if (schoolId == null) throw new IllegalArgumentException("需要学校");
+    var term = keyword == null ? "" : keyword.strip();
+    var filter = term.isEmpty() ? "" : " and (s.name ilike ? or s.student_no ilike ?)";
+    var base =
+        "select s.id student_id,s.name student_name,s.student_no,"
+            + " e.id enrollment_id,e.product_name,"
+            + " ec.curriculum_id,cur.name curriculum_name,ec.hours total_hours,"
+            + " coalesce(sum(cs.hours),0) consumed_hours,"
+            + " (select count(*) from teaching.attendance a"
+            + "   where a.enrollment_id=e.id and a.status='PRESENT'"
+            + "     and a.lesson_id in (select l.id from teaching.lesson l"
+            + "       join teaching.enrollment_class x on x.class_id=l.class_id"
+            + "       where x.enrollment_id=e.id and x.active"
+            + "         and l.curriculum_id=ec.curriculum_id)) attended_lessons,"
+            + " (select count(*) from teaching.lesson l"
+            + "   join teaching.enrollment_class x on x.class_id=l.class_id"
+            + "   where x.enrollment_id=e.id and x.active"
+            + "     and l.curriculum_id=ec.curriculum_id"
+            + "     and l.status in ('PUBLISHED','CONFIRMED','CLOSED')) total_lessons,"
+            + " (select min(l.lesson_date) from teaching.lesson l"
+            + "   join teaching.enrollment_class x on x.class_id=l.class_id"
+            + "   where x.enrollment_id=e.id and x.active"
+            + "     and l.curriculum_id=ec.curriculum_id"
+            + "     and l.status='PUBLISHED' and l.lesson_date>=current_date) next_date,"
+            + " (select to_char(l.starts_at,'HH24:MI') from teaching.lesson l"
+            + "   join teaching.enrollment_class x on x.class_id=l.class_id"
+            + "   where x.enrollment_id=e.id and x.active"
+            + "     and l.curriculum_id=ec.curriculum_id"
+            + "     and l.status='PUBLISHED' and l.lesson_date>=current_date"
+            + "   order by l.lesson_date,l.starts_at limit 1) next_starts"
+            + " from enrollment.enrollment e"
+            + " join archive.student s on s.id=e.student_id"
+            + " join enrollment.enrollment_course ec on ec.enrollment_id=e.id"
+            + " left join product.curriculum cur on cur.id=ec.curriculum_id"
+            + " left join teaching.consumption cs"
+            + "   on cs.enrollment_id=e.id and cs.curriculum_id=ec.curriculum_id"
+            + " where e.school_id=? and e.status='ACTIVE'";
+    var tail =
+        " group by s.id,s.name,s.student_no,e.id,e.product_name,ec.curriculum_id,cur.name,ec.hours"
+            + " order by s.name,e.created_at,cur.name limit 200";
+    return tx.execute(
+        scope.tenantId(),
+        () -> {
+          requireReadable(scope, schoolId);
+          var rows =
+              term.isEmpty()
+                  ? sql.fetch(base + tail, schoolId)
+                  : sql.fetch(base + filter + tail, schoolId, "%" + term + "%", "%" + term + "%");
+          return rows.stream()
+              .map(
+                  r -> {
+                    var total = r.get("total_hours", BigDecimal.class);
+                    var consumed = r.get("consumed_hours", BigDecimal.class);
+                    var remaining = total.subtract(consumed);
+                    var nextDate = r.get("next_date", LocalDate.class);
+                    return new StudentProgressView(
+                        r.get("student_id", UUID.class),
+                        r.get("student_name", String.class),
+                        r.get("student_no", String.class),
+                        r.get("enrollment_id", UUID.class),
+                        r.get("product_name", String.class),
+                        r.get("curriculum_id", UUID.class),
+                        r.get("curriculum_name", String.class),
+                        hours(total),
+                        hours(consumed),
+                        hours(remaining),
+                        r.get("attended_lessons", Integer.class),
+                        r.get("total_lessons", Integer.class),
+                        nextDate == null ? null : nextDate.toString(),
+                        r.get("next_starts", String.class));
+                  })
+              .toList();
+        });
+  }
+
+  @Override
   public List<RevenueRow> revenue(UUID schoolId, String from, String to) {
     var scope = actors.requireResourceScope("TEACHING");
     if (schoolId == null) throw new IllegalArgumentException("需要学校");
