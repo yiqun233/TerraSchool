@@ -137,6 +137,9 @@ public interface TeachingQueries {
 
   DailyResourceSchedule dailyResourceSchedule(UUID schoolId, String day, int page, int pageSize);
 
+  /** 教师/学员视角的周课表：行按 teacher|student 聚合，列由前端按日期铺。 */
+  List<TimetableGroupRow> timetableRows(UUID schoolId, String from, String to, String view);
+
   /** 学校范围内逐报名的累计消费/退课/剩余课时，需同时具备报名、教务和资金读取权限。 */
   StudentConsumptionPage studentConsumption(UUID schoolId, int page, int size);
 
@@ -150,6 +153,43 @@ public interface TeachingQueries {
   TeachingOverviewReport teachingOverviewReport(UUID schoolId, String from, String to);
 
   List<ClassView> classes(UUID schoolId);
+
+  /** 班级开设的课程及各自课时/价格；主课程来自 teaching.class.curriculum_id。 */
+  List<ClassCurriculumView> classCurricula(UUID classId);
+
+  /** 指定时段的可选教师，按班级所属学校与课程过滤，并标注占用原因。 */
+  List<TeacherOption> teacherOptions(
+      UUID classId, String day, String startsAt, String endsAt, UUID curriculumId);
+
+  /** 指定时段的可选教室，默认限定在班级所在校区。 */
+  List<RoomOption> roomOptions(UUID classId, String day, String startsAt, String endsAt);
+
+  /** 学校级时段模板；未配置时返回空列表，课表按实际课次时间兜底。 */
+  List<MinuteSpace> schoolMinuteSpaces(UUID schoolId);
+
+  /** 一节课的冲突明细（班级/教师/教室/学员/停课）。 */
+  List<LessonConflict> lessonConflicts(UUID lessonId);
+
+  /** 拖拽可行性矩阵：一次返回目标日期范围内每天的时段可放性。 */
+  MoveScheme moveScheme(UUID lessonId, MoveSchemeQuery query);
+
+  /** 链式调课方案：最多 5 步、20 条，按步骤数从少到多。 */
+  List<SwapSchemePlan> swapSchemes(UUID lessonId, SwapSchemeQuery query);
+
+  /** 全校冲突中心：日期段内按类型筛选，服务端一次算完。 */
+  List<SchoolConflict> schoolConflicts(UUID schoolId, String from, String to, String type);
+
+  /** 收入下钻第一层：班级 × 课程的消费汇总。 */
+  List<RevenueRow> revenue(UUID schoolId, String from, String to);
+
+  /** 收入下钻第二层：某班某课程的逐课次 × 学员消费明细。 */
+  List<RevenueDetail> revenueDetails(UUID schoolId, UUID classId, String from, String to);
+
+  /** 站内信列表，按时间倒序；unreadOnly 只返回未读。 */
+  List<NotificationView> notifications(UUID schoolId, boolean unreadOnly);
+
+  /** 学校在职教师，供教师模式筛选与改派选择。 */
+  List<TeacherBrief> teachers(UUID schoolId);
 
   /** 当前在班报名，供考勤登记选择。 */
   List<ClassMemberView> members(UUID classId);

@@ -61,6 +61,21 @@ const TeachingPage = lazy(async () => {
   return { default: withUnauthorized(TeachingWorkspace) };
 });
 
+const TimetablePage = lazy(async () => {
+  const { TimetablePage } = await import("../features/teaching/TimetablePage");
+  return { default: withUnauthorized(TimetablePage) };
+});
+
+const ConflictsPage = lazy(async () => {
+  const { ConflictsPage } = await import("../features/teaching/ConflictsPage");
+  return { default: withUnauthorized(ConflictsPage) };
+});
+
+const RevenuePage = lazy(async () => {
+  const { RevenuePage } = await import("../features/teaching/RevenuePage");
+  return { default: withUnauthorized(RevenuePage) };
+});
+
 const ApprovalPage = lazy(async () => {
   const { ApprovalInbox } = await import("../features/approval/ApprovalInbox");
   return { default: withUnauthorized(ApprovalInbox) };
@@ -235,6 +250,9 @@ export const router = createBrowserRouter([
       { path: "products", element: <ProductsPage /> },
       { path: "enrollment", element: <EnrollmentPage /> },
       { path: "teaching", element: <TeachingPage /> },
+      { path: "timetable", element: <TimetablePage /> },
+      { path: "conflicts", element: <ConflictsPage /> },
+      { path: "revenue", element: <RevenuePage /> },
       { path: "approval", element: <ApprovalPage /> },
       { path: "finance", element: <FinancePage /> },
       { path: "migration", element: <MigrationPage /> },

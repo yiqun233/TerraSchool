@@ -77,7 +77,12 @@ class TeachingLookups {
         row.get("teacher_id", UUID.class),
         row.get("room_id", UUID.class),
         makeupSourceId,
-        makeupEnrollmentIds);
+        makeupEnrollmentIds,
+        row.get("actual_teacher_id", UUID.class),
+        row.get("actual_room_id", UUID.class),
+        row.get("actual_teacher_name", String.class),
+        row.get("actual_room_name", String.class),
+        row.get("memo", String.class));
   }
 
   BigDecimal consumedHours(UUID enrollmentId) {

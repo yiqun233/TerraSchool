@@ -74,8 +74,8 @@ public class SchedulingService implements org.teraschool.teaching.api.Scheduling
               }
               sql.execute(
                   "insert into teaching.lesson(tenant_id,class_id,lesson_date,starts_at,ends_at,"
-                      + "teacher_name,room_name,topic,hours,teacher_id,room_id)"
-                      + " values (?,?,?,?,?,?,?,?,?,?,?)",
+                      + "teacher_name,room_name,topic,hours,teacher_id,room_id,curriculum_id)"
+                      + " values (?,?,?,?,?,?,?,?,?,?,?,?)",
                   verified.tenantId(),
                   classId,
                   LocalDate.parse(slot.lessonDate()),
@@ -86,7 +86,8 @@ public class SchedulingService implements org.teraschool.teaching.api.Scheduling
                   plan.topic(),
                   plan.hours(),
                   plan.teacherId(),
-                  plan.roomId());
+                  plan.roomId(),
+                  plan.curriculumId());
               created++;
             }
             audit(verified, classId, plan.schoolId(), created, skipped.size());
@@ -151,8 +152,8 @@ public class SchedulingService implements org.teraschool.teaching.api.Scheduling
                 }
                 sql.execute(
                     "insert into teaching.lesson(tenant_id,class_id,lesson_date,starts_at,ends_at,"
-                        + "teacher_name,room_name,topic,hours,teacher_id,room_id)"
-                        + " values (?,?,?,?,?,?,?,?,?,?,?)",
+                        + "teacher_name,room_name,topic,hours,teacher_id,room_id,curriculum_id)"
+                        + " values (?,?,?,?,?,?,?,?,?,?,?,?)",
                     verified.tenantId(),
                     item.classId(),
                     LocalDate.parse(slot.lessonDate()),
@@ -163,7 +164,8 @@ public class SchedulingService implements org.teraschool.teaching.api.Scheduling
                     plan.topic(),
                     plan.hours(),
                     plan.teacherId(),
-                    plan.roomId());
+                    plan.roomId(),
+                    plan.curriculumId());
                 created++;
               }
               audit(verified, item.classId(), plan.schoolId(), created, skippedDates.size());
@@ -552,6 +554,7 @@ public class SchedulingService implements org.teraschool.teaching.api.Scheduling
 
   private record Plan(
       UUID schoolId,
+      UUID curriculumId,
       UUID teacherId,
       String teacherName,
       UUID roomId,
@@ -586,7 +589,9 @@ public class SchedulingService implements org.teraschool.teaching.api.Scheduling
     var hours = hours(rule.hours());
     var topic = trim(rule.topic(), 100);
 
-    var row = sql.fetchOne("select id,school_id,status from teaching.class where id=?", classId);
+    var row =
+        sql.fetchOne(
+            "select id,school_id,status,curriculum_id from teaching.class where id=?", classId);
     if (row == null) throw new AccessDeniedException("班级不存在或不可访问");
     var schoolId = row.get("school_id", UUID.class);
     if (!actor.schools().contains(schoolId)) throw new AccessDeniedException("无该学校的排课权限");
@@ -644,6 +649,7 @@ public class SchedulingService implements org.teraschool.teaching.api.Scheduling
 
     return new Plan(
         schoolId,
+        row.get("curriculum_id", UUID.class),
         assignment.teacher().id(),
         assignment.teacher().name(),
         assignment.room().id(),

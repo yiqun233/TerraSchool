@@ -275,14 +275,43 @@ class RejectedRequestAudit {
       } catch (IllegalArgumentException invalid) {
         /* 不记录原路径 */
       }
+    } else if (path.equals("/api/teaching/lessons/publish-batch"))
+      action = FailureAudit.Action.LESSON_PUBLISH;
+    else if (path.equals("/api/teaching/lessons/close-batch"))
+      action = FailureAudit.Action.LESSON_CLOSE;
+    else if (path.equals("/api/teaching/lessons/confirm-batch"))
+      action = FailureAudit.Action.ATTENDANCE_CONFIRM;
+    else if (path.matches("/api/teaching/teachers/[^/]+/lessons/reassign")) {
+      action = FailureAudit.Action.LESSON_RESCHEDULE;
+      try {
+        resource = UUID.fromString(path.split("/")[4]);
+      } catch (IllegalArgumentException invalid) {
+        /* 不保存原始路径文本。 */
+      }
+    } else if (path.matches("/api/teaching/notifications/[^/]+/read"))
+      action = FailureAudit.Action.LESSON_RESCHEDULE;
+    else if (path.matches("/api/teaching/classes/[^/]+/lessons/(shift|copy-week)")) {
+      action =
+          path.endsWith("/shift")
+              ? FailureAudit.Action.LESSON_RESCHEDULE
+              : FailureAudit.Action.LESSON_CREATE;
+      try {
+        resource = UUID.fromString(path.split("/")[4]);
+      } catch (IllegalArgumentException invalid) {
+        /* 不保存原始路径文本。 */
+      }
     } else if (path.matches(
-        "/api/teaching/lessons/[^/]+/(publish|reschedule|swap|makeups|attendance|close)")) {
+        "/api/teaching/lessons/[^/]+/(publish|reschedule|swap|makeups|attendance|attendance-draft|memo|close|resources)")) {
       action =
           path.endsWith("/publish")
               ? FailureAudit.Action.LESSON_PUBLISH
-              : path.endsWith("/reschedule") || path.endsWith("/swap") || path.endsWith("/makeups")
+              : path.endsWith("/reschedule")
+                      || path.endsWith("/swap")
+                      || path.endsWith("/makeups")
+                      || path.endsWith("/resources")
+                      || path.endsWith("/memo")
                   ? FailureAudit.Action.LESSON_RESCHEDULE
-                  : path.endsWith("/attendance")
+                  : path.endsWith("/attendance") || path.endsWith("/attendance-draft")
                       ? FailureAudit.Action.ATTENDANCE_CONFIRM
                       : FailureAudit.Action.LESSON_CLOSE;
       String suffix = path.substring(path.lastIndexOf('/'));

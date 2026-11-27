@@ -49,6 +49,7 @@ it("业务菜单按动作显隐，教务与财务在没权限时不再出现", (
     "/products",
     "/enrollment",
     "/teaching",
+    "/timetable",
     "/approval",
     "/employees",
     "/teachers",
@@ -67,6 +68,7 @@ it("业务菜单按动作显隐，教务与财务在没权限时不再出现", (
     false,
   ).map((item) => item.path);
   expect(granted).toContain("/teaching");
+  expect(granted).toContain("/timetable");
   expect(granted).toContain("/finance");
   expect(granted).not.toContain("/students");
 });

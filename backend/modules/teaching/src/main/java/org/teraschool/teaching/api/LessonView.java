@@ -25,4 +25,9 @@ public record LessonView(
     UUID teacherId,
     UUID roomId,
     UUID makeupSourceLessonId,
-    List<UUID> makeupEnrollmentIds) {}
+    List<UUID> makeupEnrollmentIds,
+    UUID actualTeacherId,
+    UUID actualRoomId,
+    String actualTeacherName,
+    String actualRoomName,
+    String memo) {}

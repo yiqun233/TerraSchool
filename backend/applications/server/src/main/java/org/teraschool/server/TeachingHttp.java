@@ -46,6 +46,15 @@ class TeachingHttp {
     return queries.dailyResourceSchedule(schoolId, day, page, pageSize);
   }
 
+  @GetMapping("/api/teaching/reports/timetable")
+  java.util.List<org.teraschool.teaching.api.TimetableGroupRow> timetableRows(
+      @RequestParam UUID schoolId,
+      @RequestParam String from,
+      @RequestParam String to,
+      @RequestParam(defaultValue = "teacher") String view) {
+    return queries.timetableRows(schoolId, from, to, view);
+  }
+
   @GetMapping("/api/teaching/reports/student-consumption")
   TeachingQueries.StudentConsumptionPage studentConsumption(
       @RequestParam UUID schoolId,
@@ -75,6 +84,77 @@ class TeachingHttp {
   @GetMapping("/api/teaching/classes")
   List<ClassView> classes(@RequestParam UUID schoolId) {
     return queries.classes(schoolId);
+  }
+
+  /** 班级开设的课程（多课程班按课程分别记课时/价格）。 */
+  @GetMapping("/api/teaching/classes/{id}/curricula")
+  List<ClassCurriculumView> classCurricula(@PathVariable UUID id) {
+    return queries.classCurricula(id);
+  }
+
+  /** 指定时段的可选教师，已标注占用原因。 */
+  @GetMapping("/api/teaching/classes/{id}/teacher-options")
+  List<TeacherOption> teacherOptions(
+      @PathVariable UUID id,
+      @RequestParam String day,
+      @RequestParam String startsAt,
+      @RequestParam String endsAt,
+      @RequestParam(required = false) UUID curriculumId) {
+    return queries.teacherOptions(id, day, startsAt, endsAt, curriculumId);
+  }
+
+  /** 指定时段的可选教室，默认限定在班级所在校区。 */
+  @GetMapping("/api/teaching/classes/{id}/room-options")
+  List<RoomOption> roomOptions(
+      @PathVariable UUID id,
+      @RequestParam String day,
+      @RequestParam String startsAt,
+      @RequestParam String endsAt) {
+    return queries.roomOptions(id, day, startsAt, endsAt);
+  }
+
+  /** 学校级时段模板，课表按它切行。 */
+  @GetMapping("/api/teaching/schools/{schoolId}/minute-spaces")
+  List<MinuteSpace> minuteSpaces(@PathVariable UUID schoolId) {
+    return queries.schoolMinuteSpaces(schoolId);
+  }
+
+  @PostMapping(value = "/api/teaching/lessons/{id}/resources", consumes = "application/json")
+  LessonResourceView assignLessonResources(
+      @PathVariable UUID id, @RequestBody AssignLessonResources command) {
+    return commands.assignLessonResources(id, command);
+  }
+
+  @GetMapping("/api/teaching/lessons/{id}/conflicts")
+  List<LessonConflict> lessonConflicts(@PathVariable UUID id) {
+    return queries.lessonConflicts(id);
+  }
+
+  @PostMapping(value = "/api/teaching/lessons/{id}/move-scheme", consumes = "application/json")
+  MoveScheme moveScheme(@PathVariable UUID id, @RequestBody MoveSchemeQuery query) {
+    return queries.moveScheme(id, query);
+  }
+
+  @PostMapping(value = "/api/teaching/lessons/{id}/swap-schemes", consumes = "application/json")
+  List<SwapSchemePlan> swapSchemes(@PathVariable UUID id, @RequestBody SwapSchemeQuery query) {
+    return queries.swapSchemes(id, query);
+  }
+
+  @PostMapping(value = "/api/teaching/lessons/{id}/swap-schemes/execute", consumes = "application/json")
+  List<UUID> executeSwapScheme(@PathVariable UUID id, @RequestBody ExecuteSwapScheme command) {
+    return commands.executeSwapScheme(id, command);
+  }
+
+  @PostMapping(value = "/api/teaching/lessons/batch", consumes = "application/json")
+  BatchLessonResult createLessons(@RequestBody BatchLessons command) {
+    return commands.createLessons(command);
+  }
+
+  @DeleteMapping("/api/teaching/lessons/{id}")
+  org.springframework.http.ResponseEntity<Void> deleteLesson(
+      @PathVariable UUID id, @RequestParam long expectedVersion) {
+    commands.deleteLesson(id, expectedVersion);
+    return org.springframework.http.ResponseEntity.noContent().build();
   }
 
   @PostMapping(value = "/api/teaching/schedule/batch/preview", consumes = "application/json")
@@ -180,6 +260,31 @@ class TeachingHttp {
     return commands.publishLesson(id, command);
   }
 
+  @PostMapping(value = "/api/teaching/lessons/publish-batch", consumes = "application/json")
+  BatchLessonOutcome publishBatch(@RequestBody BatchLessonIds command) {
+    return commands.publishLessons(command);
+  }
+
+  @PostMapping(value = "/api/teaching/lessons/close-batch", consumes = "application/json")
+  BatchLessonOutcome closeBatch(@RequestBody BatchLessonIds command) {
+    return commands.closeLessons(command);
+  }
+
+  @PostMapping(value = "/api/teaching/lessons/confirm-batch", consumes = "application/json")
+  BatchLessonOutcome confirmBatch(@RequestBody BatchLessonIds command) {
+    return commands.confirmLessons(command);
+  }
+
+  @PostMapping(value = "/api/teaching/classes/{id}/lessons/shift", consumes = "application/json")
+  BatchLessonOutcome shiftLessons(@PathVariable UUID id, @RequestBody ShiftLessons command) {
+    return commands.shiftLessons(id, command);
+  }
+
+  @PostMapping(value = "/api/teaching/classes/{id}/lessons/copy-week", consumes = "application/json")
+  BatchLessonResult copyWeek(@PathVariable UUID id, @RequestBody CopyWeek command) {
+    return commands.copyWeek(id, command);
+  }
+
   @PostMapping(value = "/api/teaching/lessons/{id}/reschedule", consumes = "application/json")
   LessonView reschedule(@PathVariable UUID id, @RequestBody RescheduleLesson command) {
     return commands.rescheduleLesson(id, command);
@@ -196,6 +301,16 @@ class TeachingHttp {
   }
 
   /** 授课确认与考勤登记；必须覆盖全部在班报名。 */
+  @PostMapping(value = "/api/teaching/lessons/{id}/attendance-draft", consumes = "application/json")
+  LessonView saveAttendance(@PathVariable UUID id, @RequestBody SaveAttendance command) {
+    return commands.saveAttendance(id, command);
+  }
+
+  @PostMapping(value = "/api/teaching/lessons/{id}/memo", consumes = "application/json")
+  LessonView updateLessonNote(@PathVariable UUID id, @RequestBody UpdateLessonNote command) {
+    return commands.updateLessonNote(id, command);
+  }
+
   @PostMapping(value = "/api/teaching/lessons/{id}/attendance", consumes = "application/json")
   LessonView confirmAttendance(@PathVariable UUID id, @RequestBody ConfirmAttendance command) {
     return commands.confirmAttendance(id, command);
@@ -268,5 +383,60 @@ class TeachingHttp {
   @PostMapping(value = "/api/teaching/school-closures/{id}/cancel", consumes = "application/json")
   SchoolClosureView cancelSchoolClosure(@PathVariable UUID id, @RequestBody LessonVersion command) {
     return scheduling.cancelSchoolClosure(id, command.expectedVersion());
+  }
+
+  /** 教师下拉：教师模式筛选与改派用。 */
+  @GetMapping("/api/teaching/schools/{schoolId}/teachers")
+  List<TeacherBrief> teachers(@PathVariable UUID schoolId) {
+    return queries.teachers(schoolId);
+  }
+
+  /** 全校冲突中心：日期段内按类型筛选。 */
+  @GetMapping("/api/teaching/conflicts")
+  List<SchoolConflict> schoolConflicts(
+      @RequestParam UUID schoolId,
+      @RequestParam String from,
+      @RequestParam String to,
+      @RequestParam(required = false) String type) {
+    return queries.schoolConflicts(schoolId, from, to, type);
+  }
+
+  /** 收入下钻第一层。 */
+  @GetMapping("/api/teaching/reports/revenue")
+  List<RevenueRow> revenue(
+      @RequestParam UUID schoolId, @RequestParam String from, @RequestParam String to) {
+    return queries.revenue(schoolId, from, to);
+  }
+
+  /** 收入下钻第二层。 */
+  @GetMapping("/api/teaching/reports/revenue/details")
+  List<RevenueDetail> revenueDetails(
+      @RequestParam UUID schoolId,
+      @RequestParam UUID classId,
+      @RequestParam String from,
+      @RequestParam String to) {
+    return queries.revenueDetails(schoolId, classId, from, to);
+  }
+
+  /** 教师模式批量改派。 */
+  @PostMapping(
+      value = "/api/teaching/teachers/{teacherId}/lessons/reassign",
+      consumes = "application/json")
+  BatchLessonOutcome reassignTeacher(
+      @PathVariable UUID teacherId, @RequestBody ReassignTeacher command) {
+    return commands.reassignTeacher(teacherId, command);
+  }
+
+  /** 站内信列表。 */
+  @GetMapping("/api/teaching/notifications")
+  List<NotificationView> notifications(
+      @RequestParam UUID schoolId, @RequestParam(defaultValue = "false") boolean unreadOnly) {
+    return queries.notifications(schoolId, unreadOnly);
+  }
+
+  /** 标记站内信已读。 */
+  @PostMapping("/api/teaching/notifications/{id}/read")
+  void markNotificationRead(@PathVariable UUID id) {
+    commands.markNotificationRead(id);
   }
 }

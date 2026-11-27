@@ -257,3 +257,219 @@ BEGIN
  INSERT INTO dev.resource_seed_history(seed_id) VALUES('LOCAL-MIGRATION-001');
 END;
 $migration_seed$;
+
+-- 教务排课演示数据（M1/M2）：一校两校区、四门课程、多课程冲刺班与单课班、教师/教室、
+-- 学员/报名/入班，以及本周与下周的课次（含缺教师、缺教室各一条，便于演示资源日报）。
+DO $teaching_demo_seed$
+DECLARE
+  tenant_id_value uuid;
+  school_id_value uuid;
+  campus_id_value uuid;
+  math_id uuid; english_id uuid; physics_id uuid; chemistry_id uuid;
+  product_sprint uuid; product_math uuid; product_english uuid; product_physics uuid;
+  pv_sprint uuid; pv_math uuid; pv_english uuid; pv_physics uuid;
+  class_sprint uuid; class_math uuid; class_english uuid; class_physics uuid;
+  teacher_zhang uuid; teacher_li uuid; teacher_wang uuid; teacher_zhao uuid;
+  room_a uuid; room_b uuid;
+  owner_account_id uuid;
+  sprint_enrollment_a uuid; sprint_enrollment_b uuid; math_enrollment uuid; english_enrollment uuid;
+  monday date;
+BEGIN
+  PERFORM pg_advisory_xact_lock(hashtextextended('teraschool-local-teaching-demo-v1',0));
+  IF EXISTS(SELECT 1 FROM dev.resource_seed_history WHERE seed_id='LOCAL-TEACHING-DEMO-001') THEN RETURN; END IF;
+
+  SELECT a.tenant_id, a.id INTO STRICT tenant_id_value, owner_account_id
+    FROM identity.account a JOIN identity.tenant t ON t.id=a.tenant_id
+    WHERE a.login='local-admin' AND t.name='本地演示机构' AND a.active AND t.active;
+
+  SELECT id INTO STRICT school_id_value
+    FROM organization.unit
+    WHERE tenant_id=tenant_id_value AND kind='SCHOOL' AND name='演示学校（总部）';
+  SELECT id INTO STRICT campus_id_value
+    FROM organization.unit
+    WHERE tenant_id=tenant_id_value AND school_id=school_id_value AND kind='CAMPUS' AND name='总部校区';
+
+  -- 学校级时段模板：上午、下午、晚间三段。
+  INSERT INTO teaching.school_minute_space(tenant_id, school_id, begin_minute, end_minute) VALUES
+    (tenant_id_value, school_id_value, 540, 720),
+    (tenant_id_value, school_id_value, 840, 1050),
+    (tenant_id_value, school_id_value, 1080, 1260);
+
+  INSERT INTO product.curriculum(tenant_id, school_id, name, category, subject)
+    VALUES (tenant_id_value, school_id_value, '数学', '学科', '数学') ON CONFLICT DO NOTHING;
+  INSERT INTO product.curriculum(tenant_id, school_id, name, category, subject)
+    VALUES (tenant_id_value, school_id_value, '英语', '学科', '英语') ON CONFLICT DO NOTHING;
+  INSERT INTO product.curriculum(tenant_id, school_id, name, category, subject)
+    VALUES (tenant_id_value, school_id_value, '物理', '学科', '物理') ON CONFLICT DO NOTHING;
+  INSERT INTO product.curriculum(tenant_id, school_id, name, category, subject)
+    VALUES (tenant_id_value, school_id_value, '化学', '学科', '化学') ON CONFLICT DO NOTHING;
+  SELECT id INTO STRICT math_id FROM product.curriculum WHERE tenant_id=tenant_id_value AND school_id=school_id_value AND name='数学';
+  SELECT id INTO STRICT english_id FROM product.curriculum WHERE tenant_id=tenant_id_value AND school_id=school_id_value AND name='英语';
+  SELECT id INTO STRICT physics_id FROM product.curriculum WHERE tenant_id=tenant_id_value AND school_id=school_id_value AND name='物理';
+  SELECT id INTO STRICT chemistry_id FROM product.curriculum WHERE tenant_id=tenant_id_value AND school_id=school_id_value AND name='化学';
+
+  -- 产品：冲刺班以数学为主课程挂产品，实际四门课程由 class_curriculum 表达。
+  INSERT INTO product.product(id, tenant_id, school_id, curriculum_id, name, settlement_mode)
+    VALUES (uuidv7(), tenant_id_value, school_id_value, math_id, '暑期冲刺班', 1) RETURNING id INTO product_sprint;
+  INSERT INTO product.product(id, tenant_id, school_id, curriculum_id, name, settlement_mode)
+    VALUES (uuidv7(), tenant_id_value, school_id_value, math_id, '高一数学提高班', 1) RETURNING id INTO product_math;
+  INSERT INTO product.product(id, tenant_id, school_id, curriculum_id, name, settlement_mode)
+    VALUES (uuidv7(), tenant_id_value, school_id_value, english_id, '初二英语同步班', 1) RETURNING id INTO product_english;
+  INSERT INTO product.product(id, tenant_id, school_id, curriculum_id, name, settlement_mode)
+    VALUES (uuidv7(), tenant_id_value, school_id_value, physics_id, '初三物理冲刺班', 1) RETURNING id INTO product_physics;
+
+  INSERT INTO product.price_version(id, tenant_id, product_id, version_no, status, price, hours, settlement_mode, effective_from, published_at)
+    VALUES (uuidv7(), tenant_id_value, product_sprint, 1, 'PUBLISHED', 9600, 120, 1, CURRENT_DATE - 30, CURRENT_TIMESTAMP) RETURNING id INTO pv_sprint;
+  INSERT INTO product.price_version(id, tenant_id, product_id, version_no, status, price, hours, settlement_mode, effective_from, published_at)
+    VALUES (uuidv7(), tenant_id_value, product_math, 1, 'PUBLISHED', 4800, 60, 1, CURRENT_DATE - 30, CURRENT_TIMESTAMP) RETURNING id INTO pv_math;
+  INSERT INTO product.price_version(id, tenant_id, product_id, version_no, status, price, hours, settlement_mode, effective_from, published_at)
+    VALUES (uuidv7(), tenant_id_value, product_english, 1, 'PUBLISHED', 3600, 48, 1, CURRENT_DATE - 30, CURRENT_TIMESTAMP) RETURNING id INTO pv_english;
+  INSERT INTO product.price_version(id, tenant_id, product_id, version_no, status, price, hours, settlement_mode, effective_from, published_at)
+    VALUES (uuidv7(), tenant_id_value, product_physics, 1, 'PUBLISHED', 3600, 48, 1, CURRENT_DATE - 30, CURRENT_TIMESTAMP) RETURNING id INTO pv_physics;
+
+  -- 教师与教室：都在总部校区。
+  INSERT INTO organization.teacher(id, tenant_id, school_id, name) VALUES
+    (uuidv7(), tenant_id_value, school_id_value, '张老师') RETURNING id INTO teacher_zhang;
+  INSERT INTO organization.teacher(id, tenant_id, school_id, name) VALUES
+    (uuidv7(), tenant_id_value, school_id_value, '李老师') RETURNING id INTO teacher_li;
+  INSERT INTO organization.teacher(id, tenant_id, school_id, name) VALUES
+    (uuidv7(), tenant_id_value, school_id_value, '王老师') RETURNING id INTO teacher_wang;
+  INSERT INTO organization.teacher(id, tenant_id, school_id, name) VALUES
+    (uuidv7(), tenant_id_value, school_id_value, '赵老师') RETURNING id INTO teacher_zhao;
+  INSERT INTO organization.teacher_curriculum(tenant_id, teacher_id, curriculum_id) VALUES
+    (tenant_id_value, teacher_zhang, math_id),
+    (tenant_id_value, teacher_li, english_id),
+    (tenant_id_value, teacher_wang, physics_id),
+    (tenant_id_value, teacher_zhao, chemistry_id);
+
+  INSERT INTO organization.room(id, tenant_id, school_id, campus_id, campus_kind, name, capacity) VALUES
+    (uuidv7(), tenant_id_value, school_id_value, campus_id_value, 'CAMPUS', 'A101', 30) RETURNING id INTO room_a;
+  INSERT INTO organization.room(id, tenant_id, school_id, campus_id, campus_kind, name, capacity) VALUES
+    (uuidv7(), tenant_id_value, school_id_value, campus_id_value, 'CAMPUS', 'A102', 20) RETURNING id INTO room_b;
+
+  -- 班级：冲刺班绑定四门课程，其余为单课班；都有校区与起止日期。
+  monday := date_trunc('week', CURRENT_DATE)::date;
+  INSERT INTO teaching.class(id, tenant_id, school_id, curriculum_id, name, class_type, group_training, capacity,
+                             campus_id, campus_kind, begins_on, ends_on)
+    VALUES (uuidv7(), tenant_id_value, school_id_value, math_id, '2026 暑期冲刺班', 'NORMAL', true, 20,
+            campus_id_value, 'CAMPUS', monday - 14, monday + 56) RETURNING id INTO class_sprint;
+  INSERT INTO teaching.class(id, tenant_id, school_id, curriculum_id, name, class_type, group_training, capacity,
+                             campus_id, campus_kind, begins_on, ends_on)
+    VALUES (uuidv7(), tenant_id_value, school_id_value, math_id, '高一数学单课班', 'NORMAL', false, 12,
+            campus_id_value, 'CAMPUS', monday - 7, monday + 49) RETURNING id INTO class_math;
+  INSERT INTO teaching.class(id, tenant_id, school_id, curriculum_id, name, class_type, group_training, capacity,
+                             campus_id, campus_kind, begins_on, ends_on)
+    VALUES (uuidv7(), tenant_id_value, school_id_value, english_id, '初二英语同步班', 'NORMAL', false, 16,
+            campus_id_value, 'CAMPUS', monday - 7, monday + 49) RETURNING id INTO class_english;
+  INSERT INTO teaching.class(id, tenant_id, school_id, curriculum_id, name, class_type, group_training, capacity,
+                             campus_id, campus_kind, begins_on, ends_on)
+    VALUES (uuidv7(), tenant_id_value, school_id_value, physics_id, '初三物理冲刺班', 'NORMAL', false, 16,
+            campus_id_value, 'CAMPUS', monday - 7, monday + 49) RETURNING id INTO class_physics;
+
+  INSERT INTO teaching.class_curriculum(tenant_id, class_id, curriculum_id, hours, price) VALUES
+    (tenant_id_value, class_sprint, math_id, 30, 2400),
+    (tenant_id_value, class_sprint, english_id, 30, 2400),
+    (tenant_id_value, class_sprint, physics_id, 30, 2400),
+    (tenant_id_value, class_sprint, chemistry_id, 30, 2400),
+    (tenant_id_value, class_math, math_id, 60, 4800),
+    (tenant_id_value, class_english, english_id, 48, 3600),
+    (tenant_id_value, class_physics, physics_id, 48, 3600);
+
+  -- 学员：总部校区在读。
+  INSERT INTO archive.student(tenant_id, student_no, name, sex, school_id, campus_id, campus_kind, status, owner_id) VALUES
+    (tenant_id_value, 'DEMO-0001', '陈一诺', 'FEMALE', school_id_value, campus_id_value, 'CAMPUS', 'ACTIVE', owner_account_id),
+    (tenant_id_value, 'DEMO-0002', '林浩然', 'MALE', school_id_value, campus_id_value, 'CAMPUS', 'ACTIVE', owner_account_id),
+    (tenant_id_value, 'DEMO-0003', '周子涵', 'FEMALE', school_id_value, campus_id_value, 'CAMPUS', 'ACTIVE', owner_account_id),
+    (tenant_id_value, 'DEMO-0004', '吴思远', 'MALE', school_id_value, campus_id_value, 'CAMPUS', 'ACTIVE', owner_account_id),
+    (tenant_id_value, 'DEMO-0005', '许安琪', 'FEMALE', school_id_value, campus_id_value, 'CAMPUS', 'ACTIVE', owner_account_id),
+    (tenant_id_value, 'DEMO-0006', '郑嘉树', 'MALE', school_id_value, campus_id_value, 'CAMPUS', 'ACTIVE', owner_account_id);
+
+  -- 报名：冲刺班两条（四门课程各 30 课时，合计 120 课时/9600 元），单课班各一条。
+  INSERT INTO enrollment.enrollment(id, tenant_id, school_id, student_id, product_id, price_version_id,
+                                    curriculum_name, product_name, price, hours, settlement_mode, status,
+                                    approved_at, approved_by)
+    SELECT uuidv7(), tenant_id_value, school_id_value, s.id, product_sprint, pv_sprint,
+           '数学', '暑期冲刺班', 9600, 120, 1, 'ACTIVE', CURRENT_TIMESTAMP, owner_account_id
+    FROM archive.student s
+    WHERE s.tenant_id=tenant_id_value AND s.student_no='DEMO-0001'
+    RETURNING id INTO sprint_enrollment_a;
+  INSERT INTO enrollment.enrollment(id, tenant_id, school_id, student_id, product_id, price_version_id,
+                                    curriculum_name, product_name, price, hours, settlement_mode, status,
+                                    approved_at, approved_by)
+    SELECT uuidv7(), tenant_id_value, school_id_value, s.id, product_sprint, pv_sprint,
+           '数学', '暑期冲刺班', 9600, 120, 1, 'ACTIVE', CURRENT_TIMESTAMP, owner_account_id
+    FROM archive.student s
+    WHERE s.tenant_id=tenant_id_value AND s.student_no='DEMO-0002'
+    RETURNING id INTO sprint_enrollment_b;
+  INSERT INTO enrollment.enrollment(id, tenant_id, school_id, student_id, product_id, price_version_id,
+                                    curriculum_name, product_name, price, hours, settlement_mode, status,
+                                    approved_at, approved_by)
+    SELECT uuidv7(), tenant_id_value, school_id_value, s.id, product_math, pv_math,
+           '数学', '高一数学提高班', 4800, 60, 1, 'ACTIVE', CURRENT_TIMESTAMP, owner_account_id
+    FROM archive.student s
+    WHERE s.tenant_id=tenant_id_value AND s.student_no='DEMO-0003'
+    RETURNING id INTO math_enrollment;
+  INSERT INTO enrollment.enrollment(id, tenant_id, school_id, student_id, product_id, price_version_id,
+                                    curriculum_name, product_name, price, hours, settlement_mode, status,
+                                    approved_at, approved_by)
+    SELECT uuidv7(), tenant_id_value, school_id_value, s.id, product_english, pv_english,
+           '英语', '初二英语同步班', 3600, 48, 1, 'ACTIVE', CURRENT_TIMESTAMP, owner_account_id
+    FROM archive.student s
+    WHERE s.tenant_id=tenant_id_value AND s.student_no='DEMO-0004'
+    RETURNING id INTO english_enrollment;
+
+  INSERT INTO enrollment.enrollment_course(tenant_id, enrollment_id, curriculum_id, hours, amount) VALUES
+    (tenant_id_value, sprint_enrollment_a, math_id, 30, 2400),
+    (tenant_id_value, sprint_enrollment_a, english_id, 30, 2400),
+    (tenant_id_value, sprint_enrollment_a, physics_id, 30, 2400),
+    (tenant_id_value, sprint_enrollment_a, chemistry_id, 30, 2400),
+    (tenant_id_value, sprint_enrollment_b, math_id, 30, 2400),
+    (tenant_id_value, sprint_enrollment_b, english_id, 30, 2400),
+    (tenant_id_value, sprint_enrollment_b, physics_id, 30, 2400),
+    (tenant_id_value, sprint_enrollment_b, chemistry_id, 30, 2400),
+    (tenant_id_value, math_enrollment, math_id, 60, 4800),
+    (tenant_id_value, english_enrollment, english_id, 48, 3600);
+
+  INSERT INTO teaching.enrollment_class(tenant_id, enrollment_id, class_id, joined_on, active) VALUES
+    (tenant_id_value, sprint_enrollment_a, class_sprint, CURRENT_DATE - 14, true),
+    (tenant_id_value, sprint_enrollment_b, class_sprint, CURRENT_DATE - 14, true),
+    (tenant_id_value, math_enrollment, class_math, CURRENT_DATE - 7, true),
+    (tenant_id_value, english_enrollment, class_english, CURRENT_DATE - 7, true);
+
+  -- 课次：本周与下周。历史课次已确认、当天已发布、未来为草稿；
+  -- 物理班留一条缺教师、英语班留一条缺教室，资源日报会显示对应待办。
+  INSERT INTO teaching.lesson(tenant_id, class_id, lesson_date, starts_at, ends_at, teacher_name, room_name,
+                              topic, hours, teacher_id, room_id, curriculum_id, status)
+  SELECT tenant_id_value, class_sprint, monday + v.d, v.starts, v.ends, v.teacher_name, 'A101',
+         v.topic, 2, v.teacher_id, room_a, v.curriculum_id, v.status
+  FROM (VALUES
+    (0, time '09:00', time '11:00', '张老师', '暑期冲刺·数学', teacher_zhang, math_id, 'CONFIRMED'),
+    (2, time '09:00', time '11:00', '李老师', '暑期冲刺·英语', teacher_li, english_id, 'CONFIRMED'),
+    (4, time '09:00', time '11:00', '王老师', '暑期冲刺·物理', teacher_wang, physics_id, 'CONFIRMED'),
+    (7, time '09:00', time '11:00', '赵老师', '暑期冲刺·化学', teacher_zhao, chemistry_id, 'PUBLISHED'),
+    (9, time '09:00', time '11:00', '张老师', '暑期冲刺·数学', teacher_zhang, math_id, 'DRAFT'),
+    (11, time '09:00', time '11:00', '李老师', '暑期冲刺·英语', teacher_li, english_id, 'DRAFT')
+  ) AS v(d, starts, ends, teacher_name, topic, teacher_id, curriculum_id, status);
+
+  INSERT INTO teaching.lesson(tenant_id, class_id, lesson_date, starts_at, ends_at, teacher_name, room_name,
+                              topic, hours, teacher_id, room_id, curriculum_id, status)
+  SELECT tenant_id_value, class_math, monday + v.d, time '14:00', time '15:30', '张老师', 'A102',
+         '高一数学', 1.5, teacher_zhang, room_b, math_id, v.status
+  FROM (VALUES (1, 'CONFIRMED'), (3, 'PUBLISHED'), (8, 'DRAFT'), (10, 'DRAFT')) AS v(d, status);
+
+  INSERT INTO teaching.lesson(tenant_id, class_id, lesson_date, starts_at, ends_at, teacher_name, room_name,
+                              topic, hours, teacher_id, room_id, curriculum_id, status)
+  VALUES
+    (tenant_id_value, class_english, monday + 1, time '16:00', time '17:30', '李老师', 'A102', '初二英语', 1.5, teacher_li, room_b, english_id, 'CONFIRMED'),
+    (tenant_id_value, class_english, monday + 4, time '16:00', time '17:30', '李老师', NULL, '初二英语', 1.5, teacher_li, NULL, english_id, 'PUBLISHED'),
+    (tenant_id_value, class_english, monday + 8, time '16:00', time '17:30', '李老师', 'A102', '初二英语', 1.5, teacher_li, room_b, english_id, 'DRAFT');
+
+  INSERT INTO teaching.lesson(tenant_id, class_id, lesson_date, starts_at, ends_at, teacher_name, room_name,
+                              topic, hours, teacher_id, room_id, curriculum_id, status)
+  VALUES
+    (tenant_id_value, class_physics, monday + 2, time '10:00', time '12:00', NULL, 'A101', '初三物理', 2, NULL, room_a, physics_id, 'PUBLISHED'),
+    (tenant_id_value, class_physics, monday + 5, time '10:00', time '12:00', '王老师', 'A101', '初三物理', 2, teacher_wang, room_a, physics_id, 'DRAFT');
+
+  INSERT INTO dev.resource_seed_history(seed_id) VALUES('LOCAL-TEACHING-DEMO-001');
+END;
+$teaching_demo_seed$;
